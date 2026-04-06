@@ -83,6 +83,18 @@ Business success should be measured by 80% adoption among non-technical target u
 
 Technical success should be measured by reliable save-and-reopen behavior for full analytical workspaces, responsive graph interactions on representative large local datasets, and preservation of reproducible graphing workflows across sessions and compatible app versions.
 
+### Measurement & Telemetry Plan
+
+To keep the success criteria enforceable, the MVP will maintain a lightweight measurement framework that downstream teams can extend as fidelity grows:
+
+- **Benchmark datasets and scripts** — Maintain two canonical suites under `_bmad-output/benchmarks/`: `benchmark_set_clean` (CSV, Excel, pasted table) and `benchmark_set_dirty` (delimiter, header, type, and missing-value faults). Automation scripts will exercise FR1–FR26 against these suites to capture “time to first graph” and “independent import” evidence.
+- **User task instrumentation** — UX and engineering instrument the core loop (import → semantic correction → first saved graph) with timers and anonymized outcome events so telemetry can segment results by persona (non-technical vs. technical) and prove the ≤10 minute KPI.
+- **Adoption & displacement tracking** — During rollout, PM/Analytics will maintain a manually curated KPI sheet that tallies weekly active unique users by persona and records observed “legacy workflow” usage (e.g., JMP exports gathered via interviews or lightweight forms). These adoption/JMP figures are intentionally gathered outside of in-app telemetry; the product must not enforce or gate behavior based on application-generated metrics for this goal.
+- **Workspace reliability probes** — CI runs save/reopen regression tests on `benchmark_workspace_local`, emitting latency metrics and failure counts tied to NFR1–NFR10 so reliability promises remain verifiable.
+- **Executive reporting cadence** — PM/Analytics publish a quarterly “Graph Flow KPI” memo summarizing telemetry, benchmark runs, and qualitative signals so validation, UX, and readiness reviews can trace decisions back to the same measurements.
+
+This measurement layer gives UX, architecture, and QA explicit artifacts to maintain and clear proof paths for each KPI before downstream workflows proceed.
+
 ## Product Scope
 
 ### MVP - Minimum Viable Product
@@ -172,6 +184,20 @@ The highest domain-specific risk is false confidence: a graph that looks polishe
 A second major risk is scientific irreproducibility. If users cannot reopen a workspace with its analytical meaning intact, or cannot understand how a derived field or graph was produced, the tool will fail its scientific credibility test. This should be mitigated with a canonical workspace model that preserves semantic state, transformations, formulas, graph configuration, and relevant analytical context together rather than as disconnected UI fragments.
 
 A third risk is performance-driven rejection. If import correction, formula recomputation, graph interaction, or workspace reopening becomes slow on serious local datasets, users will abandon the workflow before trust can form. This should be mitigated by treating representative benchmark datasets and responsiveness gates as release-shaping requirements rather than late optimization tasks.
+
+### Scientific Trust Callouts
+
+- **Reproducibility obligations:** FR43–FR49 and NFR6–NFR10 codify that saved workspaces, derived logic, and reopen flows must stay intact so reviewers can reproduce results without ambiguity.
+- **Semantic transparency:** FR8–FR26 ensure users can inspect types, roles, units, and transformation chains so scientific meaning is never hidden behind UI conveniences.
+- **Scientific review signals:** FR50–FR59 (see additions below) require guidance, provenance, and reviewer-focused context so Elena-style reviewers can validate outputs before they influence decisions.
+- **Performance credibility:** NFR1–NFR5 bind the product to serious engineering datasets so scientific trust is not lost to lag or fragile interactions.
+
+### Domain Traceability Map
+
+- **Reproducibility & audit trail →** FR43–FR49, FR58–FR59, NFR6–NFR10
+- **Semantic correctness & units →** FR8–FR24, FR58
+- **Reviewer defensibility →** FR53–FR59
+- **Scientific performance expectations →** NFR1–NFR5, Performance Targets section
 
 ## Web App Specific Requirements
 
@@ -313,7 +339,7 @@ The biggest resource risk is scope creep from Configuration A into Configuration
 - FR32: Users can add, remove, reorder, and inspect compatible graph layers within a single graph.
 - FR33: Users can refine graph presentation through supported controls for labels, legends, scales, axes, titles, subtitles, and other presentation-relevant visual settings including readable spacing and typography.
 - FR34: Users can interact with graphs through hover, zoom, pan, and related inspection controls to inspect values, patterns, and anomalies in the current analytical view, and can reset transient exploration state without rebuilding the graph.
-- FR35: Users can compare multiple variables and analytical relationships within supported graph views.
+- FR35: Users can assign at least four variables simultaneously across the X/Y axes and supported layers (such as color, size, or facets) when comparing analytical relationships. If a user attempts to add more than four variables, the system either accepts the combination while maintaining the performance guarantees in the NFRs or displays a warning explaining the limit.
 - FR36: Users can add supported analytical overlays and visual references to graphs to aid interpretation of the current analysis.
 - FR37: Users can create graphs that reflect the current filtered, transformed, and semantically interpreted analytical state.
 - FR38: Users can be prevented from creating unsupported or misleading graph combinations and receive an explanation when a requested composition is blocked.
@@ -345,6 +371,7 @@ The biggest resource risk is scope creep from Configuration A into Configuration
 - FR55: Users can produce graph outputs suitable for use in reports, presentations, and customer-facing communication.
 - FR56: Users can export graph outputs, transformed data, or active analytical subsets from the workspace for use outside the application.
 - FR57: Users can distinguish exploratory analytical work from final communication output without leaving the same end-to-end workflow.
+- FR58: Users can inspect and update per-column units, measurement context, and descriptive metadata so that scientific meaning is explicit in tables, graphs, and exports.
 
 ## Non-Functional Requirements
 
