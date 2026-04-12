@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>BMADGraphWebApp – Mode Mockups</title>
+  <style>
+    :root {
+      --indigo: #3246C5;
+      --teal: #1BB1A8;
+      --saffron: #F3A63B;
+      --crimson: #E24B4B;
+      --slate: #3C485C;
+      --surface: #F5F7FB;
+      --panel: #E4E9F4;
+      --mission: #161B26;
+      --text: #1F2430;
+      font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    body {
+      margin: 0;
+      background: var(--surface);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    header {
+      background: var(--mission);
+      color: white;
+      padding: 32px 48px;
+    }
+    header h1 { margin: 0 0 8px; }
+    main { padding: 32px 48px 80px; }
+    section { margin-bottom: 40px; }
+    h2 { margin: 32px 0 16px; }
+    .direction-card {
+      border-radius: 20px;
+      background: white;
+      padding: 24px;
+      box-shadow: 0 15px 40px rgba(31,36,48,0.08);
+    }
+    .mode-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 20px;
+      margin-top: 16px;
+    }
+    .mock {
+      border-radius: 16px;
+      padding: 16px;
+      background: var(--panel);
+      min-height: 280px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .mock.dark { background: #121825; color: #E8EDF7; }
+    .mock .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-radius: 12px;
+      background: white;
+      color: var(--text);
+    }
+    .mock.dark .toolbar { background: rgba(255,255,255,0.08); color: #E8EDF7; }
+    .graph-area {
+      flex: 1;
+      border-radius: 12px;
+      background: white;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--slate);
+    }
+    .mock.dark .graph-area { background: rgba(255,255,255,0.05); color: #8FA2C8; }
+    .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+    .chip {
+      background: var(--indigo);
+      color: white;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+    }
+    .chip.secondary { background: var(--teal); }
+    .chip.warn { background: var(--saffron); color: #1F2430; }
+    .details { font-size: 14px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>BMADGraphWebApp – Simple vs Advanced Modes per Direction</h1>
+    <p>Each direction includes David's calm graphing mode and Priya's advanced analysis mode to illustrate how the shell adapts without losing cohesion.</p>
+  </header>
+  <main>
+    <section class="direction-card">
+      <h2>Direction 1 · Mission Control Focus</h2>
+      <div class="mode-grid">
+        <div class="mock dark">
+          <div class="toolbar">
+            <strong>Simple Mode</strong>
+            <span>“Ready for offline use” · teal chip</span>
+          </div>
+          <div class="graph-area">Guided scatter template · helper copy</div>
+          <div class="details">Semantic chips auto-suggest roles; evidence rail tucked; telemetry quiet unless action needed.</div>
+        </div>
+        <div class="mock dark">
+          <div class="toolbar">
+            <strong>Advanced Mode</strong>
+            <span>Telemetry: 0.6s edits · 3 queued</span>
+          </div>
+          <div class="graph-area">Layer stack · dual axes · fit overlay</div>
+          <div class="chips">
+            <span class="chip">X: Time</span>
+            <span class="chip">Y: Temp</span>
+            <span class="chip secondary">Facet: Region</span>
+            <span class="chip warn">Drift: 2%</span>
+          </div>
+          <div class="details">Docked evidence rail visible; reviewer timeline pinned right; keyboard hints exposed.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="direction-card">
+      <h2>Direction 2 · Calm Analyst</h2>
+      <div class="mode-grid">
+        <div class="mock">
+          <div class="toolbar">
+            <strong>Simple Mode</strong>
+            <span>Template “Variance vs Time”</span>
+          </div>
+          <div class="graph-area">Card deck of recommended charts</div>
+          <div class="details">Large helper text, inline repair cards, “Ready to graph” badge in teal.</div>
+        </div>
+        <div class="mock">
+          <div class="toolbar">
+            <strong>Advanced Mode</strong>
+            <span>Palette shortcuts · Cmd+K</span>
+          </div>
+          <div class="graph-area">Side-by-side small multiples + residuals</div>
+          <div class="chips">
+            <span class="chip">Derived: TorqueAdj</span>
+            <span class="chip secondary">Filter: Range &lt; 50</span>
+          </div>
+          <div class="details">Dense table toggled below chart; evidence rail collapsible; telemetry badges sit on light chrome.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="direction-card">
+      <h2>Direction 3 · Split Horizon</h2>
+      <div class="mode-grid">
+        <div class="mock">
+          <div class="toolbar">
+            <strong>Simple Mode</strong>
+            <span>Mission log collapsed</span>
+          </div>
+          <div class="graph-area">Graph center-left · notes hidden</div>
+          <div class="details">Mission log panel summarized as a single pill showing latest action.</div>
+        </div>
+        <div class="mock">
+          <div class="toolbar">
+            <strong>Advanced Mode</strong>
+            <span>Mission log expanded</span>
+          </div>
+          <div class="graph-area">Graph left · ledger right</div>
+          <div class="details">JetBrains Mono ledger lists semantic overrides, reviewer approvals, telemetry events in chronological order.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="direction-card">
+      <h2>Direction 4 · Telemetry Stream</h2>
+      <div class="mode-grid">
+        <div class="mock dark">
+          <div class="toolbar">
+            <strong>Simple Mode</strong>
+            <span>Telemetry spine minimized</span>
+          </div>
+          <div class="graph-area">Floating toolbar · minimal alerts</div>
+          <div class="details">Only “Ready” badge visible; stream auto-hides until a warning occurs.</div>
+        </div>
+        <div class="mock dark">
+          <div class="toolbar">
+            <strong>Advanced Mode</strong>
+            <span>Telemetry spine expanded</span>
+          </div>
+          <div class="graph-area">Live queue · offline sync pulses</div>
+          <div class="details">Each event card shows latency, queued metrics, and ability to jump to logs; Priya monitors without leaving canvas.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="direction-card">
+      <h2>Direction 5 · Template Gallery</h2>
+      <div class="mode-grid">
+        <div class="mock">
+          <div class="toolbar">
+            <strong>Simple Mode</strong>
+            <span>“Pick a graph to start”</span>
+          </div>
+          <div class="graph-area">Template grid + SLA badges</div>
+          <div class="details">Progress indicators show steps completed; evidence rail absent until later.</div>
+        </div>
+        <div class="mock">
+          <div class="toolbar">
+            <strong>Advanced Mode</strong>
+            <span>Switch template view</span>
+          </div>
+          <div class="graph-area">Quick swap between saved templates</div>
+          <div class="details">Priya stores custom templates; teal badge indicates performance budget compliance, saffron warns when transform >2s.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="direction-card">
+      <h2>Direction 6 · Reviewer Dock</h2>
+      <div class="mode-grid">
+        <div class="mock">
+          <div class="toolbar">
+            <strong>Simple Mode</strong>
+            <span>Reviewer dock hidden</span>
+          </div>
+          <div class="graph-area">Graph + single status line</div>
+          <div class="details">David just sees “Provenance current · 14:05” and a teal confirmation badge.</div>
+        </div>
+        <div class="mock">
+          <div class="toolbar">
+            <strong>Advanced Mode</strong>
+            <span>Reviewer dock timeline</span>
+          </div>
+          <div class="graph-area">Timeline cards + diff thumbnails</div>
+          <div class="details">Timeline uses saffron/crimson for drift/error; avatars show who approved; attachments accessible inline.</div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

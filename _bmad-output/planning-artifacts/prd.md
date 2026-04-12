@@ -14,6 +14,9 @@ stepsCompleted:
   - step-10-nonfunctional.md
   - step-11-polish.md
   - step-12-complete.md
+  - step-e-01-discovery.md
+  - step-e-02-review.md
+  - step-e-03-edit.md
 inputDocuments:
   - /home/pinto/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/product-brief-BMADGraphWebApp-2026-03-24.md
   - /home/pinto/repo/BMADGraphWebApp/_bmad-output/brainstorming/brainstorming-session-2026-03-19-183532.md
@@ -26,6 +29,10 @@ documentCounts:
   projectDocsCount: 2
 workflowType: 'prd'
 date: 2026-03-24
+lastEdited: 2026-04-08
+editHistory:
+  - date: 2026-04-08
+    changes: Aligned hosted-shell references and traceability with sprint-change-proposal-2026-04-08
 author: Pinto
 classification:
   projectType: web_app
@@ -155,7 +162,7 @@ This journey reveals requirements for reliable workspace reopen, clear error han
 
 Across these journeys, BMADGraphWebApp must support four capability groups. First, it needs a guided but efficient first-run workflow so non-technical users can import data, correct semantics, and create strong graphs without specialist help. Second, it needs resilient error recovery so common parsing issues, missing values, and invalid graph combinations do not break confidence or force escalation. Third, it needs technically credible exploratory power through derived columns, multiple graph views, simple statistical support, and responsive interaction on representative datasets. Fourth, it needs trust and continuity features such as reliable save and reopen, clear recovery on broken workspaces, inspectable derived logic, and review-friendly analytical transparency.
 
-These journeys also clarify what is not yet central to the MVP. There is no separate multi-user admin workflow or API-consumer journey in the current product definition because the scope is local-first, single-user, and not integration-led. If that changes later, those journey classes should be added before functional requirements are finalized.
+These journeys also clarify what is not yet central to the MVP. There is no separate multi-user admin workflow or API-consumer journey in the current product definition because, even though the analytical shell is centrally hosted for convenience, every workspace remains a single-user, local-first experience with no shared server data. If that changes later, those journey classes should be added before functional requirements are finalized.
 
 ## Domain-Specific Requirements
 
@@ -189,14 +196,16 @@ A third risk is performance-driven rejection. If import correction, formula reco
 
 - **Reproducibility obligations:** FR43–FR49 and NFR6–NFR10 codify that saved workspaces, derived logic, and reopen flows must stay intact so reviewers can reproduce results without ambiguity.
 - **Semantic transparency:** FR8–FR26 ensure users can inspect types, roles, units, and transformation chains so scientific meaning is never hidden behind UI conveniences.
-- **Scientific review signals:** FR50–FR59 (see additions below) require guidance, provenance, and reviewer-focused context so Elena-style reviewers can validate outputs before they influence decisions.
+- **Scientific review signals:** FR50–FR58 require guidance, provenance, and reviewer-focused context so Elena-style reviewers can validate outputs before they influence decisions.
+- **Hosted shell delivery & offline guarantees:** FR59–FR62 along with NFR19 and NFR22–NFR24 ensure the centrally hosted shell remains convenient, offline-ready, and privacy-preserving without moving datasets or workspaces off the local machine.
 - **Performance credibility:** NFR1–NFR5 bind the product to serious engineering datasets so scientific trust is not lost to lag or fragile interactions.
 
 ### Domain Traceability Map
 
-- **Reproducibility & audit trail →** FR43–FR49, FR58–FR59, NFR6–NFR10
+- **Reproducibility & audit trail →** FR43–FR49, FR58, NFR6–NFR10
 - **Semantic correctness & units →** FR8–FR24, FR58
-- **Reviewer defensibility →** FR53–FR59
+- **Reviewer defensibility →** FR53–FR58
+- **Hosted shell delivery & telemetry boundaries →** FR59–FR62, NFR19, NFR22–NFR24
 - **Scientific performance expectations →** NFR1–NFR5, Performance Targets section
 
 ## Web App Specific Requirements
@@ -372,6 +381,10 @@ The biggest resource risk is scope creep from Configuration A into Configuration
 - FR56: Users can export graph outputs, transformed data, or active analytical subsets from the workspace for use outside the application.
 - FR57: Users can distinguish exploratory analytical work from final communication output without leaving the same end-to-end workflow.
 - FR58: Users can inspect and update per-column units, measurement context, and descriptive metadata so that scientific meaning is explicit in tables, graphs, and exports.
+- FR59: Users can launch BMADGraphWebApp through a centrally hosted browser shell without installing local binaries or managing manual updates.
+- FR60: After the hosted shell loads once, the analytical experience continues offline by relying on cached assets and local workspace state.
+- FR61: Telemetry metrics such as performance timings and error events are transmitted to the hosted shell when connectivity exists, queue locally when offline, and flush automatically without interrupting the user’s analysis.
+- FR62: The hosted shell surfaces environment checks, update prompts, and release notes without transmitting user datasets, transformations, or workspaces off the local machine.
 
 ## Non-Functional Requirements
 
@@ -408,6 +421,9 @@ The biggest resource risk is scope creep from Configuration A into Configuration
 
 ### Security & Data Handling
 
-- NFR19: Standard analytical operations must not require external network transmission of imported datasets, derived formulas, or saved workspace contents.
+- NFR19: Standard analytical operations may rely on a centrally hosted shell for asset delivery and telemetry, but imported datasets, derived formulas, and saved workspaces must remain on the local machine unless the user explicitly exports them.
 - NFR20: Any outbound transfer of dataset or workspace content must be initiated by an explicit user action.
 - NFR21: Operational telemetry and diagnostics must exclude raw dataset values, formula definitions, and saved workspace contents by default.
+- NFR22: After the hosted shell loads once, it must enter an offline-ready state within 5 seconds so users can continue their analysis without an active network connection.
+- NFR23: Telemetry buffering and flush behavior must never block or degrade the analytical workflow; queued metrics must retry automatically when connectivity returns.
+- NFR24: The hosted shell delivery service must maintain at least 99.5% availability during business hours, with monitoring that alerts the team if cache invalidation or asset refresh failures threaten that target.

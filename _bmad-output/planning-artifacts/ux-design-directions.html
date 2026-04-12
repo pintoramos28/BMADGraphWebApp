@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>BMADGraphWebApp – Design Directions</title>
+  <style>
+    :root {
+      --indigo: #3246C5;
+      --teal: #1BB1A8;
+      --saffron: #F3A63B;
+      --crimson: #E24B4B;
+      --slate: #3C485C;
+      --surface: #F5F7FB;
+      --panel: #E4E9F4;
+      --mission: #161B26;
+      --text: #1F2430;
+      font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    body {
+      margin: 0;
+      background: var(--surface);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    header {
+      background: var(--mission);
+      color: #fff;
+      padding: 32px 48px;
+    }
+    header h1 { margin: 0 0 8px; font-size: 32px; }
+    header p { margin: 0; opacity: 0.8; }
+    main { padding: 32px 48px 80px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 24px;
+    }
+    .card {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 15px 35px rgba(31,36,48,0.08);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .swatches {
+      display: flex;
+      gap: 8px;
+    }
+    .swatch {
+      flex: 1;
+      height: 32px;
+      border-radius: 8px;
+    }
+    h2 { margin-top: 48px; font-size: 24px; }
+    h3 { margin: 0; font-size: 20px; }
+    ul { padding-left: 18px; margin: 0; }
+    .meta { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--slate); }
+    .compare {
+      margin-top: 32px;
+      padding: 24px;
+      border-radius: 16px;
+      background: var(--panel);
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px,1fr));
+      gap: 16px;
+    }
+    .compare div { background: white; padding: 16px; border-radius: 12px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>BMADGraphWebApp – Design Directions</h1>
+    <p>Six visual explorations built on the Mission Control palette, responsive grid, and graph-first workflows.</p>
+  </header>
+  <main>
+    <section class="grid">
+      <article class="card">
+        <div class="meta">Direction 1</div>
+        <h3>Mission Control Focus</h3>
+        <p>Dark mission rail with luminous telemetry chips. Graph canvas dominates the center, with evidence rail pinned right. Status badges glow teal/amber.</p>
+        <ul>
+          <li>For Priya’s investigative flow</li>
+          <li>High-density data with collapsible panes</li>
+          <li>Offline state showcased via toolbar chips</li>
+        </ul>
+        <div class="swatches">
+          <span class="swatch" style="background: var(--mission);"></span>
+          <span class="swatch" style="background: var(--indigo);"></span>
+          <span class="swatch" style="background: var(--teal);"></span>
+        </div>
+      </article>
+      <article class="card">
+        <div class="meta">Direction 2</div>
+        <h3>Calm Analyst</h3>
+        <p>Light chrome everywhere. Graph templates presented as cards left of canvas. Great for David’s “better Excel” expectation with strong helper copy.</p>
+        <ul>
+          <li>Hero onboarding with sample data</li>
+          <li>Semantic chips highlighted in indigo</li>
+          <li>Evidence rail hidden by default</li>
+        </ul>
+        <div class="swatches">
+          <span class="swatch" style="background: var(--surface);"></span>
+          <span class="swatch" style="background: var(--panel);"></span>
+          <span class="swatch" style="background: var(--teal);"></span>
+        </div>
+      </article>
+      <article class="card">
+        <div class="meta">Direction 3</div>
+        <h3>Split Horizon</h3>
+        <p>Dual-column layout: left for graph builder + telemetry, right for mission log + reviewer notes. Favors Elena’s need for provenance.</p>
+        <ul>
+          <li>Ledger cards reuse JetBrains Mono</li>
+          <li>Graph canvas remains 16:9 even when resized</li>
+          <li>Great for multi-monitor analysts</li>
+        </ul>
+        <div class="swatches">
+          <span class="swatch" style="background: var(--indigo);"></span>
+          <span class="swatch" style="background: var(--slate);"></span>
+          <span class="swatch" style="background: var(--saffron);"></span>
+        </div>
+      </article>
+      <article class="card">
+        <div class="meta">Direction 4</div>
+        <h3>Telemetry Stream</h3>
+        <p>Vertical telemetry spine overlays the canvas edge, pulsing with real-time status. Ideal when offline/queue transparency is paramount.</p>
+        <ul>
+          <li>Statuses stacked chronologically</li>
+          <li>Graph editing toolbar floats bottom-center</li>
+          <li>Great for operations reviews</li>
+        </ul>
+        <div class="swatches">
+          <span class="swatch" style="background: var(--mission);"></span>
+          <span class="swatch" style="background: var(--saffron);"></span>
+          <span class="swatch" style="background: var(--crimson);"></span>
+        </div>
+      </article>
+      <article class="card">
+        <div class="meta">Direction 5</div>
+        <h3>Template Gallery</h3>
+        <p>Homepage emphasizes reusable graph templates with big previews. Once selected, the canvas converts to Mission Control Focus styling.</p>
+        <ul>
+          <li>Grid of template cards</li>
+          <li>Walkthrough copy for David</li>
+          <li>Stats on SLA (≤1s edit, ≤2s transform)</li>
+        </ul>
+        <div class="swatches">
+          <span class="swatch" style="background: var(--panel);"></span>
+          <span class="swatch" style="background: var(--indigo);"></span>
+          <span class="swatch" style="background: var(--teal);"></span>
+        </div>
+      </article>
+      <article class="card">
+        <div class="meta">Direction 6</div>
+        <h3>Reviewer Dock</h3>
+        <p>Evidence rail expands into a timeline when reviewers join. Elena gets inline approvals, drift alerts, and attachment slots.</p>
+        <ul>
+          <li>Timeline uses saffron/crimson for drift/error</li>
+          <li>Reviewer avatars pinned to ledger entries</li>
+          <li>Graph thumbnails display side-by-side diffs</li>
+        </ul>
+        <div class="swatches">
+          <span class="swatch" style="background: var(--surface);"></span>
+          <span class="swatch" style="background: var(--saffron);"></span>
+          <span class="swatch" style="background: var(--crimson);"></span>
+        </div>
+      </article>
+    </section>
+
+    <h2>Evaluation Lens</h2>
+    <div class="compare">
+      <div><strong>Layout Intuitiveness</strong><br/>Mission Control Focus & Split Horizon keep graph central while giving telemetry persistence.</div>
+      <div><strong>Interaction Style</strong><br/>Calm Analyst + Template Gallery emphasize guidance; Telemetry Stream highlights live state.</div>
+      <div><strong>Visual Weight</strong><br/>Dark rails contrast crisp canvases in Mission Control Focus; Calm Analyst stays airy.</div>
+      <div><strong>Navigation & Density</strong><br/>Template Gallery uses cards; Reviewer Dock prioritizes timeline navigation for QA sign-off.</div>
+    </div>
+  </main>
+</body>
+</html>
