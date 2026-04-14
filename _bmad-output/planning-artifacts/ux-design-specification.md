@@ -9,6 +9,7 @@ stepsCompleted:
   - step-07-defining-experience.md
   - step-08-visual-foundation.md
   - step-09-design-directions.md
+  - step-10-user-journeys.md
 inputDocuments:
   - /home/pin81845/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/product-brief-BMADGraphWebApp-2026-03-24.md
   - /home/pin81845/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/prd.md
@@ -321,4 +322,126 @@ Hybrid of Mission Control Focus (core shell), Template Gallery (onboarding/new g
 1. Build the Mission Control layout as the default app chrome (dark rail, light canvas, telemetry chips, role rail for advanced layers).
 2. Layer the Template Gallery on top of that shell for first-run and “New Graph” flows, reusing the same tokens/components.
 3. Implement a collapsible Status & History dock with always-on chips and an optional drawer for recent actions; ensure it’s hidden by default but keyboard accessible.
-4. Apply Split Horizon behavior on ≥1440 px screens (status/history can pin beside the graph) while keeping it as a bottom drawer on smaller layouts.
+4. Apply Split Horizon behavior on ≥1440 px screens (status/history can pin beside the graph) while keeping it as a bottom drawer on smaller layouts.
+
+## User Journey Flows
+
+### David Mercer - First Report-Ready Graph
+
+David's journey proves a non-technical engineer can launch the hosted shell, import data, fix semantics, and create a publishable chart within 10 minutes while staying confident the workspace is cached for offline use.
+
+```mermaid
+flowchart TD
+  A([Launch hosted shell]) --> B{"Cache ready within 5 seconds?"}
+  B -- No --> B1[Show offline checklist and retry]
+  B -- Yes --> C[Import dataset: CSV, Excel, or paste]
+  C --> D{"Parsing or semantic issues found?"}
+  D -- Yes --> D1[Apply guided fixes for delimiter, type, and role]
+  D1 --> E[Show telemetry chip: Import repaired]
+  D -- No --> E
+  E --> F[Show three recommended chart templates]
+  F --> G[User selects a template or drags fields]
+  G --> H{"Graph updates within 1 second?"}
+  H -- No --> H1[Show inline alert and performance tips]
+  H1 --> I[Graph updates after fix]
+  H -- Yes --> I
+  I --> J[Refine labels, axes, and KPI annotations]
+  J --> K[Status rail confirms offline readiness]
+  K --> L{"Does the user need to share results?"}
+  L -- Yes --> L1[Save workspace and export chart]
+  L -- No --> M([Record mission log with template, latency, and telemetry queue])
+```
+
+Flow notes:
+- Entry point is the hosted shell, not a local install, so cache readiness is the first trust check.
+- The key recovery pattern is guided import repair without leaving the flow.
+- Success is visible through the graph result, offline-ready confirmation, and mission-log feedback.
+
+### Priya Raman - Investigate Failure and Preserve Analysis
+
+Priya's journey is the credibility stress test for the product. She needs to move quickly across competing hypotheses while preserving a clear analytical chain from raw data to saved workspace. The flow has to support rapid view switching, but it also has to make it obvious which formulas are valid, which view is the working reference, and whether the workspace is ready to hand off.
+
+```mermaid
+flowchart TD
+  P0([Open cached workspace or start new investigation]) --> P1{"Workspace is up to date?"}
+  P1 -- No --> P1a[Refresh service worker and review changelog]
+  P1 -- Yes --> P2[Load dataset and confirm semantics]
+  P2 --> P3{"Any semantic conflicts or ambiguous fields?"}
+  P3 -- Yes --> P3a[Resolve types, roles, and units before analysis]
+  P3a --> P4[Create derived columns and formulas]
+  P3 -- No --> P4
+  P4 --> P5{"Any formula errors or stale dependencies?"}
+  P5 -- Yes --> P5a[Show dependency issue panel with repair and undo]
+  P5a --> P4
+  P5 -- No --> P6[Open graph tabs for scatter, dual axis, and ridgeline views]
+  P6 --> P7[Mark one view as current working graph]
+  P7 --> P8{"Telemetry backlog present?"}
+  P8 -- Yes --> P8a[Show backlog chip with queue status and ETA]
+  P8a --> P9[Continue editing offline]
+  P8 -- No --> P9
+  P9 --> P10{"Drift or anomaly detected?"}
+  P10 -- Yes --> P10a[Show repair card with suggested fix and undo]
+  P10a --> P11[Recompute graph and affected evidence]
+  P10 -- No --> P11
+  P11 --> P12{"Graph updates within 2 seconds?"}
+  P12 -- No --> P12a[Offer performance reduction options for heavy views]
+  P12a --> P13[Keep investigating with simplified rendering]
+  P12 -- Yes --> P13
+  P13 --> P14[Pin evidence rail with notes, overlays, and reviewer tags]
+  P14 --> P15{"Workspace ready for handoff?"}
+  P15 -- No --> P15a[Show missing items: unresolved drift, unsaved notes, queued telemetry]
+  P15a --> P9
+  P15 -- Yes --> P16[Save mission log with transforms, latency, and telemetry state]
+  P16 --> P17([Export workspace snapshot for Elena or resume later])
+```
+
+Flow notes:
+- Priya now hits an explicit semantic validation gate before formula work begins.
+- Formula integrity is checked as its own trust gate, not buried inside later drift handling.
+- One graph is marked as the current working graph so exploratory tabs do not create ambiguity during review or handoff.
+- Handoff readiness becomes an explicit checkpoint that blocks export when critical evidence is incomplete.
+- Performance degradation has a defined recovery path that keeps Priya in flow instead of forcing her to restart analysis.
+
+### Elena Brooks - Review and Validate Workspace
+
+Elena validates that a shared workspace is trustworthy before the graph enters quality discussions, focusing on provenance, drift, and telemetry integrity.
+
+```mermaid
+flowchart TD
+  E0([Receive workspace package]) --> E1[Run environment check and cache assets]
+  E1 --> E2{"Integrity mismatch found?"}
+  E2 -- Yes --> E2a[Stop review and ask author to resend]
+  E2 -- No --> E3[Open status and history dock]
+  E3 --> E4[Review mission log for latency, telemetry queue, and drift alerts]
+  E4 --> E5{"Outstanding drift or failed repair?"}
+  E5 -- Yes --> E5a[Request clarification with embedded review card]
+  E5a --> E6[Author revises and re exports]
+  E5 -- No --> E6
+  E6 --> E7[Inspect graph inputs, semantics, and derived columns]
+  E7 --> E8{"Provenance is complete?"}
+  E8 -- No --> E8a[Flag missing evidence and block approval]
+  E8 -- Yes --> E9[Approve usage and archive review notes]
+  E9 --> E10([Export validation receipt for audit])
+```
+
+Flow notes:
+- Elena's journey is review-first, so integrity and provenance checks happen before visual trust.
+- Missing evidence blocks approval explicitly rather than allowing soft ambiguity.
+- The result is an audit-ready validation receipt, not just a subjective sign-off.
+
+### Journey Patterns
+
+- Navigation pattern: every journey starts with environment or cache validation before exposing core work.
+- Navigation pattern: dockable areas such as canvas, status/history, and evidence rail preserve one shared workspace state.
+- Decision pattern: each journey includes an explicit trust gate before the user advances.
+- Decision pattern: recovery is handled inline through repair cards, guided fixes, or resend requests instead of disruptive modal flows.
+- Feedback pattern: telemetry, latency, and drift signals are always paired with plain-language status.
+- Feedback pattern: mission-log entries act as completion feedback and handoff evidence.
+
+### Flow Optimization Principles
+
+- Minimize time to value by surfacing templates, semantic fixes, and graph readiness immediately after import.
+- Preserve investigative momentum by keeping performance and telemetry signals visible but non-blocking.
+- Expose trust states early so users do not invest effort in work that later fails validation.
+- Make every failure recoverable inside the current context with retry, repair, undo, or clarification loops.
+- Keep handoff artifacts self-explanatory so Elena can assess workspace credibility without relying on the original author.
