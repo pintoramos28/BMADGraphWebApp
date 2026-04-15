@@ -10,6 +10,11 @@ stepsCompleted:
   - step-08-visual-foundation.md
   - step-09-design-directions.md
   - step-10-user-journeys.md
+  - step-11-component-strategy.md
+  - step-12-ux-patterns.md
+  - step-13-responsive-accessibility.md
+  - step-14-complete.md
+lastStep: 14
 inputDocuments:
   - /home/pin81845/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/product-brief-BMADGraphWebApp-2026-03-24.md
   - /home/pin81845/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/prd.md
@@ -359,48 +364,52 @@ Flow notes:
 
 ### Priya Raman - Investigate Failure and Preserve Analysis
 
-Priya's journey is the credibility stress test for the product. She needs to move quickly across competing hypotheses while preserving a clear analytical chain from raw data to saved workspace. The flow has to support rapid view switching, but it also has to make it obvious which formulas are valid, which view is the working reference, and whether the workspace is ready to hand off.
+Priya's journey centers on hypothesis-driven analysis. She needs to move from a technical question to a defendable workspace record without losing speed or analytical clarity. The interface must let her explore multiple candidate views, promote one of them into evidence, and preserve the logic that made that graph worth saving.
 
 ```mermaid
 flowchart TD
-  P0([Open cached workspace or start new investigation]) --> P1{"Workspace is up to date?"}
-  P1 -- No --> P1a[Refresh service worker and review changelog]
-  P1 -- Yes --> P2[Load dataset and confirm semantics]
-  P2 --> P3{"Any semantic conflicts or ambiguous fields?"}
-  P3 -- Yes --> P3a[Resolve types, roles, and units before analysis]
+  P0([Open saved workspace or start a new investigation]) --> P1{"Resume prior investigation?"}
+  P1 -- Yes --> P1a[Restore dataset, notes, reference graph, and prior evidence]
+  P1 -- No --> P1b[Load dataset and enter investigation question]
+  P1a --> P2[Confirm semantics, units, and key fields]
+  P1b --> P2
+  P2 --> P3{"Any semantic ambiguity or field conflicts?"}
+  P3 -- Yes --> P3a[Resolve types, roles, units, and missing-value rules]
   P3a --> P4[Create derived columns and formulas]
   P3 -- No --> P4
   P4 --> P5{"Any formula errors or stale dependencies?"}
-  P5 -- Yes --> P5a[Show dependency issue panel with repair and undo]
+  P5 -- Yes --> P5a[Repair dependency chain or undo recent changes]
   P5a --> P4
-  P5 -- No --> P6[Open graph tabs for scatter, dual axis, and ridgeline views]
-  P6 --> P7[Mark one view as current working graph]
-  P7 --> P8{"Telemetry backlog present?"}
-  P8 -- Yes --> P8a[Show backlog chip with queue status and ETA]
-  P8a --> P9[Continue editing offline]
-  P8 -- No --> P9
-  P9 --> P10{"Drift or anomaly detected?"}
-  P10 -- Yes --> P10a[Show repair card with suggested fix and undo]
-  P10a --> P11[Recompute graph and affected evidence]
-  P10 -- No --> P11
-  P11 --> P12{"Graph updates within 2 seconds?"}
-  P12 -- No --> P12a[Offer performance reduction options for heavy views]
-  P12a --> P13[Keep investigating with simplified rendering]
-  P12 -- Yes --> P13
-  P13 --> P14[Pin evidence rail with notes, overlays, and reviewer tags]
-  P14 --> P15{"Workspace ready for handoff?"}
-  P15 -- No --> P15a[Show missing items: unresolved drift, unsaved notes, queued telemetry]
-  P15a --> P9
-  P15 -- Yes --> P16[Save mission log with transforms, latency, and telemetry state]
-  P16 --> P17([Export workspace snapshot for Elena or resume later])
+  P5 -- No --> P6[Build first analytical view]
+  P6 --> P7[Open alternate comparison views as needed]
+  P7 --> P8{"Candidate view worth keeping?"}
+  P8 -- No --> P7
+  P8 -- Yes --> P9[Promote selected view to reference graph]
+  P9 --> P10[Attach notes, overlays, and reasoning in evidence rail]
+  P10 --> P11{"Drift, anomaly, or conflicting result detected?"}
+  P11 -- Yes --> P11a[Show repair card and recompute affected graphs and evidence]
+  P11a --> P12
+  P11 -- No --> P12
+  P12 --> P13{"Interaction stays within 2 second target?"}
+  P13 -- No --> P13a[Offer simplified rendering, sampling, or reduced overlays]
+  P13a --> P14[Continue investigation with performance guidance]
+  P13 -- Yes --> P14
+  P14 --> P15{"Ready to preserve or hand off?"}
+  P15 -- No --> P7
+  P15 -- Yes --> P16[Run handoff readiness check for drift, notes, telemetry, and provenance]
+  P16 --> P17{"Any blocking issues remain?"}
+  P17 -- Yes --> P17a[Jump directly to the missing or invalid evidence]
+  P17a --> P7
+  P17 -- No --> P18[Save mission log with reference graph, transforms, and telemetry state]
+  P18 --> P19([Export workspace snapshot for Elena or resume later])
 ```
 
 Flow notes:
-- Priya now hits an explicit semantic validation gate before formula work begins.
-- Formula integrity is checked as its own trust gate, not buried inside later drift handling.
-- One graph is marked as the current working graph so exploratory tabs do not create ambiguity during review or handoff.
-- Handoff readiness becomes an explicit checkpoint that blocks export when critical evidence is incomplete.
-- Performance degradation has a defined recovery path that keeps Priya in flow instead of forcing her to restart analysis.
+- Priya now starts from an investigation question, not from platform maintenance.
+- Alternate views remain exploratory until one is promoted to the reference graph.
+- Evidence capture happens immediately after promotion, which makes the analytical chain easier to trust later.
+- Telemetry stays relevant at save and handoff time without dominating the middle of the investigation.
+- Blocking handoff issues route Priya back to the exact missing evidence path instead of forcing a vague restart.
 
 ### Elena Brooks - Review and Validate Workspace
 
@@ -445,3 +454,384 @@ Flow notes:
 - Expose trust states early so users do not invest effort in work that later fails validation.
 - Make every failure recoverable inside the current context with retry, repair, undo, or clarification loops.
 - Keep handoff artifacts self-explanatory so Elena can assess workspace credibility without relying on the original author.
+
+## Component Strategy
+
+### Design System Components
+
+BMADGraphWebApp uses Base UI only for interaction behavior, accessibility primitives, and state management. All application-facing styling, analytical semantics, and trust patterns live in the BMAD Mission Control layer.
+
+**Base UI foundation components**
+- Dialog and Popover primitives for contextual actions, lightweight confirmations, and command surfaces
+- Tabs for graph workspaces, evidence views, and status/history navigation
+- Accordion for expandable diagnostic detail, audit summaries, and repair explanations
+- Select, Combobox, and Menu for semantic-role selection, template switching, and graph actions
+- Checkbox, Radio, Switch, and Button primitives for overlays, options, and display controls
+- Tooltip for compact explanatory guidance on telemetry, provenance, and semantic states
+- Badge as the base primitive for status chips and compact state indicators
+- Modal and focus-management primitives for the command palette and blocking recovery flows
+
+**Thin wrapper components built from Base UI**
+- Standard buttons, chips, menus, drawers, dialogs, and tab shells
+- Form controls for import, semantic correction, filter setup, and graph options
+- Shared panel, card, and list patterns used inside mission-control surfaces
+
+**Gaps requiring custom BMAD components**
+- Analytical role-assignment surfaces
+- Trust and repair surfaces that combine diagnosis with action
+- Provenance and evidence management surfaces
+- Investigation-state components for promoted reference graphs
+- Handoff and review-readiness surfaces
+
+### Custom Components
+
+### Telemetry Status Rail
+
+**Purpose:** Communicates shell readiness, offline status, sync backlog, and performance health without interrupting analytical work.  
+**Usage:** Persistent global rail in all graphing and review sessions.  
+**Anatomy:** readiness chip, queue chip, performance indicator, update state, expandable details affordance.  
+**States:** healthy, offline-ready, queued, syncing, degraded, warning, error.  
+**Variants:** compact rail, expanded rail, narrow-screen summary bar.  
+**Accessibility:** critical state changes use concise live-region announcements; all chips expose status text beyond color.  
+**Interaction Behavior:** stays passive by default and expands for diagnostics, retry, and update detail.
+
+### Semantic Role Dock
+
+**Purpose:** Supports field-to-role assignment for analytical graph construction.  
+**Usage:** Primary graph-builder surface for David and Priya.  
+**Anatomy:** role slots, field chips, compatibility hints, inline validation, quick-clear actions.  
+**States:** empty, populated, suggested, incompatible, locked, error.  
+**Variants:** guided mode with hints, dense expert mode.  
+**Accessibility:** full keyboard alternative to drag/drop; reassignment is announced with role and field name.  
+**Interaction Behavior:** supports drag, click-to-assign, reorder, and immediate compatibility feedback.
+
+### Repair Card
+
+**Purpose:** Converts a detected issue into a clear explanation plus direct recovery actions.  
+**Usage:** Import issues, semantic ambiguity, stale formulas, drift, integrity mismatches, handoff blockers.  
+**Anatomy:** issue title, concise explanation, recommended action, secondary actions, details toggle.  
+**States:** informational, warning, blocking, resolved.  
+**Variants:** inline card, docked card, stacked issue list item.  
+**Accessibility:** blocking variants use alert semantics; action labels describe the recovery outcome directly.  
+**Interaction Behavior:** supports repair, inspect, undo, and defer without forcing users out of context.
+
+### Evidence Rail
+
+**Purpose:** Captures the reasoning, provenance, overlays, and reviewer context attached to the current reference graph.  
+**Usage:** Investigation and review workflows where analytical conclusions must remain inspectable.  
+**Anatomy:** notes stream, transform summary, provenance block, overlay controls, reviewer markers, unresolved issue callouts.  
+**States:** collapsed, pinned, filtered, unresolved, review-ready.  
+**Variants:** side rail, split-horizon rail, bottom drawer.  
+**Accessibility:** section order is keyboard navigable; notes, markers, and provenance entries all expose plain-text equivalents.  
+**Interaction Behavior:** follows the reference graph rather than merely the frontmost tab so evidence stays attached to the graph that matters.
+
+### Reference Graph Marker
+
+**Purpose:** Distinguishes exploratory views from the graph that currently represents the working analytical conclusion.  
+**Usage:** Priya's multi-view investigative workflow and any later review or export flow.  
+**Anatomy:** current-state badge, promote action, reason prompt, change history hook.  
+**States:** exploratory, candidate, reference, stale, superseded.  
+**Variants:** tab badge, canvas header marker, compact label.  
+**Accessibility:** changes announce the new reference graph and the previous one it replaced.  
+**Interaction Behavior:** promoting a graph updates the Evidence Rail, Mission Log, and handoff context to follow that graph.
+
+### Mission Log Panel
+
+**Purpose:** Records meaningful analytical events and gives users a readable history of what changed across the workspace.  
+**Usage:** Session feedback, saved-state confirmation, and review context.  
+**Anatomy:** event list, timestamps, graph association, actor/source label, telemetry snapshot, filter controls.  
+**States:** active, filtered, queued, saved, exported.  
+**Variants:** inline confirmation panel, history drawer, compact summary list.  
+**Accessibility:** every event is readable as standalone text without visual cues; timestamps and event types are keyboard accessible.  
+**Interaction Behavior:** logs structural events such as promoted graph changes, formula repairs, drift resolution, save/export actions, and telemetry state at the time of save.
+
+### Handoff Readiness Panel
+
+**Purpose:** Determines whether the workspace is complete enough to save, export, or send for review.  
+**Usage:** Final checkpoint before handoff and fast trust summary when reopening a workspace.  
+**Anatomy:** readiness checklist, blocking issues, warning issues, provenance completeness, telemetry state, action links.  
+**States:** ready, warning, blocked, exported.  
+**Variants:** summary card, full checklist drawer.  
+**Accessibility:** checklist items use explicit status text and semantic list structure; blocked items are announced clearly.  
+**Interaction Behavior:** links each failing item back to the exact unresolved graph, note, drift issue, or missing provenance entry rather than sending users into a generic editing loop.
+
+### Workspace Snapshot Export Card
+
+**Purpose:** Summarizes exactly what will be preserved at export time so authors and reviewers know what evidence travels with the workspace.  
+**Usage:** Save and export moments for Priya and review intake for Elena.  
+**Anatomy:** reference graph summary, transform count, notes status, provenance summary, telemetry snapshot, export action.  
+**States:** draft, ready, blocked, exported.  
+**Variants:** inline card, confirmation summary.  
+**Accessibility:** export contents are described in plain language and not implied through icons alone.  
+**Interaction Behavior:** reflects the current handoff state and confirms which reference graph and evidence set are included.
+
+### Component Implementation Strategy
+
+**Foundation strategy**
+- Use Base UI only for primitives, focus management, layering, and interaction state.
+- Keep all BMAD-specific styling, copy patterns, and analytical semantics inside wrapper and custom Mission Control components.
+- Avoid a second styled component library to prevent design drift and duplicated semantics.
+
+**Composition strategy**
+- Build thin wrappers for generic controls first: buttons, chips, drawers, dialogs, menus, tab shells.
+- Build true custom components only where product meaning depends on them: role assignment, evidence, reference graph state, repair, readiness, export summary.
+- Keep workflow ownership clear: the Evidence Rail explains the active conclusion, the Mission Log records events, and the Handoff Readiness Panel evaluates whether handoff is allowed.
+
+**State strategy**
+- Reference graph state is global to the workspace and must be observable by Evidence Rail, Mission Log, Handoff Readiness, and export flows.
+- Trust-state components must consume shared signals for drift, formula validity, unresolved notes, and telemetry state.
+- Exploratory graph tabs remain lightweight and disposable until explicitly promoted.
+
+**Accessibility strategy**
+- Every analytical state must be readable through text, not just badge color or placement.
+- Keyboard parity is required for role assignment, graph promotion, issue repair, and review flows.
+- Blocking issues interrupt only when user action is required; informational telemetry remains ambient.
+
+**Documentation strategy**
+- Each custom component gets Storybook coverage for anatomy, states, keyboard behavior, and sample content.
+- Components that participate in trust or handoff flows also document their upstream inputs and downstream effects.
+
+### Implementation Roadmap
+
+**Phase 1 - Core graphing and trust**
+- Semantic Role Dock
+- Telemetry Status Rail
+- Repair Card
+- Mission Log Panel
+
+**Phase 2 - Investigation workflow**
+- Reference Graph Marker
+- Evidence Rail
+- Graph-promotion interactions that connect tabs, evidence, and mission-log state
+
+**Phase 3 - Handoff and review**
+- Handoff Readiness Panel
+- Workspace Snapshot Export Card
+- Review-specific evidence and status refinements for Elena workflows
+
+**Phase 4 - Refinement and responsive variants**
+- Dense expert-mode variants for Priya
+- Compact responsive variants for narrower review contexts
+- Advanced evidence filtering and comparison tools
+
+## UX Consistency Patterns
+
+### Button Hierarchy
+
+**When to Use:** Use button hierarchy whenever users must choose between advancing analysis, repairing trust, or performing supporting actions.  
+**Visual Design:** One primary action per surface. Primary actions carry the strongest emphasis. Secondary actions are visible but clearly subordinate. Tertiary actions are reserved for inspection, dismissal, or optional utilities. Destructive actions use warning styling and explicit consequence language.  
+**Behavior:** Primary actions advance the current analytical goal. Secondary actions support review, retry, or alternate exploration. Tertiary actions never compete visually with save, repair, promote, or export actions.  
+**Accessibility:** Labels describe the result of the action. Disabled states include explanatory text. Keyboard focus follows the same priority order as the visual hierarchy.  
+**Mobile Considerations:** Preserve one visible primary action and collapse lower-priority actions into overflow or drawers.  
+**Variants:** primary, secondary, tertiary, destructive, blocking-repair.
+
+**Button rules**
+- Each region has one primary action only.
+- "Promote to Reference" is the primary action in candidate-graph review states.
+- "Repair" outranks "Dismiss" whenever analytical trust is affected.
+- "Export Snapshot" cannot be primary when handoff readiness is blocked.
+
+### Feedback Patterns
+
+**When to Use:** Use feedback patterns to explain analytical status, trust state, and recovery options.  
+**Visual Design:** Feedback appears at three levels: ambient, inline, and blocking. Ambient feedback uses compact chips or indicators. Inline feedback appears as attached explanatory surfaces. Blocking feedback interrupts only when user action is required to preserve correctness or complete handoff.  
+**Behavior:** Feedback always answers three questions: what happened, why it matters, and what can be done next. Ambient telemetry should remain visible without interrupting flow. Inline trust failures should remain anchored to the affected graph, field, or panel. Blocking states must include a direct recovery path.  
+**Accessibility:** Every status is represented with text and iconography; live-region announcements are reserved for blocking or high-importance changes.  
+**Mobile Considerations:** Compact ambient indicators into a summary bar and reveal detail in a sheet or drawer.  
+**Variants:** success, info, warning, blocking, resolved.
+
+**Feedback rules**
+- Telemetry remains ambient unless it affects save, export, or trust.
+- Drift, stale formulas, and semantic conflicts appear inline next to the affected context.
+- Success messages confirm preserved analytical value, not just system completion.
+- Blocking feedback always links to the exact unresolved source.
+
+### Form Patterns
+
+**When to Use:** Use form patterns for semantic correction, formula creation, filters, annotations, and review metadata.  
+**Visual Design:** Forms use explicit labels, concise helper text, and inline validation adjacent to the field. Dense layouts are allowed only when analytical comparisons require them.  
+**Behavior:** Validation happens early and locally. Users should understand whether an input is valid before leaving the current analytical step. Multi-step corrective flows should confirm progress incrementally rather than delaying all validation until submission.  
+**Accessibility:** Each field includes programmatically associated label, helper text where needed, and error text when invalid. Keyboard users must be able to complete all analytical editing flows without drag dependency.  
+**Mobile Considerations:** Use stacked layouts and reduce simultaneous field density.  
+**Variants:** quick fix form, semantic editor, formula editor, filter builder, annotation editor.
+
+**Form rules**
+- Semantic assignment validates immediately after role change.
+- Formula editors must reveal dependency validity before users move on.
+- Required review or handoff fields are always explicit.
+- Undo is preferred over confirmation dialogs for recoverable edits.
+
+### Navigation Patterns
+
+**When to Use:** Use navigation patterns to preserve the workspace mental model across graphing, investigation, and review.  
+**Visual Design:** Navigation is divided into shell navigation, workspace navigation, and contextual support surfaces. The shell frames the session. Workspace navigation changes the active graph or investigation surface. Contextual support surfaces reveal evidence, status, and history without replacing the main task area.  
+**Behavior:** The user must always be able to answer three questions: where am I, what graph is active, and what graph is the current reference. Opening or inspecting a graph does not automatically promote it. Evidence and handoff context follow the reference graph, not the frontmost exploratory tab.  
+**Accessibility:** Landmarks, headings, tab semantics, and drawer labels must clearly distinguish shell, canvas, and support areas.  
+**Mobile Considerations:** Side rails become bottom sheets or segmented panels without changing the underlying structure.  
+**Variants:** shell rail, graph tabs, evidence rail, status/history dock, command palette.
+
+**Navigation rules**
+- Active tab and reference graph are separate states and must never be visually conflated.
+- Opening a new tab never changes reference state automatically.
+- Evidence Rail follows the reference graph.
+- Status and History remain accessible from every major workspace state.
+
+### Modal and Overlay Patterns
+
+**When to Use:** Use overlays only when focus isolation is necessary.  
+**Visual Design:** Prefer inline and docked solutions first. Use drawers for extended context. Reserve blocking modals for integrity failures, destructive actions, and contained command workflows.  
+**Behavior:** Overlays must preserve user orientation and return users to the same analytical context after dismissal. If a blocking overlay appears, it must explain why in-context recovery was insufficient.  
+**Accessibility:** Focus is trapped only when appropriate, dismissal behavior is explicit, and keyboard return lands users back in the triggering context.  
+**Mobile Considerations:** Large dialogs convert to full-height sheets.  
+**Variants:** command palette modal, integrity modal, drawer, bottom sheet.
+
+**Overlay rules**
+- Repair happens inline whenever possible.
+- Handoff blockers should prefer checklist drawers before escalating to modals.
+- Reviewer clarification flows should remain docked or inline.
+
+### Empty, Loading, and Transitional States
+
+**When to Use:** Use these states whenever the workspace lacks needed analytical context or is waiting on a meaningful transition.  
+**Visual Design:** Empty states are instructional and action-oriented. Loading states explain what is in progress. Transitional states explain what changed and what remains available.  
+**Behavior:** The system must clearly distinguish between nothing created yet, something missing, something invalid, and something still loading. Transitional states should preserve surrounding context so users do not lose orientation during recompute, promotion, or save/export.  
+**Accessibility:** State messaging includes descriptive text and progress expectation where possible.  
+**Mobile Considerations:** The next recommended action remains visible without requiring extra scrolling.  
+**Variants:** first-run empty state, no-reference-graph state, recompute state, blocked-handoff state, invalid-evidence state.
+
+**State rules**
+- "No reference graph selected" is distinct from "graph loading" and from "reference graph invalid."
+- David's first graph empty state always points to the next valid action.
+- Elena's review flow distinguishes missing evidence, loading evidence, and blocked evidence.
+
+### Search and Filtering Patterns
+
+**When to Use:** Use search and filtering in evidence, mission log, dataset fields, and review workflows.  
+**Visual Design:** Filtering controls stay close to the content they affect and summarize active scope clearly.  
+**Behavior:** Filters are additive, reversible, and visible at all times. Search results should explain why an item matched. Filtering must not hide unresolved issues by default when trust is at stake.  
+**Accessibility:** Active filters are represented as readable removable tokens. Search inputs expose both purpose and scope.  
+**Mobile Considerations:** Advanced filters move into sheets or drawers, but active-filter summaries remain persistent.  
+**Variants:** quick search, scoped filter bar, advanced evidence filter panel.
+
+**Filtering rules**
+- Unresolved issues remain visible or recoverable even under filtering.
+- Mission Log filters support graph, event type, and handoff relevance.
+- Dataset search supports semantic-role workflows, not just raw field lookup.
+
+### Cross-Pattern Rules
+
+- Trust-critical actions always outrank convenience actions.
+- Reference graph state remains visible anywhere a user can save, export, annotate, or review.
+- Every blocked state includes a direct recovery path tied to the failing context.
+- Ambient telemetry remains visible but does not dominate investigation flow.
+- Export and handoff patterns summarize included evidence, not just export success.
+
+## Responsive Design & Accessibility
+
+### Responsive Strategy
+
+BMADGraphWebApp is a desktop-first analytical workspace. Desktop is the required experience and the product must be fully optimized for desktop authoring, investigation, and review. Tablet and mobile support are stretch goals only where they can be added without weakening desktop capability, density, clarity, or performance.
+
+**Desktop strategy**
+- Desktop is the canonical experience for graph authoring, semantic correction, derived columns, multi-view investigation, evidence management, and handoff preparation.
+- The layout should optimize for analytical density, side-by-side context, and fast access to supporting panels.
+- Desktop decisions take precedence whenever there is tension between desktop efficiency and smaller-screen parity.
+
+**Tablet strategy**
+- Tablet support is optional and should focus on inspection, annotation, and limited correction workflows only where those adapt naturally from the desktop model.
+- Tablet should not drive core layout simplification or component redesign.
+- If a desktop interaction does not scale cleanly to tablet, the tablet experience should narrow scope instead of forcing a weaker shared solution.
+
+**Mobile strategy**
+- Mobile support is a stretch review mode only.
+- Mobile may support mission-log review, status inspection, note reading, and limited handoff validation.
+- Mobile must not force the product to compromise desktop graphing, multi-panel investigation, or evidence workflows.
+- Workflows that do not translate cleanly to phone-sized screens should be intentionally unavailable or deferred to desktop.
+
+### Breakpoint Strategy
+
+Breakpoints exist to preserve desktop quality first and selectively degrade to reduced-capability layouts on smaller screens.
+
+**Breakpoint model**
+- **Desktop required:** 1200px and above
+- **Wide analytical desktop:** 1440px and above
+- **Tablet stretch:** 768px - 1199px
+- **Mobile stretch:** 320px - 767px
+
+**Breakpoint behavior**
+- At **1200px+**, support full authoring, investigation, and review workflows.
+- At **1440px+**, support pinned supporting panels and Split Horizon layouts.
+- At **768px - 1199px**, allow reduced inspection and limited editing only where interactions remain clear and efficient.
+- At **320px - 767px**, prioritize read-only or low-complexity review behaviors.
+
+**Layout rules**
+- Desktop layout quality is the governing constraint.
+- Smaller breakpoints may remove capabilities, collapse context, or defer workflows to desktop.
+- Smaller-screen support must never force a reduction in desktop information density, panel access, or workflow clarity.
+
+### Accessibility Strategy
+
+BMADGraphWebApp should target **WCAG 2.1 AA** as a baseline requirement across all critical workflows, with extra rigor around trust, reviewability, and keyboard parity in the required desktop experience.
+
+**Compliance target**
+- WCAG 2.1 AA minimum for all shipped experiences
+- Stronger internal quality bar for trust-critical workflows such as semantic correction, repair, graph promotion, and handoff readiness
+
+**Accessibility priorities**
+- Keyboard navigation for all primary desktop workflows, including semantic role assignment, graph tab changes, graph promotion, issue repair, evidence review, and export gating
+- Visible focus states across rails, docks, tabs, overlays, and graph-adjacent controls
+- Screen-reader-readable trust states for telemetry, drift, formula validity, readiness, and export blockers
+- Touch targets of at least 44x44 px for any tablet and mobile-accessible controls that are intentionally supported
+- Non-color communication for all analytical status, especially ready, warning, and blocking states
+- Reduced-motion support for telemetry pulses, panel transitions, and loading indicators
+
+**Product-specific accessibility rules**
+- Active tab and reference graph must be distinguishable through text, not just visual styling.
+- Repair cards must expose both the issue and the recovery action in screen-reader-friendly language.
+- Handoff readiness must be understandable without relying on color, icon-only summaries, or spatial layout.
+- Graph-adjacent controls must have text alternatives even when the graph itself is highly visual.
+
+### Testing Strategy
+
+Testing effort should follow product priority: desktop first, then selective validation of stretch layouts.
+
+**Desktop validation**
+- Desktop is the primary testing surface for all critical flows.
+- Full validation is required for import, semantic correction, graph authoring, investigation, graph promotion, evidence capture, handoff readiness, and export.
+
+**Tablet validation**
+- Tablet testing is only required for the subset of flows intentionally supported there.
+- Tablet should be validated for inspection, annotation, and reduced-complexity workflows, not assumed to support full desktop parity.
+
+**Mobile validation**
+- Mobile testing is limited to explicitly supported review and status workflows.
+- Mobile is not a required target for full graph authoring or dense analytical editing.
+
+**Accessibility validation**
+- Automated scanning with axe or equivalent tooling in CI and Storybook.
+- Keyboard-only walkthroughs for import, semantic correction, graph creation, graph promotion, issue repair, evidence review, and export gating.
+- Screen reader testing with at least VoiceOver and NVDA on core trust-critical flows.
+- Contrast validation for all states, especially telemetry chips, drift indicators, and blocking feedback.
+- Reduced-motion validation to ensure animations do not hide state changes or impede comprehension.
+
+### Implementation Guidelines
+
+**Responsive development**
+- Build the desktop experience first and treat it as the source of truth.
+- Add tablet and mobile adaptations only when they can reuse the desktop model without reducing desktop quality.
+- Prefer capability reduction on smaller screens over lowest-common-denominator layouts.
+- Do not simplify desktop information density, panel structure, or interaction models merely to create parity with smaller devices.
+- Preserve reference graph visibility and trust-state access across every supported layout.
+
+**Accessibility development**
+- Use semantic HTML and Base UI primitives for interaction behavior, focus handling, and overlay management.
+- Ensure all custom Mission Control components expose accessible names, states, and relationships.
+- Provide keyboard alternatives for drag-and-drop role assignment and graph-promotion workflows.
+- Use ARIA live regions only for high-priority status changes to avoid noisy announcements.
+- Maintain visible focus indicators that meet contrast and remain legible on light and dark surfaces.
+- Ensure all trust and readiness states are expressed in text, not just badges or color.
+
+**Performance and inclusivity guardrails**
+- Responsive adaptations must not introduce extra motion, delay, or layout instability in critical workflows.
+- Loading and recompute states must explain what is happening and what remains interactive.
+- Tablet and mobile layouts should narrow scope intentionally rather than pretending to support full desktop parity when they do not.
