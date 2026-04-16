@@ -14,7 +14,7 @@ import {
   versionRangeSchema,
 } from '../validation';
 
-const datasetColumnSchema = strictObject({
+export const datasetColumnSchema = strictObject({
   columnId: identifierSchema,
   sourceName: nonEmptyStringSchema,
   dataType: z.enum(['string', 'number', 'integer', 'boolean', 'date', 'datetime']),
@@ -23,7 +23,7 @@ const datasetColumnSchema = strictObject({
   status: z.enum(['inferred', 'confirmed', 'rejected']),
 });
 
-const datasetSchema = strictObject({
+export const datasetSchema = strictObject({
   datasetId: identifierSchema,
   displayName: nonEmptyStringSchema,
   sourceKind: nonEmptyStringSchema,
@@ -33,7 +33,7 @@ const datasetSchema = strictObject({
   columns: z.array(datasetColumnSchema),
 });
 
-const transformSchema = strictObject({
+export const transformSchema = strictObject({
   transformId: identifierSchema,
   kind: nonEmptyStringSchema,
   status: nonEmptyStringSchema,
@@ -41,7 +41,7 @@ const transformSchema = strictObject({
   expression: nonEmptyStringSchema,
 });
 
-const formulaColumnSchema = strictObject({
+export const formulaColumnSchema = strictObject({
   formulaId: identifierSchema,
   columnId: identifierSchema,
   label: nonEmptyStringSchema,
@@ -50,7 +50,7 @@ const formulaColumnSchema = strictObject({
   dependsOn: stringArraySchema,
 });
 
-const evidenceSchema = strictObject({
+export const evidenceSchema = strictObject({
   evidenceId: identifierSchema,
   graphId: identifierSchema,
   note: nonEmptyStringSchema,
@@ -58,20 +58,20 @@ const evidenceSchema = strictObject({
   status: nonEmptyStringSchema,
 });
 
-const readinessSchema = strictObject({
+export const readinessSchema = strictObject({
   status: z.enum(['ready', 'warning', 'blocked']),
   blockingIssueIds: z.array(identifierSchema),
   warningIssueIds: z.array(identifierSchema),
   provenanceCompleteness: z.enum(['none', 'partial', 'complete']),
 });
 
-const telemetrySnapshotSchema = strictObject({
+export const telemetrySnapshotSchema = strictObject({
   lastGraphRenderMs: nonNegativeIntegerSchema,
   offlineQueueDepth: nonNegativeIntegerSchema,
   status: z.enum(['idle', 'queued', 'flushed']),
 });
 
-const exportSummarySchema = strictObject({
+export const exportSummarySchema = strictObject({
   lastExportedAt: z.union([isoDateTimeSchema, z.null()]),
   includedReferenceGraphId: identifierSchema,
   manifestVersion: semverSchema,

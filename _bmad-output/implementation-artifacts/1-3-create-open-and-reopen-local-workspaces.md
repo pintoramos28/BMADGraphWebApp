@@ -1,6 +1,6 @@
 # Story 1.3: Create, Open, and Reopen Local Workspaces
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -30,10 +30,10 @@ so that BMADGraphWebApp preserves my analytical session as a local system of rec
 
 ## Tasks / Subtasks
 
-- [ ] Implement repository interfaces and concrete browser-local persistence services for canonical snapshot-plus-ledger storage. (AC: 1, 2)
-- [ ] Add reopen validation that applies compatibility rules, emits shared issue records, and preserves unaffected valid state. (AC: 2, 3)
-- [ ] Wire persistence hydration back into `WorkspaceKernel` without moving ownership into the service worker or operational shell services. (AC: 3, 4)
-- [ ] Add integration tests for round-trip persistence, reopen validation, and compatibility enforcement. (AC: 5)
+- [x] Implement repository interfaces and concrete browser-local persistence services for canonical snapshot-plus-ledger storage. (AC: 1, 2)
+- [x] Add reopen validation that applies compatibility rules, emits shared issue records, and preserves unaffected valid state. (AC: 2, 3)
+- [x] Wire persistence hydration back into `WorkspaceKernel` without moving ownership into the service worker or operational shell services. (AC: 3, 4)
+- [x] Add integration tests for round-trip persistence, reopen validation, and compatibility enforcement. (AC: 5)
 
 ## Dev Notes
 
@@ -77,12 +77,38 @@ GPT-5 Codex
 ### Debug Log References
 
 - Locked Epic 1 planning baseline reviewed before story creation.
+- Added repository, browser-local storage, and reopen orchestration seams under `src/services/persistence` and `src/features/workspace-persistence`.
+- Verified story-specific specs with `./scripts/with-node.sh npm test -- src/services/persistence/repositories/workspace-repository.spec.ts src/features/workspace-persistence/reopen-workspace.spec.ts tests/integration/workspace-reopen.test.ts`.
+- Verified repo gates with `./scripts/with-node.sh npm test`, `./scripts/with-node.sh npm run lint`, and `./scripts/with-node.sh npm run typecheck`.
 
 ### Completion Notes List
 
 - This story captures the local-workspace continuity baseline for Epic 1 without drifting into export-package scope.
 - Compatibility enforcement is intentionally tied to the release manifest envelope rather than ad hoc feature checks.
+- Implemented canonical snapshot-plus-ledger repositories with in-memory and IndexedDB-backed storage plus OPFS and File System Access boundary wrappers under `src/services/persistence`.
+- Added tolerant reopen validation that localizes invalid collections, graph references, and ledger ordering into shared issue records while preserving valid workspace state.
+- Added feature-layer save/reopen entrypoints that round-trip `WorkspaceKernel` state without moving persistence ownership into the shell or service worker.
+- Added benchmark-ready reopen fixtures and integration coverage for round trips, compatibility blocking, and localized recovery paths.
 
 ### File List
 
-- `/home/pin81845/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/1-3-create-open-and-reopen-local-workspaces.md`
+- _bmad-output/implementation-artifacts/1-3-create-open-and-reopen-local-workspaces.md
+- src/features/workspace-persistence/index.ts
+- src/features/workspace-persistence/reopen-workspace.spec.ts
+- src/features/workspace-persistence/reopen-workspace.ts
+- src/features/workspace-persistence/save-workspace.ts
+- src/schemas/workspace/workspace-snapshot.ts
+- src/services/persistence/fs-access/portable-workspace-files.ts
+- src/services/persistence/index.ts
+- src/services/persistence/indexed-db/workspace-storage.ts
+- src/services/persistence/opfs/opfs-binary-store.ts
+- src/services/persistence/repositories/workspace-repository.spec.ts
+- src/services/persistence/repositories/workspace-repository.ts
+- src/test/benchmark-workspaces/benchmark-workspace-local.fixture.ts
+- tests/integration/workspace-reopen.test.ts
+- tsconfig.app.json
+- vitest.config.ts
+
+### Change Log
+
+- 2026-04-16: Added browser-local persistence repositories, reopen validation, `WorkspaceKernel` save/reopen orchestration, benchmark fixtures, and integration coverage for local workspace round trips.
