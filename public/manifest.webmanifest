@@ -1,0 +1,10 @@
+{
+  "name": "BMADGraphWebApp",
+  "short_name": "BMADGraph",
+  "description": "Hosted shell baseline for the BMADGraph analytical workspace.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3efe6",
+  "theme_color": "#1f2a36",
+  "icons": []
+}

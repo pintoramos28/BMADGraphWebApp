@@ -1,0 +1,30 @@
+export const releaseManifestFixture = {
+  schemaVersion: '1.0.0',
+  appBuildVersion: '0.1.0',
+  releaseDate: '2026-04-15T00:00:00Z',
+  channel: 'internal-stable',
+  supportMatrixVersion: '2026-04-15',
+  supportMatrixUrl: '/api/support-matrix',
+  workspaceCompatibility: {
+    minReadableFormat: '1.0.0',
+    maxReadableFormat: '1.x',
+    migrationPolicy: 'migrate-on-open',
+  },
+  serviceWorker: {
+    version: 'sw-0.1.0',
+    scope: '/',
+    offlineReadyTimeoutMs: 5000,
+    updatePromptMode: 'soft-refresh',
+  },
+  telemetry: {
+    endpoint: '/api/telemetry',
+    schemaVersion: '1.0.0',
+  },
+  releaseNotes: {
+    title: 'Initial internal preview',
+    url: '/release-notes/0.1.0',
+  },
+  integrity: {
+    manifestSha256: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+  },
+};
