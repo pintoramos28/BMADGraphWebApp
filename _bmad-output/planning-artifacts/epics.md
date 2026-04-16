@@ -15,7 +15,18 @@ inputDocuments:
 
 ## Overview
 
-Note: These epics were regenerated on 2026-04-15 from the locked implementation kickoff baseline. They replace any older epic assumptions and are intentionally sequenced for contract-first implementation before story creation. Stories are intentionally omitted from this document.
+Note: These epics were regenerated on 2026-04-15 from the locked implementation kickoff baseline and updated on 2026-04-16 after the implementation-readiness course correction. They remain the sequencing layer for delivery, but implementation must not begin from `epics.md` alone. Each epic requires an ordered story breakdown with BDD-style acceptance criteria, dependency-safe sequencing, and explicit testability before development starts.
+
+## Story Artifacts
+
+The approved story layer for this epic set is maintained in companion planning artifacts:
+
+- `epic-1-stories.md`
+- `epic-2-stories.md`
+- `epic-3-stories.md`
+- `epic-4-stories.md`
+- `epic-5-stories.md`
+- `epic-6-stories.md`
 
 ## Re-Baselined Implementation Constraints
 
@@ -30,9 +41,9 @@ Note: These epics were regenerated on 2026-04-15 from the locked implementation 
 
 ## Epic List
 
-### Epic 1: Contract-First Workspace Kernel and Shell Foundations
+### Epic 1: Hosted Workspace Entry, Save/Reopen Trust, and Shell Readiness
 
-Users can enter a supported BMAD hosted shell, create or reopen a contract-valid local workspace, and rely on stable persistence, routing, and shell boundaries before feature breadth expands.
+Users can open BMADGraphWebApp in a supported browser, start or reopen a local workspace, see offline and support status clearly, and continue analysis with valid work preserved even when issues are detected.
 
 **FRs covered:** FR7, FR43, FR44, FR45, FR46, FR47, FR48, FR49, FR59, FR60, FR62
 
@@ -46,7 +57,7 @@ Users can enter a supported BMAD hosted shell, create or reopen a contract-valid
 - Add benchmark fixtures and runtime seam tests early so later graph work lands against the locked adapter boundary instead of renderer-specific shortcuts.
 
 **Why this epic is first:**
-- It closes the drift-prone contracts called out in the kickoff baseline before feature teams start inventing parallel schemas, route names, or persistence shapes.
+- It creates the first trustworthy user entry point into the hosted shell and workspace lifecycle while still locking the contracts that later feature teams depend on.
 
 ### Epic 2: Trusted Import, Semantic Activation, and Guided Onboarding
 
@@ -105,9 +116,9 @@ Users and reviewers can inspect statistical context, evidence, provenance, missi
 - Make export readiness depend on provenance completeness, unresolved issue state, telemetry snapshot, and reference-graph identity rather than a final-screen-only check.
 - Keep review and handoff centered on the promoted reference graph so the product stays aligned with the UX trust model and the architecture's persistence model.
 
-### Epic 6: Operational Telemetry, Release Integrity, and Support-Matrix Hardening
+### Epic 6: Operational Trust, Telemetry Transparency, and Release Confidence
 
-Users can rely on BMADGraphWebApp to remain offline-ready, privacy-preserving, support-matrix-aware, and operationally observable without leaking analytical content off the local machine.
+Users can understand offline readiness, update state, support status, and privacy-preserving telemetry behavior clearly enough to trust BMADGraphWebApp during serious analytical work.
 
 **FRs covered:** FR61
 
@@ -138,13 +149,16 @@ Users can rely on BMADGraphWebApp to remain offline-ready, privacy-preserving, s
 
 ## Sequencing Notes
 
-- Epic 1 is intentionally contract-first and foundation-first. It exists to lock the implementation seams that later feature work must honor.
+- Epic 1 leads with user-visible shell entry, save/reopen trust, and readiness cues while still locking the contract seams that later feature work must honor.
 - Epic 2 begins end-user workflow breadth only after the workspace kernel, shell boundary, and persistence contracts exist.
 - Epic 3 extends the same contract set into transforms, formulas, ledger history, and repair.
 - Epic 4 is the first place broad graph-authoring UX should expand, because it depends on the already-locked graph-definition and renderer boundary.
 - Epic 5 adds the trust surfaces that depend on reference-graph identity, issue contracts, ledger history, and stable export/readiness rules.
-- Epic 6 hardens the operational shell and telemetry path once the analytical workflow is in place, without moving product state into operational infrastructure.
+- Epic 6 turns shell hardening and telemetry behavior into user-visible trust outcomes once the analytical workflow is in place, without moving product state into operational infrastructure.
 
-## Ambiguities Requiring Explicit Decision Before Story Creation
+## Clarified Decisions Before Story Creation
 
-None currently. Story creation can proceed from the locked implementation kickoff baseline and `IK-ADR-*` set.
+- Story artifacts are now mandatory before implementation starts; epics alone are not implementation-ready.
+- The canonical reviewer workflow is local and in-app: a reviewer imports or reopens a workspace in BMADGraphWebApp review mode on their own machine.
+- Provenance and mission-log identity are modeled as origin labels for a single-user/local-review MVP, not as live multi-user presence.
+- Advanced graph behaviors such as dual-axis comparison, ridgeline small multiples, broad template-gallery depth, and KPI-card-heavy overlays are not assumed to be locked MVP scope unless the PRD says so explicitly.

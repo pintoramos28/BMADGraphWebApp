@@ -1,12 +1,12 @@
-# Story 1.2: WorkspaceKernel and ViewState Boundaries
+# Story 1.2: Author Canonical Workspace and Trust Contracts
 
 Status: ready-for-dev
 
 ## Story
 
-As a platform engineer,
-I want a canonical `WorkspaceKernel` and a strictly separate `ViewState` store,
-so that persistence, trust selectors, and later feature modules all read from one authoritative analytical state model.
+As a developer,
+I want versioned workspace, issue, provenance, and telemetry contracts defined early,
+so that feature stories share one source of truth for persistence and trust state.
 
 ## Acceptance Criteria
 
@@ -18,7 +18,7 @@ so that persistence, trust selectors, and later feature modules all read from on
 
 ## Dependencies
 
-- Story 1.1: Shell Scaffold and Shared Contract Baselines
+- Story 1.1: Bootstrap Hosted Shell Baseline
 
 ## Contract Boundaries
 
@@ -83,4 +83,4 @@ GPT-5 Codex
 
 ### File List
 
-- `/home/pin81845/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/1-2-workspace-kernel-and-view-state-boundaries.md`
+- `/home/pin81845/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/1-2-author-canonical-workspace-and-trust-contracts.md`

@@ -1,12 +1,12 @@
-# Story 1.1: Shell Scaffold and Shared Contract Baselines
+# Story 1.1: Bootstrap Hosted Shell Baseline
 
 Status: ready-for-dev
 
 ## Story
 
-As a platform engineer,
-I want the hosted-shell scaffold and shared schema baselines established first,
-so that every later Epic 1 implementation slice builds on one contract-first source of truth instead of parallel local types.
+As a developer,
+I want a thin hosted-shell baseline created from the approved starter,
+so that later stories land on a working client scaffold instead of ad hoc setup.
 
 ## Acceptance Criteria
 
@@ -61,7 +61,7 @@ so that every later Epic 1 implementation slice builds on one contract-first sou
 ### References
 
 - `/home/pin81845/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/architecture.md` - Frontend Architecture, Project Structure & Boundaries, Validation Refinements from Critical Review, Implementation Handoff
-- `/home/pin81845/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/epics.md` - Epic 1: Contract-First Workspace Kernel and Shell Foundations
+- `/home/pin81845/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/epics.md` - Epic 1 implementation emphasis
 - `/home/pin81845/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/implementation-kickoff-decisions.md` - Sections 4.4 through 4.8 and Immediate next actions before epics/stories
 - `/home/pin81845/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/implementation-adrs/IK-ADR-01-graph-runtime-selection.md`
 - `/home/pin81845/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/implementation-adrs/IK-ADR-02-graph-definition-and-renderer-adapter-boundary.md`
@@ -88,4 +88,4 @@ GPT-5 Codex
 
 ### File List
 
-- `/home/pin81845/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/1-1-shell-scaffold-and-shared-contract-baselines.md`
+- `/home/pin81845/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/1-1-bootstrap-hosted-shell-baseline.md`

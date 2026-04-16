@@ -42,7 +42,7 @@ BMADGraphWebApp now proves that engineers can open a centrally hosted browser sh
 ### Target Users
 - **David Mercer (non-technical domain engineer):** Needs a calm runway that makes the hosted shell feel as approachable as Excel while still guaranteeing offline continuity for travel/offsite reviews. He relies on semantic chips, KPI telemetry, and celebratory “Ready to graph” confirmations to stay confident without expert help.
 - **Priya Raman (technical R&D engineer):** Demands investigative flow with dockable panes, derived columns, and rapid graph iteration that stays under the ≤1 s target even as the shell streams telemetry back once connectivity returns.
-- **Elena Brooks (quality reviewer):** Trust hinges on provenance overlays, drift warnings, and evidence that travels with a workspace export. She re-imports colleagues’ workspaces into her own review environment rather than approving anything inside BMADGraphWebApp, so authors must keep status signals clear before handing work off.
+- **Elena Brooks (quality reviewer):** Trust hinges on provenance overlays, drift warnings, and evidence that travels with a workspace export. She reopens imported workspaces in BMADGraphWebApp review mode on her own machine rather than using shared live review, so authors must keep status signals clear before handing work off.
 
 ### Key Design Challenges
 1. **Hosted shell transparency:** Communicate caching status, offline readiness, telemetry backlog, and update prompts without interrupting flow.
@@ -110,7 +110,7 @@ We target a desktop-class, mouse/keyboard-first web shell that precaches within 
 ### Design Implications
 - **Assured Control →** low-noise status rail, mission-log style confirmations, no surprise modals.
 - **Autonomous Mastery →** inline repair cards, undo-safe transforms, transparent provenance overlays.
-- **Collective Credibility →** status/history chips that show who changed what and when, plus audit-ready timestamps.
+- **Collective Credibility →** status/history chips that show what changed, when it changed, and what initiated it, plus audit-ready timestamps.
 - **Investigative Momentum →** focus mode that hides nonessential chrome while keeping telemetry chips visible.
 - **Relief Pulse →** micro-copy that explicitly says “Import repaired—delimiter corrected automatically.”
 - **Predictable Recovery →** warning chips that pair cause + fix (“Telemetry queued (offline) — will sync on reconnection”).
@@ -241,33 +241,33 @@ We target a desktop-class, mouse/keyboard-first web shell that precaches within 
 ## 2. Core User Experience
 
 ### 2.1 Defining Experience
-BMADGraphWebApp’s signature moment is the five-second graph launch. A dataset lands in the hosted shell, recommended chart templates appear, and semantic chips snap into the X/Y/Color/Facet docks so the canvas instantly displays a trustworthy graph. David can pick a suggested template and get a presentation-ready chart without digging; Priya can swap scatter → dual-axis line → faceted ridgeline while keeping transforms and layers intact; Elena can later re-import the workspace with confidence because provenance badges and telemetry/offline status were pinned beside the canvas at handoff. If we perfect that drag-to-role graph builder—complete with instant template boosts, sub-second updates, statistical overlays, and always-on provenance rails—every other promise follows.
+BMADGraphWebApp’s signature moment is the five-second graph launch. A dataset lands in the hosted shell, recommended chart templates appear for the locked MVP graph families, and semantic chips snap into the X/Y/Color/Facet docks so the canvas instantly displays a trustworthy graph. David can pick a suggested template and get a presentation-ready chart without digging; Priya can iterate through the supported MVP graph patterns while keeping transforms and layers intact; Elena can later reopen the workspace in review mode with confidence because provenance badges and telemetry/offline status were pinned beside the canvas at handoff. If we perfect that drag-to-role graph builder—complete with template-assisted first graph generation, sub-second updates, statistical overlays, and always-on provenance rails—the core product promise holds without assuming every stretch graph pattern ships in MVP.
 
 ### 2.2 User Mental Model
 - **David (Excel mindset):** Expects a direct-manipulation chart builder where whatever he tweaks on screen—axes, colors, labels—is exactly what he’ll export, with obvious axis roles, reusable templates, and guidance when semantics look off. Graphs should feel like “better Excel,” not a new language.
-- **Priya (JMP mindset):** Thinks in role pills, layered plots, and rapid context switching between scatter, line, small multiples, and ridgelines without losing derived columns or filters. She assumes statistical overlays, dual axes, and evidence rails stay anchored to the same graph surface even offline.
-- **Elena (quality reviewer):** Needs every chart to reveal what fields, filters, and transforms power it, plus drift/telemetry cues before the visual renders so she can trust it once she imports the author’s workspace into her own review flow.
+- **Priya (JMP mindset):** Thinks in role pills, layered plots, and rapid context switching between supported MVP graph views without losing derived columns or filters. She expects statistical overlays and evidence rails to stay anchored to the same graph surface even offline, while optional stretch patterns such as dual-axis and ridgeline views remain explicitly labeled if deferred.
+- **Elena (quality reviewer):** Needs every chart to reveal what fields, filters, and transforms power it, plus drift/telemetry cues before the visual renders so she can trust it once she imports the author’s workspace into local review mode.
 - **Frustrations today:** Excel crumbles under serious data; JMP demands expert rituals. All three personas hate losing a crafted chart when reopening or when the network flickers, so they resort to fragile shortcuts (duplicated sheets, screenshots, multiple tool windows). Hidden recalculations, unclear layer inputs, and modal interruptions derail confidence fastest.
 
 ### 2.3 Success Criteria
 - **Graph creation speed:** Import → semantic confirm → first template-backed graph in ≤10 minutes for David, with every role or template change rendering in ≤1 s and every transform/facet recompute finishing in ≤2 s—even offline.
 - **Layer credibility:** Users can stack at least four encodings (axes + color/size/facet) plus one statistical overlay without frame drops; telemetry badges confirm these edits stay within SLA whether online or cached.
-- **Workspace reusability:** Saving the workspace captures dataset semantics, transform stack, derived columns, template choice, layer order, annotations, telemetry state, and reviewer notes; reopening restores that full ledger with highlighted deltas and drift warnings before the graph loads.
+- **Workspace reusability:** Saving the workspace captures dataset semantics, transform stack, derived columns, template choice, layer order, annotations, telemetry state, and review annotations; reopening restores that full ledger with highlighted deltas and drift warnings before the graph loads.
 - **Feedback transparency:** Status badges pair each graph edit with confidence copy (“Spline fit applied—latency 0.7 s, telemetry queued offline”), and inline repair cards point to misconfigured axes or incompatible templates without hiding the canvas.
-- **Reviewer readiness:** Provenance/status signals surface who changed what, when, and why so authors can export a workspace that stands on its own when Elena reviews it later.
+- **Reviewer readiness:** Provenance/status signals surface what changed, when it changed, and what initiated it so authors can export a workspace that stands on its own when Elena reviews it later.
 
 ### 2.4 Novel UX Patterns
 - **Established pieces:** Drag-to-role targets, template ribbons, small-multiple grids, layer toggles, and dockable panes draw from JMP Graph Builder, Tableau, and Obsidian/Figma pane systems so graph aficionados feel instantly oriented.
-- **BMAD twists:** Hosted-shell telemetry and offline readiness live directly in the graph toolbar; evidence rails pair reviewer notes with per-layer provenance; template swaps never hide layer context; saving emits a mission-log-style ledger for each chart; reopening highlights delta badges before render.
+- **BMAD twists:** Hosted-shell telemetry and offline readiness live directly in the graph toolbar; evidence rails pair review annotations with per-layer provenance; template swaps never hide layer context; saving emits a mission-log-style ledger for each chart; reopening highlights delta badges before render.
 - **Education plan:** First-run tooltips map each dock to familiar tools (“Color behaves like JMP Group / Excel Series”), explain telemetry chips, and show how reviewer rails track provenance. Palette hints expose keyboard shortcuts for swapping templates, cycling overlays, or opening the ledger so both David and Priya ramp fast.
 
 ### 2.5 Experience Mechanics
 **Initiation**
-- Import panel previews graph-ready schema, flags ambiguous columns, and proposes two or three chart templates (“Scatter with regression,” “Dual-axis comparison,” “Ridgeline small multiples”). Telemetry/offline badge confirms cache readiness before graphing starts.
+- Import panel previews graph-ready schema, flags ambiguous columns, and proposes two or three locked-MVP chart templates (“Scatter with regression,” “Line trend,” “Grouped bar comparison”). Telemetry/offline badge confirms cache readiness before graphing starts.
 - Empty canvas shows labeled drop zones plus template thumbnails, nudging David to “click to graph” while Priya can drag fields immediately.
 
 **Interaction**
-- Users drag chips or apply a suggested template; chart type ribbon updates live (scatter, line, dual-axis, small multiples, ridgeline). Layer drawer lets Priya toggle fits, confidence bands, annotations, KPI cards; each addition logs telemetry timing and provenance beside the canvas.
+- Users drag chips or apply a suggested template; chart type ribbon updates live for the supported MVP graph types, while optional stretch patterns remain clearly labeled if present in a prototype or later release. Layer drawer lets Priya toggle the supported regression fit, reference lines, threshold bands, and annotations; optional KPI-card-style embellishments remain outside the locked MVP unless explicitly approved.
 - Derived-column composer and filters sit adjacent so formula edits instantly feed new encodings; dockable panes let Priya pin the evidence rail while David collapses it.
 
 **Feedback**
@@ -275,8 +275,15 @@ BMADGraphWebApp’s signature moment is the five-second graph launch. A dataset 
 - Telemetry/offline chips pulse quietly when metrics queue, and light-weight status/history badges show what each layer references. Drift or broken formulas trigger alerts before the graph renders so the workspace is trustworthy when Elena eventually inspects it.
 
 **Completion**
-- “Save Workspace” seals the graph state, transform stack, template choice, and reviewer notes; confirmation copy references the active chart (“Dual-axis line + spline saved at 14:05—offline-ready, telemetry queued 3 metrics”).
+- “Save Workspace” seals the graph state, transform stack, template choice, and review annotations; confirmation copy references the active chart in the current build (“Reference graph + fit saved at 14:05—offline-ready, telemetry queued 3 metrics”).
 - Reopen flow previews the prior visual, highlights changes (new layer, updated transform), and surfaces drift/telemetry warnings before loading the canvas. Users can jump directly to the graph builder with all encodings intact, ensuring continuity for both David and Priya while making it easy to hand off a self-explanatory workspace for Elena’s later import.
+
+### 2.6 MVP Scope Labels
+
+- The exact MVP family list, template IDs, overlay set, and blocked combinations are defined in [core-graph-catalog.md](/home/pin81845/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/core-graph-catalog.md).
+- **Locked MVP:** template-assisted first graph creation, role-based graph editing, supported core graph families, one graph-tied fit path, reference-graph promotion, evidence rail, mission log, and handoff readiness.
+- **Optional MVP stretch:** dual-axis comparison, ridgeline small multiples, deeper template-gallery breadth, and KPI-card-heavy graph embellishments that do not strengthen the minimum trust workflow.
+- **Future inspiration:** broader chart-pattern parity with expert-first analytics tools, expansive reusable template libraries, and advanced visual flourishes not needed to prove the core analytical loop.
 
 ## Visual Design Foundation
 
@@ -413,7 +420,7 @@ Flow notes:
 
 ### Elena Brooks - Review and Validate Workspace
 
-Elena validates that a shared workspace is trustworthy before the graph enters quality discussions, focusing on provenance, drift, and telemetry integrity.
+Elena validates that a workspace reopened in BMADGraphWebApp review mode on her own machine is trustworthy before the graph enters quality discussions, focusing on provenance, drift, and telemetry integrity.
 
 ```mermaid
 flowchart TD
@@ -519,7 +526,7 @@ BMADGraphWebApp uses Base UI only for interaction behavior, accessibility primit
 
 **Purpose:** Captures the reasoning, provenance, overlays, and reviewer context attached to the current reference graph.  
 **Usage:** Investigation and review workflows where analytical conclusions must remain inspectable.  
-**Anatomy:** notes stream, transform summary, provenance block, overlay controls, reviewer markers, unresolved issue callouts.  
+**Anatomy:** notes stream, transform summary, provenance block, overlay controls, review annotations, unresolved issue callouts.  
 **States:** collapsed, pinned, filtered, unresolved, review-ready.  
 **Variants:** side rail, split-horizon rail, bottom drawer.  
 **Accessibility:** section order is keyboard navigable; notes, markers, and provenance entries all expose plain-text equivalents.  
@@ -539,7 +546,7 @@ BMADGraphWebApp uses Base UI only for interaction behavior, accessibility primit
 
 **Purpose:** Records meaningful analytical events and gives users a readable history of what changed across the workspace.  
 **Usage:** Session feedback, saved-state confirmation, and review context.  
-**Anatomy:** event list, timestamps, graph association, actor/source label, telemetry snapshot, filter controls.  
+**Anatomy:** event list, timestamps, graph association, origin label, telemetry snapshot, filter controls.  
 **States:** active, filtered, queued, saved, exported.  
 **Variants:** inline confirmation panel, history drawer, compact summary list.  
 **Accessibility:** every event is readable as standalone text without visual cues; timestamps and event types are keyboard accessible.  

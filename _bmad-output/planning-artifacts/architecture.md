@@ -133,6 +133,8 @@ npm create vite@latest bmad-graph-web -- --template react-ts
 - Base UI is used only for primitives, focus management, and interaction behavior; BMAD Mission Control owns all application-facing styling, analytical semantics, and trust-specific components.
 - MVP access control is perimeter-based (internal hosting and/or corporate SSO). There is no in-product multi-user auth, RBAC, or shared workspace authority model in the analytical client.
 - Server APIs remain intentionally narrow: telemetry ingestion, release manifest/support matrix, health/status, and shell bootstrap config. No network API exists for user datasets or workspaces in MVP.
+- Review mode is local and in-app. `/review/:workspaceId` represents the review presentation of a workspace that has been imported or reopened on the current machine; it does not imply shared remote review state.
+- The locked MVP graph-family inventory, template IDs, overlay set, and major blocked combinations are defined in [core-graph-catalog.md](/home/pin81845/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/core-graph-catalog.md) and must validate BMAD graph definitions before renderer compilation.
 - Desktop authoring at `1200px+` is the required target. Tablet/mobile remain reduced-scope adaptations only when they reuse the desktop model without weakening it.
 
 **Deferred Decisions (Post-MVP):**
@@ -156,6 +158,8 @@ npm create vite@latest bmad-graph-web -- --template react-ts
 - Define a versioned `WorkspaceSnapshot` as the single source of truth for dataset catalog, semantic schema, transform pipeline, formula dependency graph, graph views, `referenceGraphId`, evidence payloads, trust signals, mission-log summary, and export manifest.
 - Store graph views as normalized entities (`graphId`, config, derived stats, overlays, provenance refs, trust refs) so exploratory tabs remain disposable while the reference graph remains stable and addressable.
 - Treat provenance, repair state, and readiness state as domain data attached to workspace entities, not as UI annotations recomputed ad hoc.
+- Mission Log and provenance records must use MVP origin labels rather than multi-user presence semantics. The baseline origin vocabulary is `user_action`, `system_inference`, `repair_action`, `workspace_import`, and `migration_or_version_check`.
+- Each graph view must validate its `family`, `templateId`, role assignments, and overlays against the locked catalog before the `graph-runtime/*` adapter compiles a renderer-specific spec.
 
 **Primary persistence strategy**
 - Use IndexedDB as the primary structured store for snapshots, entities, queues, and indexes. The preferred implementation adapter is Dexie 4.2.x, but persistence APIs stay behind a repository boundary so the storage adapter can change without changing the domain model.
@@ -879,6 +883,7 @@ BMADGraphWebApp/
   - `/workspace/:workspaceId`
   - `/review/:workspaceId`
   - `/unsupported`
+- `/review/:workspaceId` is a local review-mode route for reopened or imported workspaces on the current machine.
 
 **ADR-03: Service worker ownership**
 - Shell bootstrap owns registration.

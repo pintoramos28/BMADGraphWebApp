@@ -1,12 +1,12 @@
-# Story 1.3: Local Workspace Persistence and Reopen Baseline
+# Story 1.3: Create, Open, and Reopen Local Workspaces
 
 Status: ready-for-dev
 
 ## Story
 
-As a platform engineer,
-I want browser-local workspace persistence and reopen validation built on the snapshot-plus-ledger contracts,
-so that Epic 1 can create or reopen a contract-valid local workspace without treating persistence as a UI snapshot hack.
+As a user,
+I want to start a new workspace or reopen a saved one,
+so that BMADGraphWebApp preserves my analytical session as a local system of record.
 
 ## Acceptance Criteria
 
@@ -18,8 +18,8 @@ so that Epic 1 can create or reopen a contract-valid local workspace without tre
 
 ## Dependencies
 
-- Story 1.1: Shell Scaffold and Shared Contract Baselines
-- Story 1.2: WorkspaceKernel and ViewState Boundaries
+- Story 1.1: Bootstrap Hosted Shell Baseline
+- Story 1.2: Author Canonical Workspace and Trust Contracts
 
 ## Contract Boundaries
 
@@ -85,4 +85,4 @@ GPT-5 Codex
 
 ### File List
 
-- `/home/pin81845/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/1-3-local-workspace-persistence-and-reopen-baseline.md`
+- `/home/pin81845/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/1-3-create-open-and-reopen-local-workspaces.md`

@@ -280,7 +280,33 @@ The MVP must fully support David's first report-ready graph journey, David's mes
 - localized, recoverable handling of parsing, transform, and formula failures  
 - enough inspectability and transparency to support user trust and technical review
 
+### MVP Graph Pattern Scope
+
+The MVP must distinguish between graph behaviors that are locked scope and graph patterns that remain optional or post-MVP. This keeps the implementation backlog aligned with the analytical loop the product is actually trying to prove.
+
+The exact locked MVP family inventory, template IDs, overlay rules, and blocked combinations are defined in [core-graph-catalog.md](/home/pin81845/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/core-graph-catalog.md).
+
+**Locked MVP graph scope:**  
+- template-assisted first-graph creation that accelerates the role-assignment workflow without replacing it  
+- core graph families and direct-manipulation editing needed to satisfy FR27-FR38  
+- at least one graph-tied fit or regression path satisfying FR40  
+- four-variable encoding with explicit performance guardrails satisfying FR35  
+
+**Optional MVP stretch only if delivery capacity permits:**  
+- dual-axis comparison flows  
+- ridgeline small multiples  
+- broad template-gallery depth beyond the minimum first-graph workflow  
+- KPI-card-heavy overlays beyond the minimum trust and evidence workflow  
+
+**Not assumed by default for MVP:**  
+- broad chart-type parity with expert-first analytics tools  
+- extensive template catalogs or reusable chart libraries  
+- decorative analytical overlays that do not materially strengthen the core trust workflow  
+
 The MVP should remain intentionally narrow in breadth even while being demanding in depth. It does not need near-parity chart coverage, connected data sources, multi-user collaboration, or enterprise governance features to prove the concept. It does need one trustworthy analytical loop that users can actually rely on.
+
+**Reviewer workflow boundary:**  
+In MVP, reviewer inspection is a local in-app workflow. A reviewer imports or reopens a workspace into BMADGraphWebApp on their own machine and evaluates it through the application's review surfaces. Shared live review, concurrent presence, and cloud approval workflows are out of scope.
 
 ### Post-MVP Features
 
@@ -371,6 +397,8 @@ The biggest resource risk is scope creep from Configuration A into Configuration
 - FR49: Users can rely on the workspace as the system of record for an analytical session, not only as a temporary graph editor.
 
 ### Guidance, Review, and Output
+
+For FR53-FR57, "review" means local in-app review of an imported or reopened workspace, not a shared multi-user session.
 
 - FR50: First-time or non-technical users can access guided help during the core workflow.
 - FR51: Users can receive contextual guidance during import, semantic correction, and graph creation.
