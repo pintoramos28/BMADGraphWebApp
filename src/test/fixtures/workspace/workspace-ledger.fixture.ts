@@ -1,3 +1,5 @@
+import type { WorkspaceLedgerEntry } from '../../../schemas/workspace';
+
 export const workspaceLedgerFixture = [
   {
     ledgerEntryId: 'led_001',
@@ -44,4 +46,4 @@ export const workspaceLedgerFixture = [
     },
     correlationId: 'cmd_2026_04_15_018',
   },
-];
+] satisfies WorkspaceLedgerEntry[];

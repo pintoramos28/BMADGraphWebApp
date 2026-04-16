@@ -1,3 +1,5 @@
+import type { WorkspaceSnapshot } from '../../../schemas/workspace';
+
 import { graphDefinitionFixture } from './graph-definition.fixture';
 
 export const workspaceSnapshotFixture = {
@@ -95,4 +97,4 @@ export const workspaceSnapshotFixture = {
     includedReferenceGraphId: 'graph_capacity_fade',
     manifestVersion: '1.0.0',
   },
-};
+} satisfies WorkspaceSnapshot;

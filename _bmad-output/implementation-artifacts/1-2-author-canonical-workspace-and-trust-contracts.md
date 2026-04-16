@@ -1,6 +1,6 @@
 # Story 1.2: Author Canonical Workspace and Trust Contracts
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -29,10 +29,10 @@ so that feature stories share one source of truth for persistence and trust stat
 
 ## Tasks / Subtasks
 
-- [ ] Implement the `WorkspaceKernel` baseline with canonical state slices, command entrypoints, reducer/event organization, and workspace-version tracking. (AC: 1, 2)
-- [ ] Implement the separate `ViewState` store for panel openness, transient shell state, and other non-persisted UI concerns only. (AC: 1, 5)
-- [ ] Add shared trust/readiness selectors that compute from canonical state instead of feature-local copies. (AC: 3)
-- [ ] Add state-layer tests that exercise stale worker reply rejection, ledger ordering expectations, and ViewState isolation. (AC: 4, 5)
+- [x] Implement the `WorkspaceKernel` baseline with canonical state slices, command entrypoints, reducer/event organization, and workspace-version tracking. (AC: 1, 2)
+- [x] Implement the separate `ViewState` store for panel openness, transient shell state, and other non-persisted UI concerns only. (AC: 1, 5)
+- [x] Add shared trust/readiness selectors that compute from canonical state instead of feature-local copies. (AC: 3)
+- [x] Add state-layer tests that exercise stale worker reply rejection, ledger ordering expectations, and ViewState isolation. (AC: 4, 5)
 
 ## Dev Notes
 
@@ -75,12 +75,44 @@ GPT-5 Codex
 ### Debug Log References
 
 - Locked Epic 1 planning baseline reviewed before story creation.
+- Added a vanilla Zustand `WorkspaceKernel` with reducer-backed commands, ledger event appends, selector baselines, and stale worker reply gating.
+- Added a separate `ViewState` store plus direct state-layer tests for reference graph promotion, stale worker reply rejection, trust selector determinism, and persistence isolation.
+- Validation commands: `./scripts/with-node.sh npm test`, `./scripts/with-node.sh npm run typecheck`, `./scripts/with-node.sh npm run lint`.
 
 ### Completion Notes List
 
 - This story exists to freeze the kernel/view-state separation before persistence, routing, or shell-status work expands.
 - Graph-authoring UI remains out of scope even though graph/reference selectors must already honor the locked contract split.
+- `WorkspaceKernel` now owns canonical snapshot state, ordered ledger appends, worker-correlation gating, and stable selector/command seams under `src/stores/workspace-kernel/`.
+- Shared trust/readiness selectors now derive issue, readiness, telemetry, and compatibility state from canonical kernel state without feature-local caches.
+- `ViewState` remains UI-only and direct store tests now prove canonical workspace persistence excludes panel and shell state.
+- Repo validation passed with `npm test`, `npm run typecheck`, and `npm run lint` through `scripts/with-node.sh`.
 
 ### File List
 
-- `/home/pin81845/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/1-2-author-canonical-workspace-and-trust-contracts.md`
+- `_bmad-output/implementation-artifacts/1-2-author-canonical-workspace-and-trust-contracts.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `package.json`
+- `package-lock.json`
+- `src/lib/semver.ts`
+- `src/domain/readiness/index.ts`
+- `src/domain/readiness/selectors.ts`
+- `src/domain/trust/index.ts`
+- `src/domain/trust/selectors.ts`
+- `src/stores/view-state/index.ts`
+- `src/stores/view-state/store.ts`
+- `src/stores/workspace-kernel/events.ts`
+- `src/stores/workspace-kernel/index.ts`
+- `src/stores/workspace-kernel/reducers.ts`
+- `src/stores/workspace-kernel/selectors.ts`
+- `src/stores/workspace-kernel/store.ts`
+- `src/stores/workspace-kernel/types.ts`
+- `src/stores/workspace-kernel/workspace-kernel.spec.ts`
+- `src/test/fixtures/workspace/graph-definition.fixture.ts`
+- `src/test/fixtures/workspace/issue-record.fixture.ts`
+- `src/test/fixtures/workspace/workspace-ledger.fixture.ts`
+- `src/test/fixtures/workspace/workspace-snapshot.fixture.ts`
+
+### Change Log
+
+- 2026-04-16: Added the canonical `WorkspaceKernel` and separate `ViewState` store, introduced shared trust/readiness selectors, typed the locked workspace fixtures, added direct store tests, and recorded the story as ready for review.

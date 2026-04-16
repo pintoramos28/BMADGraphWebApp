@@ -1,3 +1,5 @@
+import type { GraphDefinition } from '../../../schemas/workspace';
+
 export const graphDefinitionFixture = {
   graphId: 'graph_capacity_fade',
   title: 'Capacity Fade vs Cycle',
@@ -27,4 +29,4 @@ export const graphDefinitionFixture = {
   },
   issueIds: [],
   evidenceIds: ['ev_001'],
-};
+} satisfies GraphDefinition;

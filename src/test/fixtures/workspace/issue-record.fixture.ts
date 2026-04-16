@@ -1,3 +1,5 @@
+import type { IssueRecord } from '../../../schemas/workspace';
+
 export const issueRecordFixture = {
   issueId: 'issue_color_role_quantitative',
   kind: 'graph.validation.incompatible-role',
@@ -43,4 +45,4 @@ export const issueRecordFixture = {
     requestedFieldId: 'capacityRetention',
     requestedRole: 'color',
   },
-};
+} satisfies IssueRecord;
