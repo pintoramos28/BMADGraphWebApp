@@ -89,6 +89,10 @@ describe('workspace reopen integration', () => {
       }),
     );
     expect(reopened.kernelStore.getState().selectors.readinessSummary().status).toBe('blocked');
+    expect(reopened.kernelStore.getState().selectors.compatibilityState()).toMatchObject({
+      isReadable: false,
+      isTested: false,
+    });
   });
 
   it('preserves unaffected workspace state while localizing invalid reopened content', async () => {
@@ -225,5 +229,84 @@ describe('workspace reopen integration', () => {
         }),
       ]),
     );
+  });
+
+  it('does not let saved transient reopen issues block a later compatible reopen', async () => {
+    const repository = createWorkspaceRepository(
+      new InMemoryWorkspaceStorage([
+        {
+          workspaceId: benchmarkWorkspaceLocalSnapshotFixture.workspaceId,
+          savedAt: '2026-04-16T18:50:00Z',
+          snapshot: {
+            ...structuredClone(benchmarkWorkspaceLocalSnapshotFixture),
+            workspaceFormatVersion: '2.0.0',
+            compatibility: {
+              minReadableAppBuild: '0.1.0',
+              maxTestedAppBuild: '0.2.x',
+            },
+          },
+          ledger: structuredClone(benchmarkWorkspaceLocalLedgerFixture),
+        },
+      ]),
+    );
+
+    const blockedReopen = await reopenWorkspaceKernel({
+      repository,
+      workspaceId: benchmarkWorkspaceLocalSnapshotFixture.workspaceId,
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:50:04Z',
+      nowMs: (() => {
+        const samples = [4000, 4210];
+        return () => samples.shift() ?? 4210;
+      })(),
+    });
+
+    expect(blockedReopen.report.localizedIssues).toContainEqual(
+      expect.objectContaining({
+        kind: 'workspace.reopen.compatibility.blocked',
+      }),
+    );
+
+    await saveWorkspaceKernel({
+      repository,
+      kernelStore: blockedReopen.kernelStore,
+      savedAt: '2026-04-16T18:50:10Z',
+    });
+
+    const reopenedAfterUpgrade = await reopenWorkspaceKernel({
+      repository,
+      workspaceId: benchmarkWorkspaceLocalSnapshotFixture.workspaceId,
+      compatibilityEnvelope: {
+        ...compatibilityEnvelope,
+        currentAppBuildVersion: '0.2.0',
+        maximumReadableWorkspaceFormat: '2.x',
+      },
+      now: () => '2026-04-16T18:50:14Z',
+      nowMs: (() => {
+        const samples = [4300, 4520];
+        return () => samples.shift() ?? 4520;
+      })(),
+    });
+
+    expect(reopenedAfterUpgrade.report.localizedIssues).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.compatibility.blocked',
+        }),
+      ]),
+    );
+    expect(reopenedAfterUpgrade.kernelStore.getState().snapshot.issues).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.compatibility.blocked',
+        }),
+      ]),
+    );
+    expect(reopenedAfterUpgrade.kernelStore.getState().selectors.readinessSummary().status).toBe('warning');
+    expect(reopenedAfterUpgrade.kernelStore.getState().selectors.compatibilityState()).toMatchObject({
+      appBuildVersion: '0.2.0',
+      isReadable: true,
+      isTested: true,
+    });
   });
 });

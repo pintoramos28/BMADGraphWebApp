@@ -52,11 +52,21 @@ const persistedWorkspaceRecordSchema = strictObject({
 });
 
 function sortBySavedAtDescending<T extends { savedAt: string }>(values: T[]) {
-  return [...values].sort((left, right) => right.savedAt.localeCompare(left.savedAt));
+  return [...values].sort((left, right) => {
+    const leftTime = Date.parse(left.savedAt);
+    const rightTime = Date.parse(right.savedAt);
+
+    if (!Number.isNaN(leftTime) && !Number.isNaN(rightTime) && leftTime !== rightTime) {
+      return rightTime - leftTime;
+    }
+
+    return right.savedAt.localeCompare(left.savedAt);
+  });
 }
 
 function validateLedgerOrdering(ledger: WorkspaceLedgerEntry[]) {
   let previousSequence = 0;
+  let previousWorkspaceVersion = 0;
 
   for (const entry of ledger) {
     workspaceLedgerEntrySchema.parse(entry);
@@ -65,7 +75,12 @@ function validateLedgerOrdering(ledger: WorkspaceLedgerEntry[]) {
       throw new Error('Workspace persistence requires sequence-ordered ledger entries.');
     }
 
+    if (entry.workspaceVersion <= previousWorkspaceVersion) {
+      throw new Error('Workspace persistence requires strictly increasing workspace versions.');
+    }
+
     previousSequence = entry.sequence;
+    previousWorkspaceVersion = entry.workspaceVersion;
   }
 }
 

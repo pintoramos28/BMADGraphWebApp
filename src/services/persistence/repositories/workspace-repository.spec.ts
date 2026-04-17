@@ -74,6 +74,26 @@ describe('WorkspaceRepository', () => {
     ).rejects.toThrow(/ledger/i);
   });
 
+  it('rejects regressing workspace versions on save', async () => {
+    const storage = new InMemoryWorkspaceStorage();
+    const repository = createWorkspaceRepository(storage);
+    const regressingLedger = [
+      workspaceLedgerFixture[0]!,
+      {
+        ...workspaceLedgerFixture[1]!,
+        workspaceVersion: 16,
+      },
+    ];
+
+    await expect(
+      repository.saveCanonicalWorkspace({
+        snapshot: workspaceSnapshotFixture,
+        ledger: regressingLedger,
+        savedAt: '2026-04-16T18:23:00Z',
+      }),
+    ).rejects.toThrow(/workspace versions/i);
+  });
+
   it('sorts workspace summaries newest-first regardless of storage adapter ordering', async () => {
     const storage: WorkspacePersistenceStorage = {
       async putRecord() {},
@@ -102,5 +122,38 @@ describe('WorkspaceRepository', () => {
     const summaries = await repository.listWorkspaces();
 
     expect(summaries.map((summary) => summary.workspaceId)).toEqual(['ws_newer', 'ws_older']);
+  });
+
+  it('sorts workspace summaries by actual timestamp rather than lexicographic order', async () => {
+    const storage: WorkspacePersistenceStorage = {
+      async putRecord() {},
+      async getRecord() {
+        return null;
+      },
+      async listRecords() {
+        const newerFractionalRecord: PersistedWorkspaceRecord = {
+          workspaceId: 'ws_newer_fractional',
+          savedAt: '2026-04-16T18:30:00.500Z',
+          snapshot: structuredClone(workspaceSnapshotFixture),
+          ledger: structuredClone(workspaceLedgerFixture),
+        };
+        const olderWholeSecondRecord: PersistedWorkspaceRecord = {
+          workspaceId: 'ws_older_whole_second',
+          savedAt: '2026-04-16T18:30:00Z',
+          snapshot: structuredClone(workspaceSnapshotFixture),
+          ledger: structuredClone(workspaceLedgerFixture),
+        };
+
+        return [olderWholeSecondRecord, newerFractionalRecord];
+      },
+    };
+    const repository = createWorkspaceRepository(storage);
+
+    const summaries = await repository.listWorkspaces();
+
+    expect(summaries.map((summary) => summary.workspaceId)).toEqual([
+      'ws_newer_fractional',
+      'ws_older_whole_second',
+    ]);
   });
 });

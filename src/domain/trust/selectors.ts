@@ -54,12 +54,20 @@ export function selectTelemetrySummary(snapshot: WorkspaceSnapshot): TelemetrySu
 }
 
 export function selectCompatibilityState(snapshot: WorkspaceSnapshot): CompatibilityState {
+  const hasOpenCompatibilityBlock = snapshot.issues.some(
+    (issue) => issue.status !== 'resolved' && issue.kind === 'workspace.reopen.compatibility.blocked',
+  );
+
   return {
     workspaceFormatVersion: snapshot.workspaceFormatVersion,
     appBuildVersion: snapshot.appBuildVersion,
     minReadableAppBuild: snapshot.compatibility.minReadableAppBuild,
     maxTestedAppBuild: snapshot.compatibility.maxTestedAppBuild,
-    isReadable: compareSemver(snapshot.appBuildVersion, snapshot.compatibility.minReadableAppBuild) >= 0,
-    isTested: matchesVersionRange(snapshot.appBuildVersion, snapshot.compatibility.maxTestedAppBuild),
+    isReadable:
+      !hasOpenCompatibilityBlock &&
+      compareSemver(snapshot.appBuildVersion, snapshot.compatibility.minReadableAppBuild) >= 0,
+    isTested:
+      !hasOpenCompatibilityBlock &&
+      matchesVersionRange(snapshot.appBuildVersion, snapshot.compatibility.maxTestedAppBuild),
   };
 }

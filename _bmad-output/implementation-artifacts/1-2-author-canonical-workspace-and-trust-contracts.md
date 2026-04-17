@@ -1,6 +1,6 @@
 # Story 1.2: Author Canonical Workspace and Trust Contracts
 
-Status: review
+Status: done
 
 ## Story
 
@@ -33,6 +33,12 @@ so that feature stories share one source of truth for persistence and trust stat
 - [x] Implement the separate `ViewState` store for panel openness, transient shell state, and other non-persisted UI concerns only. (AC: 1, 5)
 - [x] Add shared trust/readiness selectors that compute from canonical state instead of feature-local copies. (AC: 3)
 - [x] Add state-layer tests that exercise stale worker reply rejection, ledger ordering expectations, and ViewState isolation. (AC: 4, 5)
+
+### Review Findings
+
+- [x] [Review][Patch] `replaceIssues` leaves stale readiness issue ids in the persisted snapshot [src/stores/workspace-kernel/reducers.ts:131]
+- [x] [Review][Patch] Compatibility state only reflects the saved snapshot build, not the runtime reopen compatibility result [src/domain/trust/selectors.ts:56]
+- [x] [Review][Patch] Ledger validation checks sequence ordering but not monotonic workspace versions [src/stores/workspace-kernel/events.ts:21]
 
 ## Dev Notes
 

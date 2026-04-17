@@ -110,11 +110,64 @@ interface IssueFactoryInput {
   diagnostics?: Record<string, unknown>;
 }
 
+const reopenIssueIdPattern = /^workspace\.reopen\.(\d+)$/;
+
 function asValidationMessages(error: z.ZodError) {
   return error.issues.map((issue) => ({
     path: issue.path.join('.') || '<root>',
     message: issue.message,
   }));
+}
+
+function collectExistingIssueIds(values: unknown[]) {
+  const issueIds = new Set<string>();
+
+  values.forEach((value) => {
+    if (!value || typeof value !== 'object') {
+      return;
+    }
+
+    const issueId = (value as { issueId?: unknown }).issueId;
+
+    if (typeof issueId === 'string') {
+      issueIds.add(issueId);
+    }
+  });
+
+  return issueIds;
+}
+
+function createReopenIssueIdFactory(existingIssueIds: Iterable<string>) {
+  const usedIssueIds = new Set(existingIssueIds);
+  let nextIssueNumber = 0;
+
+  usedIssueIds.forEach((issueId) => {
+    const match = reopenIssueIdPattern.exec(issueId);
+
+    if (!match) {
+      return;
+    }
+
+    nextIssueNumber = Math.max(nextIssueNumber, Number.parseInt(match[1] ?? '0', 10));
+  });
+
+  return () => {
+    for (;;) {
+      nextIssueNumber += 1;
+      const issueId = `workspace.reopen.${String(nextIssueNumber).padStart(3, '0')}`;
+
+      if (usedIssueIds.has(issueId)) {
+        continue;
+      }
+
+      usedIssueIds.add(issueId);
+      return issueId;
+    }
+  };
+}
+
+function isTransientReopenIssue(issue: IssueRecord) {
+  return issue.kind.startsWith('workspace.reopen.') && issue.source.module === 'workspace-persistence';
 }
 
 function parseCollection<T>(
@@ -150,6 +203,52 @@ function resolveGraphId(
   return validGraphIds.find((graphId) => graphId !== distinctFrom) ?? validGraphIds[0];
 }
 
+function createRecoveryDatasetId(workspaceId: string) {
+  return `dataset_recovery_${workspaceId}`;
+}
+
+function createRecoveryGraphId(workspaceId: string) {
+  return `graph_recovery_${workspaceId}`;
+}
+
+function createRecoveryDataset(workspaceId: string): WorkspaceSnapshot['datasets'][number] {
+  return datasetSchema.parse({
+    datasetId: createRecoveryDatasetId(workspaceId),
+    displayName: 'Recovery Workspace',
+    sourceKind: 'recovery',
+    fingerprint: `sha256:${'0'.repeat(64)}`,
+    rowCount: 0,
+    columnCount: 0,
+    columns: [],
+  });
+}
+
+function createRecoveryGraph(input: {
+  workspaceId: string;
+  datasetId: string;
+  issueId: string;
+}): GraphDefinition {
+  return graphDefinitionSchema.parse({
+    graphId: createRecoveryGraphId(input.workspaceId),
+    title: 'Recovery Required',
+    status: 'candidate',
+    datasetId: input.datasetId,
+    roleAssignments: {
+      x: [],
+      y: [],
+      color: [],
+      size: [],
+      facetRow: [],
+      facetColumn: [],
+    },
+    marks: ['point'],
+    overlays: [],
+    presentation: {},
+    issueIds: [input.issueId],
+    evidenceIds: [],
+  });
+}
+
 export function reopenPersistedWorkspaceRecord(
   record: PersistedWorkspaceRecord,
   options: ReopenWorkspaceOptions,
@@ -160,13 +259,13 @@ export function reopenPersistedWorkspaceRecord(
   const startedMs = nowMs();
   const persisted = persistedWorkspaceRecordSchema.parse(record);
   const snapshotInput = snapshotEnvelopeSchema.parse(persisted.snapshot);
+  const nextReopenIssueId = createReopenIssueIdFactory(collectExistingIssueIds(snapshotInput.issues));
   const localizedIssues: IssueRecord[] = [];
-  let issueCounter = 0;
   let invalidDatasetCount = 0;
 
   const createIssue = (input: IssueFactoryInput) => {
     const nextIssue = issueRecordSchema.parse({
-      issueId: `workspace.reopen.${String(issueCounter + 1).padStart(3, '0')}`,
+      issueId: nextReopenIssueId(),
       kind: input.kind,
       severity: input.severity,
       status: 'open',
@@ -185,11 +284,12 @@ export function reopenPersistedWorkspaceRecord(
       diagnostics: input.diagnostics ?? {},
     });
 
-    issueCounter += 1;
     localizedIssues.push(nextIssue);
+
+    return nextIssue;
   };
 
-  const datasets = parseCollection(snapshotInput.datasets, datasetSchema, (index, error) => {
+  let datasets = parseCollection(snapshotInput.datasets, datasetSchema, (index, error) => {
     invalidDatasetCount += 1;
     createIssue({
       kind: 'workspace.reopen.dataset.invalid-contract',
@@ -341,7 +441,7 @@ export function reopenPersistedWorkspaceRecord(
       },
     });
   });
-  const persistedIssues = parseCollection(snapshotInput.issues, issueRecordSchema, (index, error) => {
+  const parsedPersistedIssues = parseCollection(snapshotInput.issues, issueRecordSchema, (index, error) => {
     createIssue({
       kind: 'workspace.reopen.issue.invalid-contract',
       severity: 'warning',
@@ -359,6 +459,7 @@ export function reopenPersistedWorkspaceRecord(
       },
     });
   });
+  const persistedIssues = parsedPersistedIssues.filter((issue) => !isTransientReopenIssue(issue));
   const parsedGraphs = parseCollection(snapshotInput.graphDefinitions, graphDefinitionSchema, (index, error) => {
     createIssue({
       kind: 'workspace.reopen.graph.invalid-contract',
@@ -377,7 +478,7 @@ export function reopenPersistedWorkspaceRecord(
       },
     });
   });
-  const graphDefinitions = parsedGraphs.filter((graph) => {
+  let graphDefinitions = parsedGraphs.filter((graph) => {
     if (!datasetIds.has(graph.datasetId)) {
       createIssue({
         kind: 'workspace.reopen.graph.missing-dataset',
@@ -428,7 +529,33 @@ export function reopenPersistedWorkspaceRecord(
   });
 
   if (graphDefinitions.length === 0) {
-    throw new Error('Workspace reopen failed because no valid graph definitions remain after validation.');
+    const recoveryIssue = createIssue({
+      kind: 'workspace.reopen.graph.none-recoverable',
+      severity: 'blocking',
+      source: {
+        module: 'workspace-persistence',
+        entityType: 'workspace',
+        entityId: snapshotInput.workspaceId,
+      },
+      title: 'Saved graphs could not be reopened',
+      detail:
+        'All saved graph definitions were excluded during reopen validation. A placeholder recovery graph was created so the workspace can open in a blocked repair state.',
+      userMessage:
+        'Saved graphs could not be reopened. The workspace was opened in a blocked recovery state so you can inspect issues and repair the session.',
+      graphId: createRecoveryGraphId(snapshotInput.workspaceId),
+    });
+
+    if (datasets.length === 0) {
+      datasets = [createRecoveryDataset(snapshotInput.workspaceId)];
+    }
+
+    graphDefinitions = [
+      createRecoveryGraph({
+        workspaceId: snapshotInput.workspaceId,
+        datasetId: datasets[0]?.datasetId ?? createRecoveryDatasetId(snapshotInput.workspaceId),
+        issueId: recoveryIssue.issueId,
+      }),
+    ];
   }
 
   const validGraphIds = new Set(graphDefinitions.map((graph) => graph.graphId));
@@ -615,6 +742,7 @@ export function reopenPersistedWorkspaceRecord(
 
   const ledger: WorkspaceLedgerEntry[] = [];
   let previousSequence = 0;
+  let previousWorkspaceVersion = 0;
 
   persisted.ledger.forEach((entry, index) => {
     const parsed = workspaceLedgerEntrySchema.safeParse(entry);
@@ -639,7 +767,7 @@ export function reopenPersistedWorkspaceRecord(
       return;
     }
 
-    if (parsed.data.sequence <= previousSequence) {
+    if (parsed.data.sequence <= previousSequence || parsed.data.workspaceVersion <= previousWorkspaceVersion) {
       createIssue({
         kind: 'workspace.reopen.ledger.invalid-order',
         severity: 'warning',
@@ -656,6 +784,8 @@ export function reopenPersistedWorkspaceRecord(
           ledgerEntryId: parsed.data.ledgerEntryId,
           sequence: parsed.data.sequence,
           previousSequence,
+          workspaceVersion: parsed.data.workspaceVersion,
+          previousWorkspaceVersion,
         },
       });
       return;
@@ -663,6 +793,7 @@ export function reopenPersistedWorkspaceRecord(
 
     ledger.push(parsed.data);
     previousSequence = parsed.data.sequence;
+    previousWorkspaceVersion = parsed.data.workspaceVersion;
   });
 
   const baseReadiness = readiness.success
@@ -688,20 +819,29 @@ export function reopenPersistedWorkspaceRecord(
         manifestVersion: '1.0.0',
       };
   const allIssues = [...persistedIssues, ...localizedIssues];
+  const previousIssueIds = collectExistingIssueIds(snapshotInput.issues);
+  const hasPreviousBlockingIssue =
+    baseReadiness.blockingIssueIds.some((issueId) => previousIssueIds.has(issueId)) ||
+    parsedPersistedIssues.some((issue) => issue.severity === 'blocking' && issue.status !== 'resolved');
   const validIssueIds = new Set(allIssues.map((issue) => issue.issueId));
   const validEvidenceIds = new Set(evidence.map((entry) => entry.evidenceId));
   const blockingIssueIds = new Set([
-    ...baseReadiness.blockingIssueIds.filter((issueId) => validIssueIds.has(issueId)),
+    ...baseReadiness.blockingIssueIds.filter(
+      (issueId) => !previousIssueIds.has(issueId) || validIssueIds.has(issueId),
+    ),
     ...allIssues.filter((issue) => issue.severity === 'blocking' && issue.status !== 'resolved').map((issue) => issue.issueId),
   ]);
   const warningIssueIds = new Set([
-    ...baseReadiness.warningIssueIds.filter((issueId) => validIssueIds.has(issueId)),
+    ...baseReadiness.warningIssueIds.filter(
+      (issueId) => !previousIssueIds.has(issueId) || validIssueIds.has(issueId),
+    ),
     ...allIssues.filter((issue) => issue.severity === 'warning' && issue.status !== 'resolved').map((issue) => issue.issueId),
   ]);
+  const hasExplicitBlockingState = baseReadiness.status === 'blocked' && !hasPreviousBlockingIssue;
   const snapshot = workspaceSnapshotSchema.parse({
     workspaceId: snapshotInput.workspaceId,
     workspaceFormatVersion: snapshotInput.workspaceFormatVersion,
-    appBuildVersion: snapshotInput.appBuildVersion,
+    appBuildVersion: options.compatibilityEnvelope.currentAppBuildVersion,
     schemaVersion: snapshotInput.schemaVersion,
     createdAt: snapshotInput.createdAt,
     updatedAt: startedAt,
@@ -744,11 +884,13 @@ export function reopenPersistedWorkspaceRecord(
     readiness: {
       ...baseReadiness,
       status:
-        blockingIssueIds.size > 0
+        blockingIssueIds.size > 0 || hasExplicitBlockingState
           ? 'blocked'
-          : warningIssueIds.size > 0 || baseReadiness.status === 'warning'
+          : warningIssueIds.size > 0 ||
+              baseReadiness.status === 'warning' ||
+              baseReadiness.provenanceCompleteness !== 'complete'
             ? 'warning'
-            : baseReadiness.status,
+            : 'ready',
       blockingIssueIds: [...blockingIssueIds],
       warningIssueIds: [...warningIssueIds],
     },

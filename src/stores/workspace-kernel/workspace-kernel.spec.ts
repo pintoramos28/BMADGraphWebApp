@@ -268,6 +268,77 @@ describe('WorkspaceKernel', () => {
     });
   });
 
+  it('preserves readiness-owned state while dropping issue-derived readiness ids', () => {
+    const store = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        issues: [issueRecordFixture],
+        readiness: {
+          status: 'blocked',
+          blockingIssueIds: ['issue_color_role_quantitative', 'repair.blocked.externally'],
+          warningIssueIds: ['issue_missing_reviewer_note'],
+          provenanceCompleteness: 'complete',
+        },
+      },
+      ledger: [],
+    });
+
+    store.getState().commands.replaceIssues([]);
+
+    expect(store.getState().snapshot.readiness).toEqual({
+      status: 'blocked',
+      blockingIssueIds: ['repair.blocked.externally'],
+      warningIssueIds: ['issue_missing_reviewer_note'],
+      provenanceCompleteness: 'complete',
+    });
+    expect(store.getState().selectors.readinessSummary()).toMatchObject({
+      status: 'blocked',
+      blockingIssueCount: 1,
+      warningIssueCount: 1,
+    });
+  });
+
+  it('preserves an explicitly blocked readiness state when replaceIssues receives no blocking issues', () => {
+    const store = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        readiness: {
+          status: 'blocked',
+          blockingIssueIds: [],
+          warningIssueIds: ['issue_missing_reviewer_note'],
+          provenanceCompleteness: 'complete',
+        },
+      },
+      ledger: [],
+    });
+
+    store.getState().commands.replaceIssues([]);
+
+    expect(store.getState().snapshot.readiness).toEqual({
+      status: 'blocked',
+      blockingIssueIds: [],
+      warningIssueIds: ['issue_missing_reviewer_note'],
+      provenanceCompleteness: 'complete',
+    });
+  });
+
+  it('rejects ledgers whose workspace versions move backwards', () => {
+    const invalidLedger = [
+      workspaceLedgerFixture[0]!,
+      {
+        ...workspaceLedgerFixture[1]!,
+        workspaceVersion: 16,
+      },
+    ];
+
+    expect(() =>
+      createWorkspaceKernelStore({
+        snapshot: workspaceSnapshotFixture,
+        ledger: invalidLedger,
+      }),
+    ).toThrow(/workspace versions/i);
+  });
+
   it('keeps persisted workspace data out of ViewState', () => {
     const kernelStore = createWorkspaceKernelStore({
       snapshot: workspaceSnapshotFixture,

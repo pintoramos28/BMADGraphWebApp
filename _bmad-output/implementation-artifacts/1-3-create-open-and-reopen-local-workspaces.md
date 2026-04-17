@@ -1,6 +1,6 @@
 # Story 1.3: Create, Open, and Reopen Local Workspaces
 
-Status: review
+Status: done
 
 ## Story
 
@@ -34,6 +34,12 @@ so that BMADGraphWebApp preserves my analytical session as a local system of rec
 - [x] Add reopen validation that applies compatibility rules, emits shared issue records, and preserves unaffected valid state. (AC: 2, 3)
 - [x] Wire persistence hydration back into `WorkspaceKernel` without moving ownership into the service worker or operational shell services. (AC: 3, 4)
 - [x] Add integration tests for round-trip persistence, reopen validation, and compatibility enforcement. (AC: 5)
+
+### Review Findings
+
+- [x] [Review][Patch] Reopen recovers when every saved graph fails validation by synthesizing a blocked placeholder recovery graph instead of throwing [src/features/workspace-persistence/reopen-workspace.ts:430]
+- [x] [Review][Patch] Workspace summaries sort `savedAt` lexicographically, so mixed-offset ISO timestamps can return the wrong newest-first order [src/services/persistence/repositories/workspace-repository.ts:54]
+- [x] [Review][Patch] Reopen readiness reconciliation can preserve dropped persisted issue ids and a stale blocked state when saved issue records fail validation [src/features/workspace-persistence/reopen-workspace.ts:822]
 
 ## Dev Notes
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { selectCompatibilityState } from '../../domain/trust';
 import type { PersistedWorkspaceRecord } from '../../services/persistence';
 import { graphDefinitionFixture } from '../../test/fixtures/workspace/graph-definition.fixture';
 import { workspaceLedgerFixture } from '../../test/fixtures/workspace/workspace-ledger.fixture';
@@ -175,6 +176,261 @@ describe('reopenPersistedWorkspaceRecord', () => {
         }),
         expect.objectContaining({
           kind: 'workspace.reopen.evidence.orphaned-graph',
+        }),
+      ]),
+    );
+  });
+
+  it('creates a placeholder recovery graph when validation removes every saved graph', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:34:00Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        graphDefinitions: [
+          {
+            ...graphDefinitionFixture,
+            graphId: 'graph_missing_dataset',
+            title: 'Missing Dataset Graph',
+            datasetId: 'ds_missing',
+            status: 'reference',
+            evidenceIds: [],
+            issueIds: [],
+          },
+        ],
+        activeGraphId: 'graph_missing_dataset',
+        referenceGraphId: 'graph_missing_dataset',
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:34:05Z',
+      nowMs: () => 7000,
+    });
+
+    expect(reopened.snapshot.graphDefinitions).toEqual([
+      expect.objectContaining({
+        graphId: 'graph_recovery_ws_2026_04_15_001',
+        title: 'Recovery Required',
+        datasetId: 'ds_main',
+      }),
+    ]);
+    expect(reopened.snapshot.activeGraphId).toBe('graph_recovery_ws_2026_04_15_001');
+    expect(reopened.snapshot.referenceGraphId).toBe('graph_recovery_ws_2026_04_15_001');
+    expect(reopened.localizedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.graph.missing-dataset',
+        }),
+        expect.objectContaining({
+          kind: 'workspace.reopen.graph.none-recoverable',
+          severity: 'blocking',
+        }),
+      ]),
+    );
+  });
+
+  it('drops transient reopen issues from saved snapshots and allocates fresh reopen issue ids', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:36:00Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        compatibility: {
+          minReadableAppBuild: '0.1.0',
+          maxTestedAppBuild: '0.2.x',
+        },
+        graphDefinitions: [
+          {
+            ...graphDefinitionFixture,
+            graphId: 'graph_missing_dataset',
+            title: 'Missing Dataset Graph',
+            datasetId: 'ds_missing',
+            status: 'reference',
+            evidenceIds: [],
+            issueIds: ['workspace.reopen.001'],
+          },
+        ],
+        activeGraphId: 'graph_missing_dataset',
+        referenceGraphId: 'graph_missing_dataset',
+        issues: [
+          {
+            issueId: 'workspace.reopen.001',
+            kind: 'workspace.reopen.compatibility.blocked',
+            severity: 'blocking',
+            status: 'open',
+            detectedAt: '2026-04-16T18:35:59Z',
+            source: {
+              module: 'workspace-persistence',
+              entityType: 'workspace',
+              entityId: workspaceSnapshotFixture.workspaceId,
+            },
+            title: 'Previously blocked reopen',
+            detail: 'This transient issue should not survive another reopen.',
+            userMessage: 'Blocked during a previous reopen.',
+            contextRef: {
+              routeKey: 'workspaceDetail',
+              workspaceId: workspaceSnapshotFixture.workspaceId,
+              panel: 'repair',
+            },
+            repairActions: [],
+            diagnostics: {},
+          },
+        ],
+        readiness: {
+          ...workspaceSnapshotFixture.readiness,
+          status: 'blocked',
+          blockingIssueIds: ['workspace.reopen.001'],
+          warningIssueIds: [],
+        },
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope: {
+        ...compatibilityEnvelope,
+        currentAppBuildVersion: '0.2.0',
+      },
+      now: () => '2026-04-16T18:36:05Z',
+      nowMs: () => 8000,
+    });
+
+    expect(reopened.snapshot.issues.some((issue) => issue.issueId === 'workspace.reopen.001')).toBe(false);
+    expect(reopened.snapshot.issues.some((issue) => issue.kind === 'workspace.reopen.compatibility.blocked')).toBe(false);
+    expect(reopened.snapshot.readiness.blockingIssueIds).not.toContain('workspace.reopen.001');
+    expect(new Set(reopened.localizedIssues.map((issue) => issue.issueId)).size).toBe(reopened.localizedIssues.length);
+    expect(reopened.localizedIssues.map((issue) => issue.issueId)).toEqual(
+      expect.arrayContaining(['workspace.reopen.002', 'workspace.reopen.003']),
+    );
+  });
+
+  it('reports compatibility against the build that reopened the workspace', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:38:00Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        compatibility: {
+          ...workspaceSnapshotFixture.compatibility,
+          maxTestedAppBuild: '0.1.x',
+        },
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope: {
+        ...compatibilityEnvelope,
+        currentAppBuildVersion: '0.2.0',
+      },
+      now: () => '2026-04-16T18:38:05Z',
+      nowMs: () => 9000,
+    });
+
+    expect(reopened.snapshot.appBuildVersion).toBe('0.2.0');
+    expect(selectCompatibilityState(reopened.snapshot)).toMatchObject({
+      appBuildVersion: '0.2.0',
+      isReadable: true,
+      isTested: false,
+    });
+  });
+
+  it('preserves readiness-owned ids and explicit blocked state during reopen', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:39:00Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        readiness: {
+          status: 'blocked',
+          blockingIssueIds: ['repair.blocked.externally'],
+          warningIssueIds: ['issue_missing_reviewer_note'],
+          provenanceCompleteness: 'complete',
+        },
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:39:05Z',
+      nowMs: () => 9500,
+    });
+
+    expect(reopened.snapshot.readiness).toEqual({
+      status: 'blocked',
+      blockingIssueIds: ['repair.blocked.externally'],
+      warningIssueIds: ['issue_missing_reviewer_note'],
+      provenanceCompleteness: 'complete',
+    });
+  });
+
+  it('drops readiness references to persisted issues that fail issue-record validation', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:39:30Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        issues: [
+          {
+            issueId: 'issue_invalid_reopen_payload',
+            kind: 'workspace.reopen.graph.invalid-contract',
+            severity: 'blocking',
+            status: 'open',
+            detectedAt: '2026-04-16T18:39:29Z',
+            source: {
+              module: 'workspace-persistence',
+              entityType: 'workspace',
+              entityId: workspaceSnapshotFixture.workspaceId,
+            },
+            title: '',
+            detail: 'Invalid persisted issue payload.',
+            userMessage: 'Invalid persisted issue payload.',
+            contextRef: {
+              routeKey: 'workspaceDetail',
+              workspaceId: workspaceSnapshotFixture.workspaceId,
+              panel: 'repair',
+            },
+            repairActions: [],
+            diagnostics: {},
+          },
+        ],
+        readiness: {
+          status: 'blocked',
+          blockingIssueIds: ['issue_invalid_reopen_payload'],
+          warningIssueIds: ['issue_missing_reviewer_note'],
+          provenanceCompleteness: 'complete',
+        },
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:39:35Z',
+      nowMs: () => 9600,
+    });
+
+    expect(reopened.snapshot.issues).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          issueId: 'issue_invalid_reopen_payload',
+        }),
+      ]),
+    );
+    expect(reopened.snapshot.readiness).toEqual({
+      status: 'warning',
+      blockingIssueIds: [],
+      warningIssueIds: ['issue_missing_reviewer_note', 'workspace.reopen.001'],
+      provenanceCompleteness: 'complete',
+    });
+    expect(reopened.localizedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.issue.invalid-contract',
         }),
       ]),
     );

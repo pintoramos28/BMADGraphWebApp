@@ -61,6 +61,50 @@ function commitSnapshotMutation(
   } satisfies WorkspaceKernelData;
 }
 
+function reconcileReadinessState(snapshot: WorkspaceSnapshot, issues: IssueRecord[]) {
+  const { readiness } = snapshot;
+  const previousIssueIds = new Set(snapshot.issues.map((issue) => issue.issueId));
+  const validIssueIds = new Set(issues.map((issue) => issue.issueId));
+  const hasPreviousBlockingIssue = snapshot.issues.some(
+    (issue) => issue.status !== 'resolved' && issue.severity === 'blocking',
+  );
+  const blockingIssueIds = [
+    ...new Set([
+      ...readiness.blockingIssueIds.filter(
+        (issueId) => !previousIssueIds.has(issueId) || validIssueIds.has(issueId),
+      ),
+      ...issues
+        .filter((issue) => issue.status !== 'resolved' && issue.severity === 'blocking')
+        .map((issue) => issue.issueId),
+    ]),
+  ];
+  const warningIssueIds = [
+    ...new Set([
+      ...readiness.warningIssueIds.filter(
+        (issueId) => !previousIssueIds.has(issueId) || validIssueIds.has(issueId),
+      ),
+      ...issues
+        .filter((issue) => issue.status !== 'resolved' && issue.severity === 'warning')
+        .map((issue) => issue.issueId),
+    ]),
+  ];
+  const hasExplicitBlockingState = readiness.status === 'blocked' && !hasPreviousBlockingIssue;
+
+  return {
+    ...readiness,
+    status:
+      blockingIssueIds.length > 0 || hasExplicitBlockingState
+        ? 'blocked'
+        : warningIssueIds.length > 0 ||
+            readiness.status === 'warning' ||
+            readiness.provenanceCompleteness !== 'complete'
+          ? 'warning'
+          : 'ready',
+    blockingIssueIds,
+    warningIssueIds,
+  } satisfies WorkspaceSnapshot['readiness'];
+}
+
 export function replaceSnapshotReducer(data: WorkspaceKernelData, input: ReplaceSnapshotInput) {
   const nextSnapshot = workspaceSnapshotSchema.parse(input.snapshot);
   const nextLedger = [...input.ledger];
@@ -133,6 +177,7 @@ export function replaceIssuesReducer(data: WorkspaceKernelData, issues: IssueRec
     data,
     {
       issues,
+      readiness: reconcileReadinessState(data.snapshot, issues),
     },
     {
       type: 'issues.updated',

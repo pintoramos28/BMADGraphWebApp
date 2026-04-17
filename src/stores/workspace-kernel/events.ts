@@ -20,6 +20,7 @@ export function initializeWorkspaceVersion(ledger: WorkspaceLedgerEntry[]) {
 
 export function validateLedgerOrdering(ledger: WorkspaceLedgerEntry[]) {
   let previousSequence = 0;
+  let previousWorkspaceVersion = 0;
 
   for (const entry of ledger) {
     workspaceLedgerEntrySchema.parse(entry);
@@ -28,7 +29,12 @@ export function validateLedgerOrdering(ledger: WorkspaceLedgerEntry[]) {
       throw new Error('Workspace ledger entries must remain append-only and sequence ordered.');
     }
 
+    if (entry.workspaceVersion <= previousWorkspaceVersion) {
+      throw new Error('Workspace ledger entries must remain append-only with strictly increasing workspace versions.');
+    }
+
     previousSequence = entry.sequence;
+    previousWorkspaceVersion = entry.workspaceVersion;
   }
 }
 
