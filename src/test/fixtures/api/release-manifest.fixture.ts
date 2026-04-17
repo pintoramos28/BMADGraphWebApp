@@ -1,3 +1,5 @@
+import type { ReleaseManifest } from '../../../schemas/api';
+
 export const releaseManifestFixture = {
   schemaVersion: '1.0.0',
   appBuildVersion: '0.1.0',
@@ -27,4 +29,4 @@ export const releaseManifestFixture = {
   integrity: {
     manifestSha256: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
   },
-};
+} satisfies ReleaseManifest;

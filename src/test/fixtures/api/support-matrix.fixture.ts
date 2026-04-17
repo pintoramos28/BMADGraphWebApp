@@ -1,0 +1,40 @@
+import type { SupportMatrix } from '../../../schemas/api/support-matrix';
+
+export const supportMatrixFixture = {
+  version: '2026-04-15',
+  publishedAt: '2026-04-16T00:00:00Z',
+  standardZoom: '100%',
+  supportedBrowsers: [
+    {
+      family: 'chrome',
+      supportLevel: 'supported',
+      minimumMajorVersion: 125,
+      desktopOnly: true,
+      notes: 'Current major desktop Chrome is release-blocking.',
+    },
+    {
+      family: 'edge',
+      supportLevel: 'supported',
+      minimumMajorVersion: 125,
+      desktopOnly: true,
+      notes: 'Current major desktop Edge is release-blocking.',
+    },
+    {
+      family: 'firefox',
+      supportLevel: 'secondary',
+      minimumMajorVersion: 126,
+      desktopOnly: true,
+      notes: 'Best-effort secondary compatibility target.',
+    },
+    {
+      family: 'safari',
+      supportLevel: 'unsupported',
+      desktopOnly: true,
+      notes: 'Safari is unsupported for the MVP shell.',
+    },
+  ],
+  workspaceCompatibility: {
+    minimumReadableFormat: '1.0.0',
+    maximumReadableFormat: '1.x',
+  },
+} satisfies SupportMatrix;

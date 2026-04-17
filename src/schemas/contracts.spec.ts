@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { errorEnvelopeSchema, releaseManifestSchema, telemetryBatchSchema } from './api';
+import { errorEnvelopeSchema, releaseManifestSchema, supportMatrixSchema, telemetryBatchSchema } from './api';
 import { workerMessageEnvelopeSchema } from './worker';
 import {
   graphDefinitionSchema,
@@ -10,6 +10,7 @@ import {
 } from './workspace';
 import { errorEnvelopeFixture } from '../test/fixtures/api/error-envelope.fixture';
 import { releaseManifestFixture } from '../test/fixtures/api/release-manifest.fixture';
+import { supportMatrixFixture } from '../test/fixtures/api/support-matrix.fixture';
 import { telemetryBatchFixture } from '../test/fixtures/api/telemetry-batch.fixture';
 import { workerMessageEnvelopeFixture } from '../test/fixtures/worker/message-envelope.fixture';
 import { graphDefinitionFixture } from '../test/fixtures/workspace/graph-definition.fixture';
@@ -27,6 +28,7 @@ describe('contract fixtures', () => {
     expect(workspaceLedgerFixture.map((entry) => workspaceLedgerEntrySchema.parse(entry))).toEqual(workspaceLedgerFixture);
     expect(issueRecordSchema.parse(issueRecordFixture)).toEqual(issueRecordFixture);
     expect(releaseManifestSchema.parse(releaseManifestFixture)).toEqual(releaseManifestFixture);
+    expect(supportMatrixSchema.parse(supportMatrixFixture)).toEqual(supportMatrixFixture);
     expect(telemetryBatchSchema.parse(telemetryBatchFixture)).toEqual(telemetryBatchFixture);
     expect(errorEnvelopeSchema.parse(errorEnvelopeFixture)).toEqual(errorEnvelopeFixture);
     expect(workerMessageEnvelopeSchema.parse(workerMessageEnvelopeFixture)).toEqual(workerMessageEnvelopeFixture);
