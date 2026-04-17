@@ -8,7 +8,7 @@ existing_patterns_found: 1
 
 # Project Context for AI Agents
 
-_This file contains only the repo-local Node runtime rule needed to avoid WSL/Windows toolchain mismatches during agent execution._
+_This file contains only the repo-local Node runtime rule needed to avoid WSL/Windows toolchain mismatches during agent execution and to define the expected Linux Node bootstrap behavior._
 
 ---
 
@@ -17,6 +17,8 @@ _This file contains only the repo-local Node runtime rule needed to avoid WSL/Wi
 ### Node Runtime Policy
 
 - This repo must use the Linux Node runtime from `nvm`, not Windows Node shims mounted into WSL.
+- The runtime bootstrap must automatically provision or activate the pinned Linux Node version before any Node-family command runs.
+- If the Linux Node runtime cannot be provisioned, the workspace is blocked and work must stop until the environment is fixed.
 - Before running Node-family commands, prefer [`scripts/with-node.sh`](/home/pin81845/repo/BMADGraphWebApp/scripts/with-node.sh) so the repo uses the version from [.nvmrc](/home/pin81845/repo/BMADGraphWebApp/.nvmrc).
 - Treat the wrapper as the default entrypoint for `node`, `npm`, `npx`, `vite`, `vitest`, `eslint`, `tsc`, and `playwright`.
 - If `node` or `npm` resolve to `/mnt/c/...`, stop using bare commands and switch to the wrapper immediately.

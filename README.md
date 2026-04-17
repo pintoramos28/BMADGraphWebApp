@@ -3,10 +3,12 @@
 ## Node Runtime Policy
 
 This repo is expected to run under the Linux Node runtime managed by `nvm`.
+If the runtime is missing, the environment bootstrap should provision or activate it automatically before any Node-family command runs.
 
 - Use the version in [.nvmrc](/home/pin81845/repo/BMADGraphWebApp/.nvmrc).
 - Prefer [`scripts/with-node.sh`](/home/pin81845/repo/BMADGraphWebApp/scripts/with-node.sh) for all Node-family commands when the shell environment is uncertain.
 - Do not rely on Windows-backed `node`, `npm`, or `npx` paths from `/mnt/c/...` while working inside WSL.
+- If Linux Node cannot be provisioned or activated, stop and report the workspace as blocked instead of falling back to another runtime.
 - If native-binding errors appear after install, reinstall dependencies through the wrapper so Linux optional packages are selected correctly.
 - Package lifecycle commands now fail fast when they start under Windows Node against the WSL checkout.
 
