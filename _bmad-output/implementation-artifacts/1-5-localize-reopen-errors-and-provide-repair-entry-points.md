@@ -1,6 +1,6 @@
 # Story 1.5: Localize Reopen Errors and Provide Repair Entry Points
 
-Status: ready-for-dev
+Status: in-progress
 
 ## Story
 
@@ -29,10 +29,17 @@ so that one broken element does not invalidate the whole workspace.
 
 ## Tasks / Subtasks
 
-- [ ] Extend reopen validation to emit structured issue records for stale formulas, broken transforms, incompatible graph layers, and similar localized failures. (AC: 1)
-- [ ] Keep valid unaffected state available after reopen while attaching repair entry points to the flagged elements and selectors that summarize scope/impact. (AC: 1, 2)
-- [ ] Persist unresolved issue state in trust/readiness selectors so deferred repairs remain visible through continued work and later handoff flows. (AC: 2, 3)
-- [ ] Add integration tests for partially valid reopened workspaces, explicit scope/impact reporting, and deferred-repair persistence. (AC: 1, 2, 3)
+- [x] Extend reopen validation to emit structured issue records for stale formulas, broken transforms, incompatible graph layers, and similar localized failures. (AC: 1)
+- [x] Keep valid unaffected state available after reopen while attaching repair entry points to the flagged elements and selectors that summarize scope/impact. (AC: 1, 2)
+- [x] Persist unresolved issue state in trust/readiness selectors so deferred repairs remain visible through continued work and later handoff flows. (AC: 2, 3)
+- [x] Add integration tests for partially valid reopened workspaces, explicit scope/impact reporting, and deferred-repair persistence. (AC: 1, 2, 3)
+
+### Review Findings
+
+- [x] [Review][Patch] Sanitize localized entity ids before writing issue records [/home/pin81845/repo/BMADGraphWebApp/src/features/workspace-persistence/reopen-workspace.ts:198]
+- [ ] [Review][Patch] Sanitize invalid saved graph selection ids before emitting reopen issues [/home/pin81845/repo/BMADGraphWebApp/src/features/workspace-persistence/reopen-workspace.ts:700]
+- [ ] [Review][Patch] Add explicit repair scope labels for ledger and saved issue-record failures [/home/pin81845/repo/BMADGraphWebApp/src/domain/trust/selectors.ts:43]
+- [ ] [Review][Patch] Normalize `sprint-status.yaml` line endings to avoid trailing-whitespace churn [/home/pin81845/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/sprint-status.yaml:1]
 
 ## Dev Notes
 
@@ -75,12 +82,43 @@ GPT-5 Codex
 ### Debug Log References
 
 - Epic 1 story artifact normalized to the approved 2026-04-16 plan.
+- `./scripts/with-node.sh npm test -- src/features/workspace-persistence/reopen-workspace.spec.ts`
+- `./scripts/with-node.sh npm test -- src/features/workspace-persistence/reopen-workspace.spec.ts src/domain/trust/selectors.spec.ts src/stores/workspace-kernel/workspace-kernel.spec.ts tests/integration/workspace-reopen.test.ts`
+- `./scripts/with-node.sh npm test`
+- `./scripts/with-node.sh npm run lint`
+- `./scripts/with-node.sh npm run typecheck`
+
+### Implementation Plan
+
+- Add failing reopen and selector tests for localized repair entry points, scope/impact summaries, and deferred issue persistence.
+- Extend reopen issue construction to populate stable repair actions and entity-linked diagnostics without dropping unaffected workspace state.
+- Expose reopen repair summaries through shared trust/readiness selectors so deferred issues remain visible after reopen and later issue updates.
 
 ### Completion Notes List
 
 - This story converts reopen drift handling into explicit localized issue records plus first repair-entry hooks.
 - Unresolved issues remain visible in trust/readiness state so later review and handoff flows inherit the same problem signals.
+- Reopen issue creation now localizes dataset, transform, formula, graph, evidence, and ledger failures to the affected entity ids and assigns stable repair commands for repair-card entry points.
+- Shared trust and kernel selectors now expose repair-entry summaries with scope and impact labels so deferred reopen issues remain visible without dropping unaffected workspace state.
+- Added unit and integration coverage for localized reopen repair actions, selector summaries, and deferred-issue persistence after reopen.
+- Resolved the reopen review follow-up by sanitizing invalid persisted entity ids before issue-record parsing and covering the regression with a focused reopen spec.
 
 ### File List
 
-- `/home/pin81845/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/1-5-localize-reopen-errors-and-provide-repair-entry-points.md`
+- `_bmad-output/implementation-artifacts/1-5-localize-reopen-errors-and-provide-repair-entry-points.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `src/domain/trust/selectors.spec.ts`
+- `src/domain/trust/selectors.ts`
+- `src/features/workspace-persistence/reopen-workspace.spec.ts`
+- `src/features/workspace-persistence/reopen-workspace.ts`
+- `src/stores/workspace-kernel/selectors.ts`
+- `src/stores/workspace-kernel/store.ts`
+- `src/stores/workspace-kernel/types.ts`
+- `src/stores/workspace-kernel/workspace-kernel.spec.ts`
+- `tests/integration/workspace-reopen.test.ts`
+
+### Change Log
+
+- 2026-04-17: Story moved to in-progress for implementation.
+- 2026-04-17: Added localized reopen repair actions, trust/kernel repair-entry selectors, and deferred-repair persistence coverage; validated with targeted tests, full Vitest, lint, and typecheck.
+- 2026-04-17: Addressed code review findings - 1 item resolved; sanitized localized entity ids before writing reopen issue records and revalidated with reopen spec, full Vitest, lint, and typecheck.

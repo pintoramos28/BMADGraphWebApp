@@ -173,7 +173,7 @@ function isTransientReopenIssue(issue: IssueRecord) {
 function parseCollection<T>(
   values: unknown[],
   schema: z.ZodType<T>,
-  onInvalid: (index: number, error: z.ZodError) => void,
+  onInvalid: (index: number, error: z.ZodError, value: unknown) => void,
 ) {
   const accepted: T[] = [];
 
@@ -181,7 +181,7 @@ function parseCollection<T>(
     const parsed = schema.safeParse(value);
 
     if (!parsed.success) {
-      onInvalid(index, parsed.error);
+      onInvalid(index, parsed.error, value);
       return;
     }
 
@@ -189,6 +189,107 @@ function parseCollection<T>(
   });
 
   return accepted;
+}
+
+function fallbackEntityId(entityType: string, index: number) {
+  return `reopen.${entityType}.${String(index + 1).padStart(3, '0')}`;
+}
+
+function normalizeEntityIdCandidate(candidate: string) {
+  const normalized = candidate.trim().replace(/[^A-Za-z0-9._:-]+/g, '_').replace(/^_+|_+$/g, '');
+
+  return identifierSchema.safeParse(normalized).success ? normalized : null;
+}
+
+function extractEntityId(value: unknown, key: string, fallback: string) {
+  if (!value || typeof value !== 'object') {
+    return fallback;
+  }
+
+  const candidate = (value as Record<string, unknown>)[key];
+
+  if (typeof candidate !== 'string' || candidate.trim().length === 0) {
+    return fallback;
+  }
+
+  return normalizeEntityIdCandidate(candidate) ?? fallback;
+}
+
+function createRepairActions(input: {
+  issueId: string;
+  workspaceId: string;
+  source: IssueRecord['source'];
+  graphId?: string;
+}): IssueRecord['repairActions'] {
+  const repairActions: IssueRecord['repairActions'] = [
+    {
+      actionId: 'repair.focusIssue',
+      label: 'Open repair card',
+      command: 'repair.focusIssue',
+      args: {
+        issueId: input.issueId,
+        workspaceId: input.workspaceId,
+        panel: 'repair',
+      },
+    },
+  ];
+
+  if (input.source.entityType === 'graph') {
+    repairActions.push({
+      actionId: 'repair.focusGraph',
+      label: 'Inspect graph',
+      command: 'repair.focusGraph',
+      args: {
+        graphId: input.graphId ?? input.source.entityId,
+      },
+    });
+  }
+
+  if (input.source.entityType === 'formula') {
+    repairActions.push({
+      actionId: 'repair.focusFormula',
+      label: 'Inspect formula',
+      command: 'repair.focusFormula',
+      args: {
+        formulaId: input.source.entityId,
+      },
+    });
+  }
+
+  if (input.source.entityType === 'transform') {
+    repairActions.push({
+      actionId: 'repair.focusTransform',
+      label: 'Inspect transform',
+      command: 'repair.focusTransform',
+      args: {
+        transformId: input.source.entityId,
+      },
+    });
+  }
+
+  if (input.source.entityType === 'dataset') {
+    repairActions.push({
+      actionId: 'repair.focusDataset',
+      label: 'Inspect dataset',
+      command: 'repair.focusDataset',
+      args: {
+        datasetId: input.source.entityId,
+      },
+    });
+  }
+
+  if (input.source.entityType === 'evidence') {
+    repairActions.push({
+      actionId: 'repair.focusEvidence',
+      label: 'Inspect evidence',
+      command: 'repair.focusEvidence',
+      args: {
+        evidenceId: input.source.entityId,
+      },
+    });
+  }
+
+  return repairActions;
 }
 
 function resolveGraphId(
@@ -264,8 +365,9 @@ export function reopenPersistedWorkspaceRecord(
   let invalidDatasetCount = 0;
 
   const createIssue = (input: IssueFactoryInput) => {
+    const issueId = nextReopenIssueId();
     const nextIssue = issueRecordSchema.parse({
-      issueId: nextReopenIssueId(),
+      issueId,
       kind: input.kind,
       severity: input.severity,
       status: 'open',
@@ -280,7 +382,12 @@ export function reopenPersistedWorkspaceRecord(
         ...(input.graphId ? { graphId: input.graphId } : {}),
         panel: 'repair',
       },
-      repairActions: [],
+      repairActions: createRepairActions({
+        issueId,
+        workspaceId: snapshotInput.workspaceId,
+        source: input.source,
+        ...(input.graphId ? { graphId: input.graphId } : {}),
+      }),
       diagnostics: input.diagnostics ?? {},
     });
 
@@ -289,15 +396,15 @@ export function reopenPersistedWorkspaceRecord(
     return nextIssue;
   };
 
-  let datasets = parseCollection(snapshotInput.datasets, datasetSchema, (index, error) => {
+  let datasets = parseCollection(snapshotInput.datasets, datasetSchema, (index, error, value) => {
     invalidDatasetCount += 1;
     createIssue({
       kind: 'workspace.reopen.dataset.invalid-contract',
       severity: 'blocking',
       source: {
         module: 'workspace-persistence',
-        entityType: 'workspace',
-        entityId: snapshotInput.workspaceId,
+        entityType: 'dataset',
+        entityId: extractEntityId(value, 'datasetId', fallbackEntityId('dataset', index)),
       },
       title: 'Dataset data could not be reopened',
       detail: `Dataset entry ${index + 1} is invalid and was excluded from the reopened workspace.`,
@@ -315,14 +422,14 @@ export function reopenPersistedWorkspaceRecord(
   const availableDatasetColumnIds = new Set(
     datasets.flatMap((dataset) => dataset.columns.map((column) => column.columnId)),
   );
-  const parsedTransforms = parseCollection(snapshotInput.transformPipeline, transformSchema, (index, error) => {
+  const parsedTransforms = parseCollection(snapshotInput.transformPipeline, transformSchema, (index, error, value) => {
     createIssue({
       kind: 'workspace.reopen.transform.invalid-contract',
       severity: 'warning',
       source: {
         module: 'workspace-persistence',
-        entityType: 'workspace',
-        entityId: snapshotInput.workspaceId,
+        entityType: 'transform',
+        entityId: extractEntityId(value, 'transformId', fallbackEntityId('transform', index)),
       },
       title: 'A saved transform could not be reopened',
       detail: `Transform entry ${index + 1} is invalid and was excluded from the reopened workspace.`,
@@ -342,8 +449,8 @@ export function reopenPersistedWorkspaceRecord(
             severity: 'warning',
             source: {
               module: 'workspace-persistence',
-              entityType: 'workspace',
-              entityId: snapshotInput.workspaceId,
+              entityType: 'transform',
+              entityId: transform.transformId,
             },
             title: 'A saved transform could not be reopened after dataset validation failed',
             detail: `Transform "${transform.transformId}" was excluded because dataset validation left the workspace without a safe transform source of truth.`,
@@ -357,14 +464,14 @@ export function reopenPersistedWorkspaceRecord(
 
           return false;
         });
-  const parsedFormulaColumns = parseCollection(snapshotInput.formulaColumns, formulaColumnSchema, (index, error) => {
+  const parsedFormulaColumns = parseCollection(snapshotInput.formulaColumns, formulaColumnSchema, (index, error, value) => {
     createIssue({
       kind: 'workspace.reopen.formula.invalid-contract',
       severity: 'warning',
       source: {
         module: 'workspace-persistence',
-        entityType: 'workspace',
-        entityId: snapshotInput.workspaceId,
+        entityType: 'formula',
+        entityId: extractEntityId(value, 'formulaId', fallbackEntityId('formula', index)),
       },
       title: 'A saved formula could not be reopened',
       detail: `Formula entry ${index + 1} is invalid and was excluded from the reopened workspace.`,
@@ -411,8 +518,8 @@ export function reopenPersistedWorkspaceRecord(
       severity: 'warning',
       source: {
         module: 'workspace-persistence',
-        entityType: 'workspace',
-        entityId: snapshotInput.workspaceId,
+        entityType: 'formula',
+        entityId: formula.formulaId,
       },
       title: 'A saved formula references unavailable dependencies',
       detail: `Formula "${formula.formulaId}" depends on columns that are unavailable in the reopened workspace.`,
@@ -423,14 +530,14 @@ export function reopenPersistedWorkspaceRecord(
       },
     });
   });
-  const parsedEvidence = parseCollection(snapshotInput.evidence, evidenceSchema, (index, error) => {
+  const parsedEvidence = parseCollection(snapshotInput.evidence, evidenceSchema, (index, error, value) => {
     createIssue({
       kind: 'workspace.reopen.evidence.invalid-contract',
       severity: 'warning',
       source: {
         module: 'workspace-persistence',
-        entityType: 'workspace',
-        entityId: snapshotInput.workspaceId,
+        entityType: 'evidence',
+        entityId: extractEntityId(value, 'evidenceId', fallbackEntityId('evidence', index)),
       },
       title: 'Saved evidence could not be reopened',
       detail: `Evidence entry ${index + 1} is invalid and was excluded from the reopened workspace.`,
@@ -441,14 +548,14 @@ export function reopenPersistedWorkspaceRecord(
       },
     });
   });
-  const parsedPersistedIssues = parseCollection(snapshotInput.issues, issueRecordSchema, (index, error) => {
+  const parsedPersistedIssues = parseCollection(snapshotInput.issues, issueRecordSchema, (index, error, value) => {
     createIssue({
       kind: 'workspace.reopen.issue.invalid-contract',
       severity: 'warning',
       source: {
         module: 'workspace-persistence',
-        entityType: 'workspace',
-        entityId: snapshotInput.workspaceId,
+        entityType: 'issue-record',
+        entityId: extractEntityId(value, 'issueId', fallbackEntityId('issue', index)),
       },
       title: 'A saved issue record could not be reopened',
       detail: `Issue entry ${index + 1} is invalid and was excluded from the reopened workspace.`,
@@ -460,14 +567,14 @@ export function reopenPersistedWorkspaceRecord(
     });
   });
   const persistedIssues = parsedPersistedIssues.filter((issue) => !isTransientReopenIssue(issue));
-  const parsedGraphs = parseCollection(snapshotInput.graphDefinitions, graphDefinitionSchema, (index, error) => {
+  const parsedGraphs = parseCollection(snapshotInput.graphDefinitions, graphDefinitionSchema, (index, error, value) => {
     createIssue({
       kind: 'workspace.reopen.graph.invalid-contract',
       severity: 'blocking',
       source: {
         module: 'workspace-persistence',
-        entityType: 'workspace',
-        entityId: snapshotInput.workspaceId,
+        entityType: 'graph',
+        entityId: extractEntityId(value, 'graphId', fallbackEntityId('graph', index)),
       },
       title: 'A saved graph definition could not be reopened',
       detail: `Graph entry ${index + 1} is invalid and was excluded from the reopened workspace.`,
@@ -569,8 +676,8 @@ export function reopenPersistedWorkspaceRecord(
       severity: 'warning',
       source: {
         module: 'workspace-persistence',
-        entityType: 'workspace',
-        entityId: snapshotInput.workspaceId,
+        entityType: 'evidence',
+        entityId: entry.evidenceId,
       },
       title: 'Saved evidence references a graph that could not be reopened',
       detail: `Evidence "${entry.evidenceId}" references graph "${entry.graphId}", which is unavailable after reopen validation.`,
@@ -596,12 +703,13 @@ export function reopenPersistedWorkspaceRecord(
       severity: 'warning',
       source: {
         module: 'workspace-persistence',
-        entityType: 'workspace',
-        entityId: snapshotInput.workspaceId,
+        entityType: 'graph',
+        entityId: snapshotInput.activeGraphId,
       },
       title: 'The saved active graph could not be restored directly',
       detail: `Active graph "${snapshotInput.activeGraphId}" could not be reopened, so a valid graph was selected instead.`,
       userMessage: 'The previously active graph could not be restored directly. A valid graph was selected instead.',
+      graphId: snapshotInput.activeGraphId,
       diagnostics: {
         requestedGraphId: snapshotInput.activeGraphId,
         resolvedGraphId: activeGraphId,
@@ -621,12 +729,13 @@ export function reopenPersistedWorkspaceRecord(
       severity: 'warning',
       source: {
         module: 'workspace-persistence',
-        entityType: 'workspace',
-        entityId: snapshotInput.workspaceId,
+        entityType: 'graph',
+        entityId: snapshotInput.referenceGraphId,
       },
       title: 'The saved reference graph could not be restored directly',
       detail: `Reference graph "${snapshotInput.referenceGraphId}" could not be reopened, so a valid graph was selected instead.`,
       userMessage: 'The previously selected reference graph could not be restored directly. A valid graph was selected instead.',
+      graphId: snapshotInput.referenceGraphId,
       diagnostics: {
         requestedGraphId: snapshotInput.referenceGraphId,
         resolvedGraphId: referenceGraphId,
@@ -753,8 +862,8 @@ export function reopenPersistedWorkspaceRecord(
         severity: 'warning',
         source: {
           module: 'workspace-persistence',
-          entityType: 'workspace',
-          entityId: snapshotInput.workspaceId,
+          entityType: 'ledger',
+          entityId: fallbackEntityId('ledger', index),
         },
         title: 'A saved ledger entry could not be reopened',
         detail: `Ledger entry ${index + 1} is invalid and was excluded from the reopened workspace history.`,
@@ -773,8 +882,8 @@ export function reopenPersistedWorkspaceRecord(
         severity: 'warning',
         source: {
           module: 'workspace-persistence',
-          entityType: 'workspace',
-          entityId: snapshotInput.workspaceId,
+          entityType: 'ledger',
+          entityId: parsed.data.ledgerEntryId,
         },
         title: 'Saved history contains out-of-order entries',
         detail: `Ledger entry ${parsed.data.ledgerEntryId} is out of sequence and was excluded from the reopened workspace history.`,

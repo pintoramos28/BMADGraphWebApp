@@ -26,6 +26,29 @@ export interface CompatibilityState {
   isTested: boolean;
 }
 
+export interface RepairEntryPointSummary {
+  issueId: string;
+  kind: string;
+  status: WorkspaceSnapshot['issues'][number]['status'];
+  severity: WorkspaceSnapshot['issues'][number]['severity'];
+  entityType: string;
+  entityId: string;
+  graphId?: string;
+  panel?: string;
+  scopeLabel: string;
+  impactLabel: string;
+  repairActions: WorkspaceSnapshot['issues'][number]['repairActions'];
+}
+
+const scopeLabelByEntityType: Record<string, string> = {
+  dataset: 'Dataset',
+  evidence: 'Evidence',
+  formula: 'Formula',
+  graph: 'Graph',
+  transform: 'Transform',
+  workspace: 'Workspace',
+};
+
 export function selectIssueState(snapshot: WorkspaceSnapshot): IssueState {
   const openIssues = snapshot.issues.filter((issue) => issue.status !== 'resolved');
   const blockingIssues = openIssues.filter((issue) => issue.severity === 'blocking');
@@ -43,6 +66,32 @@ export function selectIssueState(snapshot: WorkspaceSnapshot): IssueState {
     blockingIssueIds: blockingIssues.map((issue) => issue.issueId),
     warningIssueIds: warningIssues.map((issue) => issue.issueId),
   };
+}
+
+export function selectRepairEntryPoints(snapshot: WorkspaceSnapshot): RepairEntryPointSummary[] {
+  return snapshot.issues
+    .filter((issue) => issue.status !== 'resolved')
+    .map((issue) => {
+      const scopePrefix = scopeLabelByEntityType[issue.source.entityType] ?? 'Item';
+      const scopeLabel =
+        issue.source.entityType === 'workspace'
+          ? 'Workspace'
+          : `${scopePrefix} ${issue.source.entityId}`;
+
+      return {
+        issueId: issue.issueId,
+        kind: issue.kind,
+        status: issue.status,
+        severity: issue.severity,
+        entityType: issue.source.entityType,
+        entityId: issue.source.entityId,
+        ...(issue.contextRef.graphId ? { graphId: issue.contextRef.graphId } : {}),
+        ...(issue.contextRef.panel ? { panel: issue.contextRef.panel } : {}),
+        scopeLabel,
+        impactLabel: issue.userMessage,
+        repairActions: issue.repairActions,
+      };
+    });
 }
 
 export function selectTelemetrySummary(snapshot: WorkspaceSnapshot): TelemetrySummary {

@@ -13,6 +13,7 @@ import {
   selectActiveGraphId,
   selectKernelCompatibilityState,
   selectKernelIssueState,
+  selectKernelRepairEntryPoints,
   selectKernelReadinessSummary,
   selectKernelTelemetrySummary,
   selectPersistedWorkspace,
@@ -85,6 +86,9 @@ export function createWorkspaceKernelStore(options: WorkspaceKernelStoreOptions)
       },
       issueState() {
         return selectKernelIssueState(toKernelData(get()));
+      },
+      repairEntryPoints() {
+        return selectKernelRepairEntryPoints(toKernelData(get()));
       },
       readinessSummary() {
         return selectKernelReadinessSummary(toKernelData(get()));

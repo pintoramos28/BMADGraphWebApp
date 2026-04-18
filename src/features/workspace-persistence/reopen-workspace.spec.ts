@@ -181,6 +181,155 @@ describe('reopenPersistedWorkspaceRecord', () => {
     );
   });
 
+  it('sanitizes invalid localized entity ids before creating reopen issue records', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:32:30Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [
+          {
+            ...workspaceSnapshotFixture.datasets[0],
+            datasetId: 'dataset invalid/id',
+          },
+        ],
+        graphDefinitions: [
+          {
+            ...graphDefinitionFixture,
+            graphId: 'graph invalid/id',
+            datasetId: 'dataset invalid/id',
+          },
+        ],
+        activeGraphId: 'graph_capacity_fade',
+        referenceGraphId: 'graph_capacity_fade',
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:32:35Z',
+      nowMs: () => 6250,
+    });
+
+    expect(reopened.localizedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.dataset.invalid-contract',
+          source: expect.objectContaining({
+            entityType: 'dataset',
+            entityId: 'dataset_invalid_id',
+          }),
+        }),
+        expect.objectContaining({
+          kind: 'workspace.reopen.graph.invalid-contract',
+          source: expect.objectContaining({
+            entityType: 'graph',
+            entityId: 'graph_invalid_id',
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('emits localized repair actions for broken transforms and formulas during reopen', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:33:00Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [
+          ...workspaceSnapshotFixture.datasets,
+          {
+            datasetId: 'ds_invalid',
+            displayName: 'broken.csv',
+            sourceKind: 'csv',
+            fingerprint: 'sha256:dataset-invalid',
+            rowCount: 4,
+            columnCount: 1,
+            columns: [
+              {
+                columnId: '',
+                sourceName: 'Broken',
+                dataType: 'string',
+                semanticRole: 'x',
+                unit: null,
+                status: 'confirmed',
+              },
+            ],
+          },
+        ],
+        transformPipeline: [
+          {
+            transformId: 'tf_missing_column',
+            kind: 'filter',
+            status: 'applied',
+            order: 2,
+            expression: "missingColumn == 'PASS'",
+          },
+        ],
+        formulaColumns: [
+          {
+            formulaId: 'fm_missing_dependency',
+            columnId: 'missingDerived',
+            label: 'Missing Derived',
+            expression: 'missingColumn * 2',
+            status: 'valid',
+            dependsOn: ['missingColumn'],
+          },
+        ],
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:33:05Z',
+      nowMs: () => 6500,
+    });
+
+    expect(reopened.localizedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.transform.dataset-loss',
+          source: expect.objectContaining({
+            entityType: 'transform',
+            entityId: 'tf_missing_column',
+          }),
+          repairActions: expect.arrayContaining([
+            expect.objectContaining({
+              command: 'repair.focusIssue',
+            }),
+            expect.objectContaining({
+              command: 'repair.focusTransform',
+              args: expect.objectContaining({
+                transformId: 'tf_missing_column',
+              }),
+            }),
+          ]),
+        }),
+        expect.objectContaining({
+          kind: 'workspace.reopen.formula.missing-dependency',
+          source: expect.objectContaining({
+            entityType: 'formula',
+            entityId: 'fm_missing_dependency',
+          }),
+          repairActions: expect.arrayContaining([
+            expect.objectContaining({
+              command: 'repair.focusIssue',
+            }),
+            expect.objectContaining({
+              command: 'repair.focusFormula',
+              args: expect.objectContaining({
+                formulaId: 'fm_missing_dependency',
+              }),
+            }),
+          ]),
+        }),
+      ]),
+    );
+  });
+
   it('creates a placeholder recovery graph when validation removes every saved graph', () => {
     const rawRecord: PersistedWorkspaceRecord = {
       workspaceId: workspaceSnapshotFixture.workspaceId,

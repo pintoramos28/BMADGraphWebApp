@@ -1,7 +1,12 @@
 import type { StoreApi } from 'zustand/vanilla';
 
 import type { ReadinessSummary } from '../../domain/readiness';
-import type { CompatibilityState, IssueState, TelemetrySummary } from '../../domain/trust';
+import type {
+  CompatibilityState,
+  IssueState,
+  RepairEntryPointSummary,
+  TelemetrySummary,
+} from '../../domain/trust';
 import type { WorkerMessageEnvelope } from '../../schemas/worker';
 import type { IssueRecord, WorkspaceLedgerEntry, WorkspaceSnapshot } from '../../schemas/workspace';
 
@@ -78,6 +83,7 @@ export interface WorkspaceKernelSelectors {
   activeGraphId(): string;
   referenceGraphId(): string;
   issueState(): IssueState;
+  repairEntryPoints(): RepairEntryPointSummary[];
   readinessSummary(): ReadinessSummary;
   telemetrySnapshot(): TelemetrySummary;
   compatibilityState(): CompatibilityState;

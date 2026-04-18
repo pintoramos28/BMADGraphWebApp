@@ -1,5 +1,10 @@
 import { selectReadinessSummary } from '../../domain/readiness';
-import { selectCompatibilityState, selectIssueState, selectTelemetrySummary } from '../../domain/trust';
+import {
+  selectCompatibilityState,
+  selectIssueState,
+  selectRepairEntryPoints,
+  selectTelemetrySummary,
+} from '../../domain/trust';
 import type { WorkspaceKernelData } from './types';
 
 export function selectActiveGraphId(data: WorkspaceKernelData) {
@@ -16,6 +21,10 @@ export function selectPersistedWorkspace(data: WorkspaceKernelData) {
 
 export function selectKernelIssueState(data: WorkspaceKernelData) {
   return selectIssueState(data.snapshot);
+}
+
+export function selectKernelRepairEntryPoints(data: WorkspaceKernelData) {
+  return selectRepairEntryPoints(data.snapshot);
 }
 
 export function selectKernelReadinessSummary(data: WorkspaceKernelData) {

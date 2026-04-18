@@ -266,6 +266,14 @@ describe('WorkspaceKernel', () => {
       isReadable: true,
       isTested: true,
     });
+    expect(store.getState().selectors.repairEntryPoints()).toEqual([
+      expect.objectContaining({
+        issueId: 'issue_color_role_quantitative',
+        entityType: 'graph',
+        entityId: 'graph_capacity_fade',
+        scopeLabel: 'Graph graph_capacity_fade',
+      }),
+    ]);
   });
 
   it('preserves readiness-owned state while dropping issue-derived readiness ids', () => {

@@ -229,6 +229,56 @@ describe('workspace reopen integration', () => {
         }),
       ]),
     );
+    expect(reopened.kernelStore.getState().selectors.repairEntryPoints()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          entityType: 'graph',
+          entityId: 'graph_invalid_role_assignment',
+          scopeLabel: 'Graph graph_invalid_role_assignment',
+        }),
+        expect.objectContaining({
+          entityType: 'formula',
+          entityId: 'fm_missing_dependency',
+          impactLabel: 'One saved formula references unavailable dependencies and was excluded from reopen state.',
+        }),
+      ]),
+    );
+
+    const deferredIssueId = reopened.kernelStore
+      .getState()
+      .snapshot.issues.find((issue) => issue.kind === 'workspace.reopen.formula.missing-dependency')?.issueId;
+
+    expect(deferredIssueId).toBeDefined();
+
+    const deferredIssues = reopened.kernelStore
+      .getState()
+      .snapshot.issues.map((issue) =>
+        issue.issueId === deferredIssueId
+          ? {
+              ...issue,
+              status: 'deferred' as const,
+            }
+          : issue,
+      );
+
+    reopened.kernelStore.getState().commands.replaceIssues(deferredIssues, {
+      actorId: 'system',
+      correlationId: 'cmd_2026_04_16_004',
+      occurredAt: '2026-04-16T18:48:06Z',
+    });
+
+    expect(reopened.kernelStore.getState().selectors.repairEntryPoints()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          issueId: deferredIssueId,
+          status: 'deferred',
+        }),
+      ]),
+    );
+    expect(reopened.kernelStore.getState().selectors.readinessSummary()).toMatchObject({
+      status: 'blocked',
+      warningIssueCount: expect.any(Number),
+    });
   });
 
   it('does not let saved transient reopen issues block a later compatible reopen', async () => {
