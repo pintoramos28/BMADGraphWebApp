@@ -215,6 +215,19 @@ function extractEntityId(value: unknown, key: string, fallback: string) {
   return normalizeEntityIdCandidate(candidate) ?? fallback;
 }
 
+function normalizeGraphSelectionId(requestedGraphId: string, selection: 'active' | 'reference') {
+  const normalizedGraphId = normalizeEntityIdCandidate(requestedGraphId);
+
+  return {
+    requestedGraphId,
+    resolutionCandidate: normalizedGraphId ?? requestedGraphId,
+    issueEntityId: normalizedGraphId ?? `reopen.graph-selection.${selection}`,
+    ...(normalizedGraphId && normalizedGraphId !== requestedGraphId
+      ? { normalizedRequestedGraphId: normalizedGraphId }
+      : {}),
+  };
+}
+
 function createRepairActions(input: {
   issueId: string;
   workspaceId: string;
@@ -296,12 +309,18 @@ function resolveGraphId(
   requestedGraphId: string,
   validGraphIds: string[],
   distinctFrom?: string,
-) {
+): string {
   if (validGraphIds.includes(requestedGraphId)) {
     return requestedGraphId;
   }
 
-  return validGraphIds.find((graphId) => graphId !== distinctFrom) ?? validGraphIds[0];
+  const resolvedGraphId = validGraphIds.find((graphId) => graphId !== distinctFrom) ?? validGraphIds[0];
+
+  if (!resolvedGraphId) {
+    throw new Error('Expected at least one valid graph definition during workspace reopen.');
+  }
+
+  return resolvedGraphId;
 }
 
 function createRecoveryDatasetId(workspaceId: string) {
@@ -691,53 +710,67 @@ export function reopenPersistedWorkspaceRecord(
     return false;
   });
 
+  const requestedActiveGraphSelection = normalizeGraphSelectionId(snapshotInput.activeGraphId, 'active');
+  const requestedReferenceGraphSelection = normalizeGraphSelectionId(snapshotInput.referenceGraphId, 'reference');
   const activeGraphId = resolveGraphId(
-    snapshotInput.activeGraphId,
+    requestedActiveGraphSelection.resolutionCandidate,
     [...validGraphIds],
-    snapshotInput.referenceGraphId,
+    requestedReferenceGraphSelection.resolutionCandidate,
   );
 
-  if (activeGraphId !== snapshotInput.activeGraphId) {
+  if (
+    requestedActiveGraphSelection.normalizedRequestedGraphId
+    || activeGraphId !== requestedActiveGraphSelection.resolutionCandidate
+  ) {
     createIssue({
       kind: 'workspace.reopen.graph.invalid-selection',
       severity: 'warning',
       source: {
         module: 'workspace-persistence',
         entityType: 'graph',
-        entityId: snapshotInput.activeGraphId,
+        entityId: requestedActiveGraphSelection.issueEntityId,
       },
       title: 'The saved active graph could not be restored directly',
       detail: `Active graph "${snapshotInput.activeGraphId}" could not be reopened, so a valid graph was selected instead.`,
       userMessage: 'The previously active graph could not be restored directly. A valid graph was selected instead.',
-      graphId: snapshotInput.activeGraphId,
+      graphId: activeGraphId,
       diagnostics: {
         requestedGraphId: snapshotInput.activeGraphId,
+        ...(requestedActiveGraphSelection.normalizedRequestedGraphId
+          ? { normalizedRequestedGraphId: requestedActiveGraphSelection.normalizedRequestedGraphId }
+          : {}),
         resolvedGraphId: activeGraphId,
       },
     });
   }
 
   const referenceGraphId = resolveGraphId(
-    snapshotInput.referenceGraphId,
+    requestedReferenceGraphSelection.resolutionCandidate,
     [...validGraphIds],
     activeGraphId,
   );
 
-  if (referenceGraphId !== snapshotInput.referenceGraphId) {
+  if (
+    requestedReferenceGraphSelection.normalizedRequestedGraphId
+    || referenceGraphId !== requestedReferenceGraphSelection.resolutionCandidate
+  ) {
     createIssue({
       kind: 'workspace.reopen.graph.invalid-selection',
       severity: 'warning',
       source: {
         module: 'workspace-persistence',
         entityType: 'graph',
-        entityId: snapshotInput.referenceGraphId,
+        entityId: requestedReferenceGraphSelection.issueEntityId,
       },
       title: 'The saved reference graph could not be restored directly',
       detail: `Reference graph "${snapshotInput.referenceGraphId}" could not be reopened, so a valid graph was selected instead.`,
       userMessage: 'The previously selected reference graph could not be restored directly. A valid graph was selected instead.',
-      graphId: snapshotInput.referenceGraphId,
+      graphId: referenceGraphId,
       diagnostics: {
         requestedGraphId: snapshotInput.referenceGraphId,
+        ...(requestedReferenceGraphSelection.normalizedRequestedGraphId
+          ? { normalizedRequestedGraphId: requestedReferenceGraphSelection.normalizedRequestedGraphId }
+          : {}),
         resolvedGraphId: referenceGraphId,
       },
     });

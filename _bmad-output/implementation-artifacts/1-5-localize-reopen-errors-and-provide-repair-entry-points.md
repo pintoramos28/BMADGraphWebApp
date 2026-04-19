@@ -1,6 +1,6 @@
 # Story 1.5: Localize Reopen Errors and Provide Repair Entry Points
 
-Status: in-progress
+Status: review
 
 ## Story
 
@@ -37,9 +37,9 @@ so that one broken element does not invalidate the whole workspace.
 ### Review Findings
 
 - [x] [Review][Patch] Sanitize localized entity ids before writing issue records [/home/pin81845/repo/BMADGraphWebApp/src/features/workspace-persistence/reopen-workspace.ts:198]
-- [ ] [Review][Patch] Sanitize invalid saved graph selection ids before emitting reopen issues [/home/pin81845/repo/BMADGraphWebApp/src/features/workspace-persistence/reopen-workspace.ts:700]
-- [ ] [Review][Patch] Add explicit repair scope labels for ledger and saved issue-record failures [/home/pin81845/repo/BMADGraphWebApp/src/domain/trust/selectors.ts:43]
-- [ ] [Review][Patch] Normalize `sprint-status.yaml` line endings to avoid trailing-whitespace churn [/home/pin81845/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/sprint-status.yaml:1]
+- [x] [Review][Patch] Sanitize invalid saved graph selection ids before emitting reopen issues [/home/pin81845/repo/BMADGraphWebApp/src/features/workspace-persistence/reopen-workspace.ts:700]
+- [x] [Review][Patch] Add explicit repair scope labels for ledger and saved issue-record failures [/home/pin81845/repo/BMADGraphWebApp/src/domain/trust/selectors.ts:43]
+- [x] [Review][Patch] Normalize `sprint-status.yaml` line endings to avoid trailing-whitespace churn [/home/pin81845/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/sprint-status.yaml:1]
 
 ## Dev Notes
 
@@ -83,10 +83,17 @@ GPT-5 Codex
 
 - Epic 1 story artifact normalized to the approved 2026-04-16 plan.
 - `./scripts/with-node.sh npm test -- src/features/workspace-persistence/reopen-workspace.spec.ts`
+- `./scripts/with-node.sh npm test -- src/features/workspace-persistence/reopen-workspace.spec.ts tests/integration/workspace-reopen.test.ts`
 - `./scripts/with-node.sh npm test -- src/features/workspace-persistence/reopen-workspace.spec.ts src/domain/trust/selectors.spec.ts src/stores/workspace-kernel/workspace-kernel.spec.ts tests/integration/workspace-reopen.test.ts`
 - `./scripts/with-node.sh npm test`
 - `./scripts/with-node.sh npm run lint`
 - `./scripts/with-node.sh npm run typecheck`
+- `bash -lc 'source "$HOME/.nvm/nvm.sh" && nvm use --delete-prefix "$(tr -d "[:space:]" < .nvmrc)" >/dev/null && npm ci'`
+- `bash -lc 'source "$HOME/.nvm/nvm.sh" && nvm use --delete-prefix "$(tr -d "[:space:]" < .nvmrc)" >/dev/null && npm test -- src/features/workspace-persistence/reopen-workspace.spec.ts src/domain/trust/selectors.spec.ts'`
+- `bash -lc 'source "$HOME/.nvm/nvm.sh" && nvm use --delete-prefix "$(tr -d "[:space:]" < .nvmrc)" >/dev/null && npm test -- src/features/workspace-persistence/reopen-workspace.spec.ts src/domain/trust/selectors.spec.ts src/stores/workspace-kernel/workspace-kernel.spec.ts tests/integration/workspace-reopen.test.ts'`
+- `bash -lc 'source "$HOME/.nvm/nvm.sh" && nvm use --delete-prefix "$(tr -d "[:space:]" < .nvmrc)" >/dev/null && npm test'`
+- `bash -lc 'source "$HOME/.nvm/nvm.sh" && nvm use --delete-prefix "$(tr -d "[:space:]" < .nvmrc)" >/dev/null && npm run lint'`
+- `bash -lc 'source "$HOME/.nvm/nvm.sh" && nvm use --delete-prefix "$(tr -d "[:space:]" < .nvmrc)" >/dev/null && npm run typecheck'`
 
 ### Implementation Plan
 
@@ -102,6 +109,10 @@ GPT-5 Codex
 - Shared trust and kernel selectors now expose repair-entry summaries with scope and impact labels so deferred reopen issues remain visible without dropping unaffected workspace state.
 - Added unit and integration coverage for localized reopen repair actions, selector summaries, and deferred-issue persistence after reopen.
 - Resolved the reopen review follow-up by sanitizing invalid persisted entity ids before issue-record parsing and covering the regression with a focused reopen spec.
+- Linux `node_modules` were installed with `npm ci` under the repo-pinned Node runtime so validation could run in WSL after the local runtime bootstrap exposed a missing dependency install.
+- Resolved the remaining reopen review follow-up by sanitizing invalid saved active/reference graph selection ids before issue emission and routing the repair entry point to the valid graph selected during reopen.
+- Resolved the remaining reopen review follow-up by adding explicit `Ledger entry` and `Saved issue record` scope labels in trust repair selectors.
+- Malformed-but-normalizable saved active/reference graph selections now remain explicit `workspace.reopen.graph.invalid-selection` issues even when normalization resolves to a valid reopened graph, with focused reopen coverage for both selection paths.
 
 ### File List
 
@@ -122,3 +133,5 @@ GPT-5 Codex
 - 2026-04-17: Story moved to in-progress for implementation.
 - 2026-04-17: Added localized reopen repair actions, trust/kernel repair-entry selectors, and deferred-repair persistence coverage; validated with targeted tests, full Vitest, lint, and typecheck.
 - 2026-04-17: Addressed code review findings - 1 item resolved; sanitized localized entity ids before writing reopen issue records and revalidated with reopen spec, full Vitest, lint, and typecheck.
+- 2026-04-19: Addressed the remaining code review findings - 3 items resolved; sanitized invalid saved graph selection ids, added explicit ledger/issue-record scope labels, normalized `sprint-status.yaml` line endings while promoting the story to review, and revalidated with focused reopen tests, full Vitest, lint, and typecheck.
+- 2026-04-19: Addressed a follow-up reopen selection regression; normalization drift in saved active/reference graph selections now emits `workspace.reopen.graph.invalid-selection` even when reopen can normalize to a valid graph, revalidated with focused reopen tests, integration reopen coverage, lint, and typecheck while keeping the story in review.

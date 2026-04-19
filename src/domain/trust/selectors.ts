@@ -45,6 +45,8 @@ const scopeLabelByEntityType: Record<string, string> = {
   evidence: 'Evidence',
   formula: 'Formula',
   graph: 'Graph',
+  'issue-record': 'Saved issue record',
+  ledger: 'Ledger entry',
   transform: 'Transform',
   workspace: 'Workspace',
 };

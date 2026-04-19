@@ -18,7 +18,12 @@ else
   requested_node_version="24"
 fi
 
-nvm use --silent "$requested_node_version" >/dev/null
+if ! nvm use --silent "$requested_node_version" >/dev/null 2>&1; then
+  if ! nvm install "$requested_node_version" >/dev/null; then
+    echo "Unable to provision Linux Node $requested_node_version through nvm." >&2
+    exit 1
+  fi
+fi
 
 resolved_node="$(command -v node || true)"
 resolved_npm="$(command -v npm || true)"

@@ -232,6 +232,166 @@ describe('reopenPersistedWorkspaceRecord', () => {
     );
   });
 
+  it('sanitizes invalid saved graph selection ids before emitting reopen issues', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:32:40Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        graphDefinitions: [
+          graphDefinitionFixture,
+          {
+            ...graphDefinitionFixture,
+            graphId: 'graph_scatter_secondary',
+            title: 'Secondary Graph',
+            status: 'candidate',
+            evidenceIds: [],
+            issueIds: [],
+          },
+        ],
+        activeGraphId: 'graph invalid/id',
+        referenceGraphId: 'graph_capacity_fade',
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:32:45Z',
+      nowMs: () => 6300,
+    });
+
+    expect(reopened.snapshot.activeGraphId).toBe('graph_scatter_secondary');
+    expect(reopened.localizedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.graph.invalid-selection',
+          source: expect.objectContaining({
+            entityType: 'graph',
+            entityId: 'graph_invalid_id',
+          }),
+          contextRef: expect.objectContaining({
+            graphId: 'graph_scatter_secondary',
+          }),
+          repairActions: expect.arrayContaining([
+            expect.objectContaining({
+              command: 'repair.focusGraph',
+              args: expect.objectContaining({
+                graphId: 'graph_scatter_secondary',
+              }),
+            }),
+          ]),
+          diagnostics: expect.objectContaining({
+            requestedGraphId: 'graph invalid/id',
+            resolvedGraphId: 'graph_scatter_secondary',
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('emits a reopen issue when the saved active graph selection only survives via normalization', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:32:50Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        graphDefinitions: [
+          graphDefinitionFixture,
+          {
+            ...graphDefinitionFixture,
+            graphId: 'graph_scatter_secondary',
+            title: 'Secondary Graph',
+            status: 'candidate',
+            evidenceIds: [],
+            issueIds: [],
+          },
+        ],
+        activeGraphId: 'graph scatter secondary',
+        referenceGraphId: 'graph_capacity_fade',
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:32:55Z',
+      nowMs: () => 6350,
+    });
+
+    expect(reopened.snapshot.activeGraphId).toBe('graph_scatter_secondary');
+    expect(reopened.localizedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.graph.invalid-selection',
+          source: expect.objectContaining({
+            entityType: 'graph',
+            entityId: 'graph_scatter_secondary',
+          }),
+          contextRef: expect.objectContaining({
+            graphId: 'graph_scatter_secondary',
+          }),
+          diagnostics: expect.objectContaining({
+            requestedGraphId: 'graph scatter secondary',
+            normalizedRequestedGraphId: 'graph_scatter_secondary',
+            resolvedGraphId: 'graph_scatter_secondary',
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('emits a reopen issue when the saved reference graph selection only survives via normalization', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:33:00Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        graphDefinitions: [
+          graphDefinitionFixture,
+          {
+            ...graphDefinitionFixture,
+            graphId: 'graph_scatter_secondary',
+            title: 'Secondary Graph',
+            status: 'candidate',
+            evidenceIds: [],
+            issueIds: [],
+          },
+        ],
+        activeGraphId: 'graph_scatter_secondary',
+        referenceGraphId: 'graph capacity fade',
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:33:05Z',
+      nowMs: () => 6400,
+    });
+
+    expect(reopened.snapshot.referenceGraphId).toBe('graph_capacity_fade');
+    expect(reopened.localizedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.graph.invalid-selection',
+          source: expect.objectContaining({
+            entityType: 'graph',
+            entityId: 'graph_capacity_fade',
+          }),
+          contextRef: expect.objectContaining({
+            graphId: 'graph_capacity_fade',
+          }),
+          diagnostics: expect.objectContaining({
+            requestedGraphId: 'graph capacity fade',
+            normalizedRequestedGraphId: 'graph_capacity_fade',
+            resolvedGraphId: 'graph_capacity_fade',
+          }),
+        }),
+      ]),
+    );
+  });
+
   it('emits localized repair actions for broken transforms and formulas during reopen', () => {
     const rawRecord: PersistedWorkspaceRecord = {
       workspaceId: workspaceSnapshotFixture.workspaceId,

@@ -81,4 +81,89 @@ describe('trust selectors', () => {
       }),
     ]);
   });
+
+  it('adds explicit scope labels for ledger and saved issue-record failures', () => {
+    const snapshot: WorkspaceSnapshot = {
+      ...structuredClone(workspaceSnapshotFixture),
+      issues: [
+        {
+          ...structuredClone(issueRecordFixture),
+          issueId: 'workspace.reopen.011',
+          kind: 'workspace.reopen.ledger.invalid-order',
+          severity: 'warning',
+          source: {
+            module: 'workspace-persistence',
+            entityType: 'ledger',
+            entityId: 'led_004_invalid',
+          },
+          title: 'Saved history contains out-of-order entries',
+          detail: 'Ledger entry led_004_invalid is out of sequence and was excluded from the reopened workspace history.',
+          userMessage: 'Some saved history entries were out of order and were excluded from reopen history.',
+          contextRef: {
+            routeKey: 'workspaceDetail',
+            workspaceId: workspaceSnapshotFixture.workspaceId,
+            panel: 'repair',
+          },
+          repairActions: [
+            {
+              actionId: 'repair.focusIssue',
+              label: 'Open repair card',
+              command: 'repair.focusIssue',
+              args: {
+                issueId: 'workspace.reopen.011',
+              },
+            },
+          ],
+          diagnostics: {
+            ledgerEntryId: 'led_004_invalid',
+          },
+        },
+        {
+          ...structuredClone(issueRecordFixture),
+          issueId: 'workspace.reopen.012',
+          kind: 'workspace.reopen.issue.invalid-contract',
+          severity: 'warning',
+          source: {
+            module: 'workspace-persistence',
+            entityType: 'issue-record',
+            entityId: 'reopen.issue.001',
+          },
+          title: 'A saved issue record could not be reopened',
+          detail: 'Issue entry 1 is invalid and was excluded from the reopened workspace.',
+          userMessage: 'One saved issue record could not be reopened.',
+          contextRef: {
+            routeKey: 'workspaceDetail',
+            workspaceId: workspaceSnapshotFixture.workspaceId,
+            panel: 'repair',
+          },
+          repairActions: [
+            {
+              actionId: 'repair.focusIssue',
+              label: 'Open repair card',
+              command: 'repair.focusIssue',
+              args: {
+                issueId: 'workspace.reopen.012',
+              },
+            },
+          ],
+          diagnostics: {
+            index: 0,
+          },
+        },
+      ],
+    };
+
+    expect(selectRepairEntryPoints(snapshot)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          issueId: 'workspace.reopen.011',
+          scopeLabel: 'Ledger entry led_004_invalid',
+        }),
+        expect.objectContaining({
+          issueId: 'workspace.reopen.012',
+          scopeLabel: 'Saved issue record reopen.issue.001',
+        }),
+      ]),
+    );
+  });
 });
