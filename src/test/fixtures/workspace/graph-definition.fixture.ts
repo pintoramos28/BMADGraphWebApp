@@ -5,6 +5,8 @@ export const graphDefinitionFixture = {
   title: 'Capacity Fade vs Cycle',
   status: 'reference',
   datasetId: 'ds_main',
+  family: 'scatter',
+  templateId: 'tpl_scatter_regression',
   roleAssignments: {
     x: ['cycleIndex'],
     y: ['capacityRetention'],
@@ -20,6 +22,7 @@ export const graphDefinitionFixture = {
       kind: 'regression',
       method: 'linear',
       status: 'ready',
+      catalogOverlayId: 'regression_linear',
     },
   ],
   presentation: {

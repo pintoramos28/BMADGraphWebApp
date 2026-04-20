@@ -7,19 +7,29 @@ import {
   type WorkspaceSnapshot,
 } from '../../../schemas/workspace';
 import { identifierSchema, isoDateTimeSchema, looseObjectSchema, nonEmptyStringSchema, strictObject } from '../../../schemas/validation';
+import type { WorkspaceFileHandle } from '../fs-access/portable-workspace-files';
 
 export interface PersistedWorkspaceRecord {
   workspaceId: string;
   savedAt: string;
   snapshot: unknown;
   ledger: unknown[];
+  datasetFileHandles?: unknown[] | undefined;
   benchmarkKey?: string | undefined;
+}
+
+export interface PersistedDatasetFileHandle {
+  datasetId: string;
+  fileName: string;
+  fileHandleToken: string;
+  handle: WorkspaceFileHandle;
 }
 
 export interface SaveCanonicalWorkspaceInput {
   snapshot: WorkspaceSnapshot;
   ledger: WorkspaceLedgerEntry[];
   savedAt: string;
+  datasetFileHandles?: PersistedDatasetFileHandle[];
   benchmarkKey?: string;
 }
 
@@ -48,7 +58,25 @@ const persistedWorkspaceRecordSchema = strictObject({
   savedAt: isoDateTimeSchema,
   snapshot: looseObjectSchema,
   ledger: z.array(z.unknown()),
+  datasetFileHandles: z.array(z.unknown()).optional(),
   benchmarkKey: nonEmptyStringSchema.optional(),
+});
+
+const persistedDatasetFileHandleSchema = strictObject({
+  datasetId: identifierSchema,
+  fileName: nonEmptyStringSchema,
+  fileHandleToken: identifierSchema,
+  handle: z.custom<WorkspaceFileHandle>((value) => {
+    if (!value || typeof value !== 'object') {
+      return false;
+    }
+
+    const candidate = value as Partial<WorkspaceFileHandle>;
+
+    return typeof candidate.name === 'string'
+      && typeof candidate.getFile === 'function'
+      && typeof candidate.createWritable === 'function';
+  }, 'Expected a WorkspaceFileHandle-compatible object.'),
 });
 
 function sortBySavedAtDescending<T extends { savedAt: string }>(values: T[]) {
@@ -103,26 +131,60 @@ function toRecordSummary(record: PersistedWorkspaceRecord): WorkspaceRecordSumma
   };
 }
 
+function clonePersistedDatasetFileHandle(entry: unknown) {
+  if (!entry || typeof entry !== 'object') {
+    return structuredClone(entry);
+  }
+
+  const candidate = entry as Record<string, unknown>;
+
+  if (!('handle' in candidate)) {
+    return structuredClone(entry);
+  }
+
+  const { handle, ...rest } = candidate;
+
+  return {
+    ...structuredClone(rest),
+    handle,
+  };
+}
+
+function clonePersistedWorkspaceRecord(record: PersistedWorkspaceRecord): PersistedWorkspaceRecord {
+  const { datasetFileHandles, ...rest } = record;
+
+  return {
+    ...structuredClone(rest),
+    ...(datasetFileHandles
+      ? {
+          datasetFileHandles: datasetFileHandles.map((entry) => clonePersistedDatasetFileHandle(entry)),
+        }
+      : {}),
+  };
+}
+
 export class InMemoryWorkspaceStorage implements WorkspacePersistenceStorage {
   readonly #records = new Map<string, PersistedWorkspaceRecord>();
 
   constructor(seedRecords: PersistedWorkspaceRecord[] = []) {
     for (const record of seedRecords) {
-      this.#records.set(record.workspaceId, structuredClone(record));
+      this.#records.set(record.workspaceId, clonePersistedWorkspaceRecord(record));
     }
   }
 
   async putRecord(record: PersistedWorkspaceRecord) {
-    this.#records.set(record.workspaceId, structuredClone(record));
+    this.#records.set(record.workspaceId, clonePersistedWorkspaceRecord(record));
   }
 
   async getRecord(workspaceId: string) {
-    return structuredClone(this.#records.get(workspaceId) ?? null);
+    const record = this.#records.get(workspaceId);
+
+    return record ? clonePersistedWorkspaceRecord(record) : null;
   }
 
   async listRecords() {
     return sortBySavedAtDescending(
-      [...this.#records.values()].map((record) => structuredClone(record)),
+      [...this.#records.values()].map((record) => clonePersistedWorkspaceRecord(record)),
     );
   }
 }
@@ -141,6 +203,13 @@ export function createWorkspaceRepository(storage: WorkspacePersistenceStorage):
         savedAt,
         snapshot: structuredClone(snapshot),
         ledger: structuredClone(ledger),
+        ...(input.datasetFileHandles
+          ? {
+              datasetFileHandles: input.datasetFileHandles.map((entry) =>
+                persistedDatasetFileHandleSchema.parse(entry),
+              ),
+            }
+          : {}),
         ...(input.benchmarkKey ? { benchmarkKey: input.benchmarkKey } : {}),
       });
 

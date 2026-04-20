@@ -7,6 +7,7 @@ import type {
   RepairEntryPointSummary,
   TelemetrySummary,
 } from '../../domain/trust';
+import type { PersistedDatasetFileHandle } from '../../services/persistence';
 import type { WorkerMessageEnvelope } from '../../schemas/worker';
 import type { IssueRecord, WorkspaceLedgerEntry, WorkspaceSnapshot } from '../../schemas/workspace';
 
@@ -19,6 +20,7 @@ export interface PendingWorkerRequest {
 export interface WorkspaceKernelData {
   snapshot: WorkspaceSnapshot;
   ledger: WorkspaceLedgerEntry[];
+  datasetFileHandles: PersistedDatasetFileHandle[];
   workspaceVersion: number;
   pendingWorkerRequests: Record<string, PendingWorkerRequest>;
 }
@@ -43,6 +45,7 @@ export interface QueueWorkerRequestInput {
 export interface ReplaceSnapshotInput {
   snapshot: WorkspaceSnapshot;
   ledger: WorkspaceLedgerEntry[];
+  datasetFileHandles?: PersistedDatasetFileHandle[];
 }
 
 export interface ApplyWorkerEnvelopeSuccess {
@@ -66,6 +69,7 @@ export type WorkspaceSnapshotPatch = Partial<WorkspaceSnapshot>;
 
 export interface WorkspaceKernelCommands {
   replaceSnapshot(input: ReplaceSnapshotInput): void;
+  replaceDatasetFileHandles(datasetFileHandles: PersistedDatasetFileHandle[]): void;
   promoteReferenceGraph(input: PromoteReferenceGraphInput): void;
   replaceIssues(issues: IssueRecord[], meta?: KernelMutationMeta): void;
   updateTelemetrySnapshot(
@@ -82,6 +86,7 @@ export interface WorkspaceKernelCommands {
 export interface WorkspaceKernelSelectors {
   activeGraphId(): string;
   referenceGraphId(): string;
+  datasetFileHandles(): PersistedDatasetFileHandle[];
   issueState(): IssueState;
   repairEntryPoints(): RepairEntryPointSummary[];
   readinessSummary(): ReadinessSummary;
@@ -98,6 +103,7 @@ export interface WorkspaceKernelState extends WorkspaceKernelData {
 export interface WorkspaceKernelStoreOptions {
   snapshot: WorkspaceSnapshot;
   ledger?: WorkspaceLedgerEntry[];
+  datasetFileHandles?: PersistedDatasetFileHandle[];
 }
 
 export type WorkspaceKernelStore = StoreApi<WorkspaceKernelState>;

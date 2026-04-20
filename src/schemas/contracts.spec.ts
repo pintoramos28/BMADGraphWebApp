@@ -24,6 +24,39 @@ describe('contract fixtures', () => {
     expect(workspaceSnapshotSchema.parse(workspaceSnapshotFixture)).toEqual(workspaceSnapshotFixture);
   });
 
+  it('accepts transform dependency and graph catalog metadata while keeping legacy snapshots readable', () => {
+    const candidate = structuredClone(workspaceSnapshotFixture) as any;
+    candidate.transformPipeline[0] = {
+      ...candidate.transformPipeline[0],
+      dependencyMetadata: {
+        datasetId: 'ds_main',
+        dependsOnColumnIds: ['capacityRetention'],
+        producesColumnIds: [],
+        upstreamTransformIds: [],
+      },
+    };
+    candidate.graphDefinitions[0] = {
+      ...candidate.graphDefinitions[0],
+      family: 'scatter',
+      templateId: 'tpl_scatter_regression',
+      overlays: [
+        {
+          ...candidate.graphDefinitions[0].overlays[0],
+          catalogOverlayId: 'regression_linear',
+        },
+      ],
+    };
+
+    expect(workspaceSnapshotSchema.parse(candidate)).toEqual(candidate);
+
+    delete candidate.transformPipeline[0].dependencyMetadata;
+    delete candidate.graphDefinitions[0].family;
+    delete candidate.graphDefinitions[0].templateId;
+    delete candidate.graphDefinitions[0].overlays[0].catalogOverlayId;
+
+    expect(workspaceSnapshotSchema.parse(candidate)).toEqual(candidate);
+  });
+
   it('accepts the locked ledger, issue, release, telemetry, error, and worker fixtures', () => {
     expect(workspaceLedgerFixture.map((entry) => workspaceLedgerEntrySchema.parse(entry))).toEqual(workspaceLedgerFixture);
     expect(issueRecordSchema.parse(issueRecordFixture)).toEqual(issueRecordFixture);

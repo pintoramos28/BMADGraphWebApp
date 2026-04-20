@@ -23,6 +23,11 @@ export const datasetColumnSchema = strictObject({
   status: z.enum(['inferred', 'confirmed', 'rejected']),
 });
 
+export const datasetSourceFileSchema = strictObject({
+  fileName: nonEmptyStringSchema,
+  fileHandleToken: identifierSchema,
+});
+
 export const datasetSchema = strictObject({
   datasetId: identifierSchema,
   displayName: nonEmptyStringSchema,
@@ -31,6 +36,7 @@ export const datasetSchema = strictObject({
   rowCount: nonNegativeIntegerSchema,
   columnCount: nonNegativeIntegerSchema,
   columns: z.array(datasetColumnSchema),
+  sourceFile: datasetSourceFileSchema.optional(),
 });
 
 export const transformSchema = strictObject({
@@ -39,6 +45,12 @@ export const transformSchema = strictObject({
   status: nonEmptyStringSchema,
   order: nonNegativeIntegerSchema,
   expression: nonEmptyStringSchema,
+  dependencyMetadata: strictObject({
+    datasetId: identifierSchema,
+    dependsOnColumnIds: z.array(identifierSchema),
+    producesColumnIds: z.array(identifierSchema),
+    upstreamTransformIds: z.array(identifierSchema),
+  }).optional(),
 });
 
 export const formulaColumnSchema = strictObject({

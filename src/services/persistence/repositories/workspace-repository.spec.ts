@@ -4,7 +4,11 @@ import type { GraphDefinition, WorkspaceSnapshot } from '../../../schemas/worksp
 import { graphDefinitionFixture } from '../../../test/fixtures/workspace/graph-definition.fixture';
 import { workspaceLedgerFixture } from '../../../test/fixtures/workspace/workspace-ledger.fixture';
 import { workspaceSnapshotFixture } from '../../../test/fixtures/workspace/workspace-snapshot.fixture';
-import type { PersistedWorkspaceRecord, WorkspacePersistenceStorage } from './workspace-repository';
+import type {
+  PersistedDatasetFileHandle,
+  PersistedWorkspaceRecord,
+  WorkspacePersistenceStorage,
+} from './workspace-repository';
 import { InMemoryWorkspaceStorage, createWorkspaceRepository } from './workspace-repository';
 
 describe('WorkspaceRepository', () => {
@@ -55,6 +59,63 @@ describe('WorkspaceRepository', () => {
         benchmarkKey: 'benchmark_workspace_local',
       },
     ]);
+  });
+
+  it('round-trips persisted dataset file handles through the default in-memory storage adapter', async () => {
+    const storage = new InMemoryWorkspaceStorage();
+    const repository = createWorkspaceRepository(storage);
+    const handle = {
+      name: 'battery-cycles.csv',
+      async getFile() {
+        return {
+          name: 'battery-cycles.csv',
+        } as File;
+      },
+      async createWritable() {
+        return {
+          async write() {},
+          async close() {},
+        };
+      },
+    };
+    const datasetFileHandles: PersistedDatasetFileHandle[] = [
+      {
+        datasetId: 'ds_main',
+        fileName: 'battery-cycles.csv',
+        fileHandleToken: 'dataset.ds_main.source-file',
+        handle,
+      },
+    ];
+    const snapshot: WorkspaceSnapshot = {
+      ...structuredClone(workspaceSnapshotFixture),
+      datasets: workspaceSnapshotFixture.datasets.map((dataset) => ({
+        ...structuredClone(dataset),
+        sourceFile: {
+          fileName: dataset.displayName,
+          fileHandleToken: `dataset.${dataset.datasetId}.source-file`,
+        },
+      })),
+    };
+
+    await repository.saveCanonicalWorkspace({
+      snapshot,
+      ledger: workspaceLedgerFixture,
+      savedAt: '2026-04-16T18:21:00Z',
+      datasetFileHandles,
+    });
+
+    const record = await repository.loadWorkspaceRecord(snapshot.workspaceId);
+
+    expect(record).toMatchObject({
+      datasetFileHandles: [
+        expect.objectContaining({
+          datasetId: 'ds_main',
+          fileName: 'battery-cycles.csv',
+          fileHandleToken: 'dataset.ds_main.source-file',
+        }),
+      ],
+    });
+    expect((record?.datasetFileHandles?.[0] as PersistedDatasetFileHandle | undefined)?.handle).toBe(handle);
   });
 
   it('rejects unordered ledger entries on save', async () => {

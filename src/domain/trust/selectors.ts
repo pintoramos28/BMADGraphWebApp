@@ -45,11 +45,29 @@ const scopeLabelByEntityType: Record<string, string> = {
   evidence: 'Evidence',
   formula: 'Formula',
   graph: 'Graph',
+  'graph-selection': 'Graph selection',
   'issue-record': 'Saved issue record',
   ledger: 'Ledger entry',
   transform: 'Transform',
   workspace: 'Workspace',
 };
+
+function selectGraphSelectionScopeLabel(issue: WorkspaceSnapshot['issues'][number]) {
+  const selection =
+    issue.diagnostics && typeof issue.diagnostics === 'object'
+      ? (issue.diagnostics as { selection?: unknown }).selection
+      : undefined;
+
+  if (selection === 'active' || issue.source.entityId === 'active-graph-selection') {
+    return 'Active graph selection';
+  }
+
+  if (selection === 'reference' || issue.source.entityId === 'reference-graph-selection') {
+    return 'Reference graph selection';
+  }
+
+  return 'Graph selection';
+}
 
 export function selectIssueState(snapshot: WorkspaceSnapshot): IssueState {
   const openIssues = snapshot.issues.filter((issue) => issue.status !== 'resolved');
@@ -74,11 +92,12 @@ export function selectRepairEntryPoints(snapshot: WorkspaceSnapshot): RepairEntr
   return snapshot.issues
     .filter((issue) => issue.status !== 'resolved')
     .map((issue) => {
-      const scopePrefix = scopeLabelByEntityType[issue.source.entityType] ?? 'Item';
       const scopeLabel =
         issue.source.entityType === 'workspace'
           ? 'Workspace'
-          : `${scopePrefix} ${issue.source.entityId}`;
+          : issue.source.entityType === 'graph-selection'
+            ? selectGraphSelectionScopeLabel(issue)
+            : `${scopeLabelByEntityType[issue.source.entityType] ?? 'Item'} ${issue.source.entityId}`;
 
       return {
         issueId: issue.issueId,

@@ -5,6 +5,7 @@ import {
   applyWorkerEnvelopeReducer,
   promoteReferenceGraphReducer,
   queueWorkerRequestReducer,
+  replaceDatasetFileHandlesReducer,
   replaceIssuesReducer,
   replaceSnapshotReducer,
   updateTelemetrySnapshotReducer,
@@ -12,6 +13,7 @@ import {
 import {
   selectActiveGraphId,
   selectKernelCompatibilityState,
+  selectPersistedDatasetFileHandles,
   selectKernelIssueState,
   selectKernelRepairEntryPoints,
   selectKernelReadinessSummary,
@@ -25,11 +27,19 @@ import type {
   WorkspaceKernelStoreOptions,
 } from './types';
 import { workspaceSnapshotSchema } from '../../schemas/workspace';
+import type { PersistedDatasetFileHandle } from '../../services/persistence';
+
+function clonePersistedDatasetFileHandle(entry: PersistedDatasetFileHandle): PersistedDatasetFileHandle {
+  return {
+    ...entry,
+  };
+}
 
 function toKernelData(state: WorkspaceKernelState): WorkspaceKernelData {
   return {
     snapshot: state.snapshot,
     ledger: state.ledger,
+    datasetFileHandles: state.datasetFileHandles.map((entry) => clonePersistedDatasetFileHandle(entry)),
     workspaceVersion: state.workspaceVersion,
     pendingWorkerRequests: state.pendingWorkerRequests,
   };
@@ -44,6 +54,7 @@ function initializeKernelData(options: WorkspaceKernelStoreOptions): WorkspaceKe
   return {
     snapshot,
     ledger,
+    datasetFileHandles: (options.datasetFileHandles ?? []).map((entry) => clonePersistedDatasetFileHandle(entry)),
     workspaceVersion: initializeWorkspaceVersion(ledger),
     pendingWorkerRequests: {},
   };
@@ -57,6 +68,9 @@ export function createWorkspaceKernelStore(options: WorkspaceKernelStoreOptions)
     commands: {
       replaceSnapshot(input) {
         set((state) => replaceSnapshotReducer(toKernelData(state), input));
+      },
+      replaceDatasetFileHandles(datasetFileHandles) {
+        set((state) => replaceDatasetFileHandlesReducer(toKernelData(state), datasetFileHandles));
       },
       promoteReferenceGraph(input) {
         set((state) => promoteReferenceGraphReducer(toKernelData(state), input));
@@ -83,6 +97,9 @@ export function createWorkspaceKernelStore(options: WorkspaceKernelStoreOptions)
       },
       referenceGraphId() {
         return selectReferenceGraphId(toKernelData(get()));
+      },
+      datasetFileHandles() {
+        return selectPersistedDatasetFileHandles(toKernelData(get()));
       },
       issueState() {
         return selectKernelIssueState(toKernelData(get()));

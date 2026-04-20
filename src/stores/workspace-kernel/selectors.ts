@@ -1,3 +1,4 @@
+import type { PersistedDatasetFileHandle } from '../../services/persistence';
 import { selectReadinessSummary } from '../../domain/readiness';
 import {
   selectCompatibilityState,
@@ -7,12 +8,22 @@ import {
 } from '../../domain/trust';
 import type { WorkspaceKernelData } from './types';
 
+function clonePersistedDatasetFileHandle(entry: PersistedDatasetFileHandle): PersistedDatasetFileHandle {
+  return {
+    ...entry,
+  };
+}
+
 export function selectActiveGraphId(data: WorkspaceKernelData) {
   return data.snapshot.activeGraphId;
 }
 
 export function selectReferenceGraphId(data: WorkspaceKernelData) {
   return data.snapshot.referenceGraphId;
+}
+
+export function selectPersistedDatasetFileHandles(data: WorkspaceKernelData) {
+  return data.datasetFileHandles.map((entry) => clonePersistedDatasetFileHandle(entry));
 }
 
 export function selectPersistedWorkspace(data: WorkspaceKernelData) {

@@ -134,9 +134,54 @@ describe('WorkspaceKernel', () => {
   });
 
   it('replaces the workspace ledger and invalidates pending worker replies after replacing the snapshot', () => {
+    const staleHandle = {
+      name: 'battery-cycles.csv',
+      async getFile() {
+        return {
+          name: 'battery-cycles.csv',
+        } as File;
+      },
+      async createWritable() {
+        return {
+          async write() {},
+          async close() {},
+        };
+      },
+    };
+    const replacementHandle = {
+      name: 'battery-cycles-reloaded.csv',
+      async getFile() {
+        return {
+          name: 'battery-cycles-reloaded.csv',
+        } as File;
+      },
+      async createWritable() {
+        return {
+          async write() {},
+          async close() {},
+        };
+      },
+    };
     const store = createWorkspaceKernelStore({
-      snapshot: workspaceSnapshotFixture,
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: workspaceSnapshotFixture.datasets.map((dataset) => ({
+          ...structuredClone(dataset),
+          sourceFile: {
+            fileName: 'battery-cycles.csv',
+            fileHandleToken: `dataset.${dataset.datasetId}.source-file`,
+          },
+        })),
+      },
       ledger: workspaceLedgerFixture,
+      datasetFileHandles: [
+        {
+          datasetId: 'ds_main',
+          fileName: 'battery-cycles.csv',
+          fileHandleToken: 'dataset.ds_main.source-file',
+          handle: staleHandle,
+        },
+      ],
     });
 
     store.getState().commands.queueWorkerRequest({
@@ -179,6 +224,7 @@ describe('WorkspaceKernel', () => {
     expect(store.getState().workspaceVersion).toBe(7);
     expect(store.getState().pendingWorkerRequests).toEqual({});
     expect(store.getState().ledger).toEqual(replacementLedger);
+    expect(store.getState().selectors.datasetFileHandles()).toEqual([]);
 
     const result = store.getState().commands.applyWorkerEnvelope(
       {
@@ -218,6 +264,37 @@ describe('WorkspaceKernel', () => {
         workspaceId: 'ws_2026_04_16_002',
       },
     });
+
+    store.getState().commands.replaceSnapshot({
+      snapshot: replacementSnapshot,
+      ledger: [...replacementLedger],
+      datasetFileHandles: [
+        {
+          datasetId: 'ds_main',
+          fileName: 'battery-cycles-reloaded.csv',
+          fileHandleToken: 'dataset.ds_main.source-file',
+          handle: replacementHandle,
+        },
+      ],
+    });
+
+    expect(store.getState().selectors.datasetFileHandles()).toEqual([
+      expect.objectContaining({
+        datasetId: 'ds_main',
+        fileName: 'battery-cycles-reloaded.csv',
+        fileHandleToken: 'dataset.ds_main.source-file',
+        handle: replacementHandle,
+      }),
+    ]);
+    expect(store.getState().snapshot.datasets).toEqual([
+      expect.objectContaining({
+        datasetId: 'ds_main',
+        sourceFile: {
+          fileName: 'battery-cycles-reloaded.csv',
+          fileHandleToken: 'dataset.ds_main.source-file',
+        },
+      }),
+    ]);
   });
 
   it('derives trust selectors from canonical kernel state', () => {
@@ -328,6 +405,166 @@ describe('WorkspaceKernel', () => {
       warningIssueIds: ['issue_missing_reviewer_note'],
       provenanceCompleteness: 'complete',
     });
+  });
+
+  it('removes resolved reopen issues from readiness counts when issues are replaced', () => {
+    const reopenIssue = {
+      ...structuredClone(issueRecordFixture),
+      issueId: 'workspace.reopen.010',
+      kind: 'workspace.reopen.graph.invalid-selection',
+      severity: 'warning' as const,
+      source: {
+        module: 'workspace-persistence',
+        entityType: 'graph-selection',
+        entityId: 'active-graph-selection',
+      },
+      title: 'The saved active graph selection could not be restored',
+      detail:
+        'Saved active graph selection "graph invalid/id" could not be restored, so graph "graph_scatter_secondary" was selected instead.',
+      userMessage:
+        'The saved active graph selection could not be restored. Graph "graph_scatter_secondary" was selected instead.',
+      contextRef: {
+        routeKey: 'workspaceDetail',
+        workspaceId: workspaceSnapshotFixture.workspaceId,
+        graphId: 'graph_scatter_secondary',
+        panel: 'repair',
+      },
+      repairActions: [
+        {
+          actionId: 'repair.focusIssue',
+          label: 'Open repair card',
+          command: 'repair.focusIssue',
+          args: {
+            issueId: 'workspace.reopen.010',
+          },
+        },
+        {
+          actionId: 'repair.focusGraph',
+          label: 'Inspect graph',
+          command: 'repair.focusGraph',
+          args: {
+            graphId: 'graph_scatter_secondary',
+          },
+        },
+      ],
+      diagnostics: {
+        selection: 'active',
+        requestedGraphId: 'graph invalid/id',
+        resolvedGraphId: 'graph_scatter_secondary',
+      },
+    };
+    const store = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        issues: [reopenIssue],
+        readiness: {
+          status: 'warning',
+          blockingIssueIds: [],
+          warningIssueIds: ['workspace.reopen.010'],
+          provenanceCompleteness: 'complete',
+        },
+      },
+      ledger: [],
+    });
+
+    store.getState().commands.replaceIssues([
+      {
+        ...reopenIssue,
+        status: 'resolved',
+      },
+    ]);
+
+    expect(store.getState().snapshot.readiness).toEqual({
+      status: 'ready',
+      blockingIssueIds: [],
+      warningIssueIds: [],
+      provenanceCompleteness: 'complete',
+    });
+    expect(store.getState().selectors.readinessSummary()).toMatchObject({
+      status: 'ready',
+      blockingIssueCount: 0,
+      warningIssueCount: 0,
+    });
+  });
+
+  it('retains dataset file handles across kernel mutations and explicit handle updates', () => {
+    const initialHandle = {
+      name: 'battery-cycles.csv',
+      async getFile() {
+        return {
+          name: 'battery-cycles.csv',
+        } as File;
+      },
+      async createWritable() {
+        return {
+          async write() {},
+          async close() {},
+        };
+      },
+    };
+    const replacementHandle = {
+      name: 'battery-cycles-v2.csv',
+      async getFile() {
+        return {
+          name: 'battery-cycles-v2.csv',
+        } as File;
+      },
+      async createWritable() {
+        return {
+          async write() {},
+          async close() {},
+        };
+      },
+    };
+    const store = createWorkspaceKernelStore({
+      snapshot: workspaceSnapshotFixture,
+      ledger: workspaceLedgerFixture,
+      datasetFileHandles: [
+        {
+          datasetId: 'ds_main',
+          fileName: 'battery-cycles.csv',
+          fileHandleToken: 'dataset.ds_main.source-file',
+          handle: initialHandle,
+        },
+      ],
+    });
+
+    store.getState().commands.replaceIssues([issueRecordFixture]);
+
+    expect(store.getState().selectors.datasetFileHandles()).toEqual([
+      expect.objectContaining({
+        datasetId: 'ds_main',
+        fileHandleToken: 'dataset.ds_main.source-file',
+        handle: initialHandle,
+      }),
+    ]);
+
+    store.getState().commands.replaceDatasetFileHandles([
+      {
+        datasetId: 'ds_main',
+        fileName: 'battery-cycles-v2.csv',
+        fileHandleToken: 'dataset.ds_main.source-file',
+        handle: replacementHandle,
+      },
+    ]);
+
+    expect(store.getState().selectors.datasetFileHandles()).toEqual([
+      expect.objectContaining({
+        datasetId: 'ds_main',
+        fileName: 'battery-cycles-v2.csv',
+        fileHandleToken: 'dataset.ds_main.source-file',
+        handle: replacementHandle,
+      }),
+    ]);
+    expect(store.getState().selectors.persistedWorkspace().datasets).toEqual([
+      expect.objectContaining({
+        datasetId: 'ds_main',
+        sourceFile: {
+          fileName: 'battery-cycles-v2.csv',
+          fileHandleToken: 'dataset.ds_main.source-file',
+        },
+      }),
+    ]);
   });
 
   it('rejects ledgers whose workspace versions move backwards', () => {

@@ -56,6 +56,12 @@ export const workspaceSnapshotFixture = {
       status: 'applied',
       order: 1,
       expression: "qualityFlag == 'PASS'",
+      dependencyMetadata: {
+        datasetId: 'ds_main',
+        dependsOnColumnIds: ['capacityRetention'],
+        producesColumnIds: [],
+        upstreamTransformIds: [],
+      },
     },
   ],
   formulaColumns: [

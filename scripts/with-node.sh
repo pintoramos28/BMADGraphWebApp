@@ -18,11 +18,18 @@ else
   requested_node_version="24"
 fi
 
-if ! nvm use --silent "$requested_node_version" >/dev/null 2>&1; then
+resolved_requested_node="$(nvm version "$requested_node_version" 2>/dev/null || true)"
+
+if [[ "$resolved_requested_node" == "N/A" ]]; then
   if ! nvm install "$requested_node_version" >/dev/null; then
     echo "Unable to provision Linux Node $requested_node_version through nvm." >&2
     exit 1
   fi
+fi
+
+if ! nvm use --silent "$requested_node_version" >/dev/null; then
+  echo "Unable to activate Linux Node $requested_node_version through nvm." >&2
+  exit 1
 fi
 
 resolved_node="$(command -v node || true)"

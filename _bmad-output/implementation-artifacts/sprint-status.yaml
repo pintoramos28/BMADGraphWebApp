@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-16T13:50:36-04:00
-last_updated: 2026-04-19T01:44:37-04:00
+last_updated: 2026-04-20T01:20:42-04:00
 project: BMADGraphWebApp
 project_key: NOKEY
 tracking_system: file-system
@@ -47,7 +47,8 @@ development_status:
   1-2-author-canonical-workspace-and-trust-contracts: done
   1-3-create-open-and-reopen-local-workspaces: done
   1-4-surface-shell-readiness-support-and-update-status: done
-  1-5-localize-reopen-errors-and-provide-repair-entry-points: review
+  1-5-localize-reopen-errors-and-provide-repair-entry-points: done
+  1-6-complete-reopen-validation-for-transforms-and-graph-compositions: done
   epic-1-retrospective: optional
 
   epic-2: backlog

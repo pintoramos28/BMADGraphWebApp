@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { compareSemver, matchesVersionRange } from '../../lib/semver';
+import { validateGraphComposition } from './graph-catalog';
 import {
   datasetSchema,
   evidenceSchema,
@@ -28,7 +29,11 @@ import {
   strictObject,
   versionRangeSchema,
 } from '../../schemas/validation';
-import type { PersistedWorkspaceRecord, WorkspaceRepository } from '../../services/persistence';
+import type {
+  PersistedDatasetFileHandle,
+  PersistedWorkspaceRecord,
+  WorkspaceRepository,
+} from '../../services/persistence';
 import { createWorkspaceKernelStore, type WorkspaceKernelStore } from '../../stores/workspace-kernel';
 
 export interface WorkspaceCompatibilityEnvelope {
@@ -96,6 +101,7 @@ const persistedWorkspaceRecordSchema = strictObject({
   savedAt: isoDateTimeSchema,
   snapshot: looseObjectSchema,
   ledger: z.array(z.unknown()),
+  datasetFileHandles: z.array(z.unknown()).optional(),
   benchmarkKey: nonEmptyStringSchema.optional(),
 });
 
@@ -110,7 +116,61 @@ interface IssueFactoryInput {
   diagnostics?: Record<string, unknown>;
 }
 
+type GraphSelectionSlot = 'active' | 'reference';
+
+export function collectAvailableFormulaDependencyIds(input: {
+  datasets: WorkspaceSnapshot['datasets'];
+  transforms: WorkspaceSnapshot['transformPipeline'];
+}) {
+  const availableDependencyIds = new Set(
+    input.datasets.flatMap((dataset) => dataset.columns.map((column) => column.columnId)),
+  );
+
+  input.transforms.forEach((transform) => {
+    transform.dependencyMetadata?.producesColumnIds.forEach((columnId) => {
+      availableDependencyIds.add(columnId);
+    });
+  });
+
+  return availableDependencyIds;
+}
+
+interface PersistedDatasetFileHandleEnvelope {
+  datasetId: string;
+  fileName: string;
+  fileHandleToken: string;
+  handle: {
+    name: string;
+    getFile: () => Promise<File>;
+    createWritable: () => Promise<unknown>;
+  };
+}
+
+const persistedDatasetFileHandleSchema = strictObject({
+  datasetId: identifierSchema,
+  fileName: nonEmptyStringSchema,
+  fileHandleToken: identifierSchema,
+  handle: z.custom<PersistedDatasetFileHandleEnvelope['handle']>((value) => {
+    if (!value || typeof value !== 'object') {
+      return false;
+    }
+
+    const candidate = value as Partial<PersistedDatasetFileHandleEnvelope['handle']>;
+
+    return typeof candidate.name === 'string'
+      && typeof candidate.getFile === 'function'
+      && typeof candidate.createWritable === 'function';
+  }, 'Expected a WorkspaceFileHandle-compatible object.'),
+});
+
 const reopenIssueIdPattern = /^workspace\.reopen\.(\d+)$/;
+const persistentReopenIssueKinds = new Set([
+  'workspace.reopen.transform.missing-dataset',
+  'workspace.reopen.transform.missing-dependency',
+  'workspace.reopen.transform.missing-upstream',
+  'workspace.reopen.transform.stale-output',
+  'workspace.reopen.graph.incompatible-composition',
+]);
 
 function asValidationMessages(error: z.ZodError) {
   return error.issues.map((issue) => ({
@@ -167,7 +227,17 @@ function createReopenIssueIdFactory(existingIssueIds: Iterable<string>) {
 }
 
 function isTransientReopenIssue(issue: IssueRecord) {
-  return issue.kind.startsWith('workspace.reopen.') && issue.source.module === 'workspace-persistence';
+  return issue.kind.startsWith('workspace.reopen.')
+    && issue.source.module === 'workspace-persistence'
+    && !persistentReopenIssueKinds.has(issue.kind);
+}
+
+function isPersistentReopenIssue(issue: IssueRecord) {
+  return issue.source.module === 'workspace-persistence' && persistentReopenIssueKinds.has(issue.kind);
+}
+
+function buildPersistentReopenIssueKey(input: Pick<IssueRecord, 'kind' | 'source'>) {
+  return `${input.kind}::${input.source.module}::${input.source.entityType}::${input.source.entityId}`;
 }
 
 function parseCollection<T>(
@@ -185,10 +255,41 @@ function parseCollection<T>(
       return;
     }
 
-    accepted.push(parsed.data);
+  accepted.push(parsed.data);
   });
 
   return accepted;
+}
+
+function parsePersistedDatasetFileHandles(values: unknown[]) {
+  return parseCollection(
+    values,
+    persistedDatasetFileHandleSchema,
+    () => {},
+  ) as PersistedDatasetFileHandle[];
+}
+
+function isCompatibleDatasetFileHandle(
+  dataset: Pick<WorkspaceSnapshot['datasets'][number], 'datasetId' | 'sourceFile'>,
+  entry: Pick<PersistedDatasetFileHandle, 'datasetId' | 'fileName' | 'fileHandleToken'>,
+) {
+  return dataset.sourceFile !== undefined
+    && dataset.sourceFile.fileHandleToken === entry.fileHandleToken
+    && dataset.datasetId === entry.datasetId
+    && dataset.sourceFile.fileName === entry.fileName;
+}
+
+function retainDatasetFileHandlesForSnapshot(
+  snapshot: WorkspaceSnapshot,
+  datasetFileHandles: PersistedDatasetFileHandle[],
+) {
+  return datasetFileHandles
+    .filter((entry) =>
+      snapshot.datasets.some((dataset) => isCompatibleDatasetFileHandle(dataset, entry)),
+    )
+    .map((entry) => ({
+      ...entry,
+    }));
 }
 
 function fallbackEntityId(entityType: string, index: number) {
@@ -215,16 +316,48 @@ function extractEntityId(value: unknown, key: string, fallback: string) {
   return normalizeEntityIdCandidate(candidate) ?? fallback;
 }
 
-function normalizeGraphSelectionId(requestedGraphId: string, selection: 'active' | 'reference') {
+function createGraphSelectionSource(selection: GraphSelectionSlot): IssueRecord['source'] {
+  return {
+    module: 'workspace-persistence',
+    entityType: 'graph-selection',
+    entityId: `${selection}-graph-selection`,
+  };
+}
+
+function normalizeGraphSelectionId(requestedGraphId: string, selection: GraphSelectionSlot) {
   const normalizedGraphId = normalizeEntityIdCandidate(requestedGraphId);
 
   return {
+    selection,
     requestedGraphId,
     resolutionCandidate: normalizedGraphId ?? requestedGraphId,
-    issueEntityId: normalizedGraphId ?? `reopen.graph-selection.${selection}`,
+    source: createGraphSelectionSource(selection),
     ...(normalizedGraphId && normalizedGraphId !== requestedGraphId
       ? { normalizedRequestedGraphId: normalizedGraphId }
       : {}),
+  };
+}
+
+function describeGraphSelectionIssue(input: {
+  selection: GraphSelectionSlot;
+  requestedGraphId: string;
+  resolvedGraphId: string;
+  normalizedRequestedGraphId?: string;
+}) {
+  const selectionLabel = input.selection === 'active' ? 'active' : 'reference';
+
+  if (input.normalizedRequestedGraphId && input.normalizedRequestedGraphId === input.resolvedGraphId) {
+    return {
+      title: `The saved ${selectionLabel} graph selection was normalized during reopen`,
+      detail: `Saved ${selectionLabel} graph selection "${input.requestedGraphId}" was normalized to "${input.normalizedRequestedGraphId}" during reopen.`,
+      userMessage: `The saved ${selectionLabel} graph selection was normalized to "${input.normalizedRequestedGraphId}" during reopen.`,
+    };
+  }
+
+  return {
+    title: `The saved ${selectionLabel} graph selection could not be restored`,
+    detail: `Saved ${selectionLabel} graph selection "${input.requestedGraphId}" could not be restored, so graph "${input.resolvedGraphId}" was selected instead.`,
+    userMessage: `The saved ${selectionLabel} graph selection could not be restored. Graph "${input.resolvedGraphId}" was selected instead.`,
   };
 }
 
@@ -247,13 +380,16 @@ function createRepairActions(input: {
     },
   ];
 
-  if (input.source.entityType === 'graph') {
+  const graphRepairTargetId =
+    input.graphId ?? (input.source.entityType === 'graph' ? input.source.entityId : undefined);
+
+  if ((input.source.entityType === 'graph' || input.source.entityType === 'graph-selection') && graphRepairTargetId) {
     repairActions.push({
       actionId: 'repair.focusGraph',
       label: 'Inspect graph',
       command: 'repair.focusGraph',
       args: {
-        graphId: input.graphId ?? input.source.entityId,
+        graphId: graphRepairTargetId,
       },
     });
   }
@@ -381,16 +517,29 @@ export function reopenPersistedWorkspaceRecord(
   const snapshotInput = snapshotEnvelopeSchema.parse(persisted.snapshot);
   const nextReopenIssueId = createReopenIssueIdFactory(collectExistingIssueIds(snapshotInput.issues));
   const localizedIssues: IssueRecord[] = [];
+  let persistentIssueMatches = new Map<string, IssueRecord>();
   let invalidDatasetCount = 0;
 
   const createIssue = (input: IssueFactoryInput) => {
-    const issueId = nextReopenIssueId();
+    const persistentIssueKey = buildPersistentReopenIssueKey({
+      kind: input.kind,
+      source: input.source,
+    });
+    const persistedIssue = persistentIssueMatches.get(persistentIssueKey);
+    const shouldReusePersistedIssue =
+      persistedIssue !== undefined && (persistedIssue.status === 'open' || persistedIssue.status === 'deferred');
+    const issueId = persistedIssue?.issueId ?? nextReopenIssueId();
+
+    if (persistedIssue) {
+      persistentIssueMatches.delete(persistentIssueKey);
+    }
+
     const nextIssue = issueRecordSchema.parse({
       issueId,
       kind: input.kind,
       severity: input.severity,
-      status: 'open',
-      detectedAt: startedAt,
+      status: shouldReusePersistedIssue ? persistedIssue.status : 'open',
+      detectedAt: shouldReusePersistedIssue ? persistedIssue.detectedAt : startedAt,
       source: input.source,
       title: input.title,
       detail: input.detail,
@@ -414,6 +563,32 @@ export function reopenPersistedWorkspaceRecord(
 
     return nextIssue;
   };
+  const parsedPersistedIssues = parseCollection(snapshotInput.issues, issueRecordSchema, (index, error, value) => {
+    createIssue({
+      kind: 'workspace.reopen.issue.invalid-contract',
+      severity: 'warning',
+      source: {
+        module: 'workspace-persistence',
+        entityType: 'issue-record',
+        entityId: extractEntityId(value, 'issueId', fallbackEntityId('issue', index)),
+      },
+      title: 'A saved issue record could not be reopened',
+      detail: `Issue entry ${index + 1} is invalid and was excluded from the reopened workspace.`,
+      userMessage: 'One saved issue record could not be reopened.',
+      diagnostics: {
+        index,
+        issues: asValidationMessages(error),
+      },
+    });
+  });
+  persistentIssueMatches = new Map(
+    parsedPersistedIssues
+      .filter((issue) => isPersistentReopenIssue(issue))
+      .map((issue) => [buildPersistentReopenIssueKey(issue), issue]),
+  );
+  const basePersistedIssues = parsedPersistedIssues.filter(
+    (issue) => !isTransientReopenIssue(issue) && !isPersistentReopenIssue(issue),
+  );
 
   let datasets = parseCollection(snapshotInput.datasets, datasetSchema, (index, error, value) => {
     invalidDatasetCount += 1;
@@ -434,6 +609,39 @@ export function reopenPersistedWorkspaceRecord(
       },
     });
   });
+  const persistedDatasetFileHandles = parsePersistedDatasetFileHandles(persisted.datasetFileHandles ?? []);
+
+  datasets.forEach((dataset) => {
+    if (!dataset.sourceFile) {
+      return;
+    }
+
+    const persistedHandle = persistedDatasetFileHandles.find((entry) => isCompatibleDatasetFileHandle(dataset, entry));
+
+    if (persistedHandle) {
+      return;
+    }
+
+    createIssue({
+      kind: 'workspace.reopen.dataset.missing-file-handle',
+      severity: 'warning',
+      source: {
+        module: 'workspace-persistence',
+        entityType: 'dataset',
+        entityId: dataset.datasetId,
+      },
+      title: 'A reopened dataset lost its source file handle',
+      detail: `Dataset "${dataset.displayName}" expects source file handle "${dataset.sourceFile.fileHandleToken}", but no compatible persisted handle was available during reopen.`,
+      userMessage:
+        `The source file handle for dataset "${dataset.sourceFile.fileName}" is missing. The dataset remains available, but it may need to be re-linked before source-backed repairs can continue.`,
+      diagnostics: {
+        datasetId: dataset.datasetId,
+        fileName: dataset.sourceFile.fileName,
+        fileHandleToken: dataset.sourceFile.fileHandleToken,
+      },
+    });
+  });
+
   const datasetIds = new Set(datasets.map((dataset) => dataset.datasetId));
   const datasetColumns = new Map(
     datasets.map((dataset) => [dataset.datasetId, new Set(dataset.columns.map((column) => column.columnId))]),
@@ -460,8 +668,121 @@ export function reopenPersistedWorkspaceRecord(
     });
   });
   const transforms =
-    invalidDatasetCount === 0 && availableDatasetColumnIds.size > 0
-      ? parsedTransforms
+    availableDatasetColumnIds.size > 0
+      ? (() => {
+          const retainedTransforms: typeof parsedTransforms = [];
+          const retainedTransformIds = new Set<string>();
+
+          parsedTransforms.forEach((transform) => {
+            const dependencyMetadata = transform.dependencyMetadata;
+
+            if (!dependencyMetadata) {
+              if (invalidDatasetCount > 0) {
+                createIssue({
+                  kind: 'workspace.reopen.transform.dataset-loss',
+                  severity: 'warning',
+                  source: {
+                    module: 'workspace-persistence',
+                    entityType: 'transform',
+                    entityId: transform.transformId,
+                  },
+                  title: 'A saved transform could not be reopened after dataset validation failed',
+                  detail: `Transform "${transform.transformId}" was excluded because dataset validation left reopen without enough metadata to confirm its dataset source safely.`,
+                  userMessage: 'One saved transform was excluded because the reopened dataset state is incomplete.',
+                  diagnostics: {
+                    transformId: transform.transformId,
+                    invalidDatasetCount,
+                    availableDatasetCount: datasets.length,
+                  },
+                });
+                return;
+              }
+
+              retainedTransforms.push(transform);
+              retainedTransformIds.add(transform.transformId);
+              return;
+            }
+
+            if (!datasetIds.has(dependencyMetadata.datasetId)) {
+              createIssue({
+                kind: 'workspace.reopen.transform.missing-dataset',
+                severity: 'warning',
+                source: {
+                  module: 'workspace-persistence',
+                  entityType: 'transform',
+                  entityId: transform.transformId,
+                },
+                title: 'A saved transform references an unavailable dataset',
+                detail: `Transform "${transform.transformId}" depends on dataset "${dependencyMetadata.datasetId}", which is unavailable after reopen validation.`,
+                userMessage: 'One saved transform references a dataset that is no longer available and was excluded from reopen state.',
+                diagnostics: {
+                  transformId: transform.transformId,
+                  datasetId: dependencyMetadata.datasetId,
+                },
+              });
+              return;
+            }
+
+            const missingUpstreamTransformIds = dependencyMetadata.upstreamTransformIds.filter(
+              (transformId) => !retainedTransformIds.has(transformId),
+            );
+
+            if (missingUpstreamTransformIds.length > 0) {
+              createIssue({
+                kind: 'workspace.reopen.transform.missing-upstream',
+                severity: 'warning',
+                source: {
+                  module: 'workspace-persistence',
+                  entityType: 'transform',
+                  entityId: transform.transformId,
+                },
+                title: 'A saved transform depends on an unavailable prior step',
+                detail: `Transform "${transform.transformId}" depends on earlier transform steps that could not be reopened safely.`,
+                userMessage: 'One saved transform depends on an unavailable earlier step and was excluded from reopen state.',
+                diagnostics: {
+                  transformId: transform.transformId,
+                  upstreamTransformIds: dependencyMetadata.upstreamTransformIds,
+                  missingUpstreamTransformIds,
+                },
+              });
+              return;
+            }
+
+            const availableColumns = datasetColumns.get(dependencyMetadata.datasetId) ?? new Set<string>();
+            const missingDependencies = dependencyMetadata.dependsOnColumnIds.filter(
+              (columnId) => !availableColumns.has(columnId),
+            );
+
+            if (missingDependencies.length > 0) {
+              createIssue({
+                kind: 'workspace.reopen.transform.missing-dependency',
+                severity: 'warning',
+                source: {
+                  module: 'workspace-persistence',
+                  entityType: 'transform',
+                  entityId: transform.transformId,
+                },
+                title: 'A saved transform references unavailable columns',
+                detail: `Transform "${transform.transformId}" depends on columns that are unavailable in the reopened workspace.`,
+                userMessage: 'One saved transform references unavailable columns and was excluded from reopen state.',
+                diagnostics: {
+                  transformId: transform.transformId,
+                  datasetId: dependencyMetadata.datasetId,
+                  missingDependencies,
+                },
+              });
+              return;
+            }
+
+            retainedTransforms.push(transform);
+            retainedTransformIds.add(transform.transformId);
+            dependencyMetadata.producesColumnIds.forEach((columnId) => {
+              availableColumns.add(columnId);
+            });
+          });
+
+          return retainedTransforms;
+        })()
       : parsedTransforms.filter((transform) => {
           createIssue({
             kind: 'workspace.reopen.transform.dataset-loss',
@@ -503,7 +824,10 @@ export function reopenPersistedWorkspaceRecord(
   });
   const formulaColumns = [] as typeof parsedFormulaColumns;
   const unresolvedFormulaColumns = [...parsedFormulaColumns];
-  const availableFormulaDependencyIds = new Set(availableDatasetColumnIds);
+  const availableFormulaDependencyIds = collectAvailableFormulaDependencyIds({
+    datasets,
+    transforms,
+  });
   let madeFormulaProgress = true;
 
   while (unresolvedFormulaColumns.length > 0 && madeFormulaProgress) {
@@ -567,25 +891,6 @@ export function reopenPersistedWorkspaceRecord(
       },
     });
   });
-  const parsedPersistedIssues = parseCollection(snapshotInput.issues, issueRecordSchema, (index, error, value) => {
-    createIssue({
-      kind: 'workspace.reopen.issue.invalid-contract',
-      severity: 'warning',
-      source: {
-        module: 'workspace-persistence',
-        entityType: 'issue-record',
-        entityId: extractEntityId(value, 'issueId', fallbackEntityId('issue', index)),
-      },
-      title: 'A saved issue record could not be reopened',
-      detail: `Issue entry ${index + 1} is invalid and was excluded from the reopened workspace.`,
-      userMessage: 'One saved issue record could not be reopened.',
-      diagnostics: {
-        index,
-        issues: asValidationMessages(error),
-      },
-    });
-  });
-  const persistedIssues = parsedPersistedIssues.filter((issue) => !isTransientReopenIssue(issue));
   const parsedGraphs = parseCollection(snapshotInput.graphDefinitions, graphDefinitionSchema, (index, error, value) => {
     createIssue({
       kind: 'workspace.reopen.graph.invalid-contract',
@@ -604,7 +909,10 @@ export function reopenPersistedWorkspaceRecord(
       },
     });
   });
-  let graphDefinitions = parsedGraphs.filter((graph) => {
+  const graphReopenState = parsedGraphs.reduce<{
+    graphDefinitions: GraphDefinition[];
+    recoverableGraphIds: Set<string>;
+  }>((state, graph) => {
     if (!datasetIds.has(graph.datasetId)) {
       createIssue({
         kind: 'workspace.reopen.graph.missing-dataset',
@@ -622,7 +930,7 @@ export function reopenPersistedWorkspaceRecord(
           datasetId: graph.datasetId,
         },
       });
-      return false;
+      return state;
     }
 
     const availableColumns = datasetColumns.get(graph.datasetId) ?? new Set<string>();
@@ -648,13 +956,60 @@ export function reopenPersistedWorkspaceRecord(
           missingColumns,
         },
       });
-      return false;
+      return state;
     }
 
-    return true;
-  });
+    const dataset = datasets.find((entry) => entry.datasetId === graph.datasetId);
 
-  if (graphDefinitions.length === 0) {
+    if (!dataset) {
+      return state;
+    }
+
+    const graphValidation = validateGraphComposition({
+      graph,
+      dataset,
+    });
+
+    if (graphValidation.blockedReasons.length > 0) {
+      const issue = createIssue({
+        kind: 'workspace.reopen.graph.incompatible-composition',
+        severity: 'blocking',
+        source: {
+          module: 'workspace-persistence',
+          entityType: 'graph',
+          entityId: graph.graphId,
+        },
+        title: 'A reopened graph is incompatible with the locked graph catalog',
+        detail: `Graph "${graph.title}" violates the locked graph catalog or current analytical context and was retained as a stale repair scope during reopen.`,
+        userMessage:
+          'One saved graph is incompatible with the current analytical context. It remains available as a stale repair scope while valid graphs stay usable.',
+        graphId: graph.graphId,
+        diagnostics: {
+          datasetId: graph.datasetId,
+          family: graphValidation.graph.family ?? null,
+          templateId: graphValidation.graph.templateId ?? null,
+          blockedReasons: graphValidation.blockedReasons,
+        },
+      });
+      state.graphDefinitions.push({
+        ...graphValidation.graph,
+        status: 'stale',
+        issueIds: [...new Set([...graphValidation.graph.issueIds, issue.issueId])],
+      });
+      return state;
+    }
+
+    state.graphDefinitions.push(graphValidation.graph);
+    state.recoverableGraphIds.add(graphValidation.graph.graphId);
+    return state;
+  }, {
+    graphDefinitions: [],
+    recoverableGraphIds: new Set<string>(),
+  });
+  let graphDefinitions = graphReopenState.graphDefinitions;
+  const recoverableGraphIds = graphReopenState.recoverableGraphIds;
+
+  if (recoverableGraphIds.size === 0) {
     const recoveryIssue = createIssue({
       kind: 'workspace.reopen.graph.none-recoverable',
       severity: 'blocking',
@@ -665,7 +1020,7 @@ export function reopenPersistedWorkspaceRecord(
       },
       title: 'Saved graphs could not be reopened',
       detail:
-        'All saved graph definitions were excluded during reopen validation. A placeholder recovery graph was created so the workspace can open in a blocked repair state.',
+        'All saved graph definitions failed reopen validation for active use. A placeholder recovery graph was created so the workspace can open in a blocked repair state.',
       userMessage:
         'Saved graphs could not be reopened. The workspace was opened in a blocked recovery state so you can inspect issues and repair the session.',
       graphId: createRecoveryGraphId(snapshotInput.workspaceId),
@@ -675,18 +1030,19 @@ export function reopenPersistedWorkspaceRecord(
       datasets = [createRecoveryDataset(snapshotInput.workspaceId)];
     }
 
-    graphDefinitions = [
-      createRecoveryGraph({
-        workspaceId: snapshotInput.workspaceId,
-        datasetId: datasets[0]?.datasetId ?? createRecoveryDatasetId(snapshotInput.workspaceId),
-        issueId: recoveryIssue.issueId,
-      }),
-    ];
+    const recoveryGraph = createRecoveryGraph({
+      workspaceId: snapshotInput.workspaceId,
+      datasetId: datasets[0]?.datasetId ?? createRecoveryDatasetId(snapshotInput.workspaceId),
+      issueId: recoveryIssue.issueId,
+    });
+
+    graphDefinitions = [...graphDefinitions, recoveryGraph];
+    recoverableGraphIds.add(recoveryGraph.graphId);
   }
 
-  const validGraphIds = new Set(graphDefinitions.map((graph) => graph.graphId));
+  const availableGraphIds = new Set(graphDefinitions.map((graph) => graph.graphId));
   const evidence = parsedEvidence.filter((entry) => {
-    if (validGraphIds.has(entry.graphId)) {
+    if (availableGraphIds.has(entry.graphId)) {
       return true;
     }
 
@@ -714,7 +1070,7 @@ export function reopenPersistedWorkspaceRecord(
   const requestedReferenceGraphSelection = normalizeGraphSelectionId(snapshotInput.referenceGraphId, 'reference');
   const activeGraphId = resolveGraphId(
     requestedActiveGraphSelection.resolutionCandidate,
-    [...validGraphIds],
+    [...recoverableGraphIds],
     requestedReferenceGraphSelection.resolutionCandidate,
   );
 
@@ -722,19 +1078,25 @@ export function reopenPersistedWorkspaceRecord(
     requestedActiveGraphSelection.normalizedRequestedGraphId
     || activeGraphId !== requestedActiveGraphSelection.resolutionCandidate
   ) {
+    const graphSelectionIssue = describeGraphSelectionIssue({
+      selection: requestedActiveGraphSelection.selection,
+      requestedGraphId: snapshotInput.activeGraphId,
+      resolvedGraphId: activeGraphId,
+      ...(requestedActiveGraphSelection.normalizedRequestedGraphId
+        ? { normalizedRequestedGraphId: requestedActiveGraphSelection.normalizedRequestedGraphId }
+        : {}),
+    });
+
     createIssue({
       kind: 'workspace.reopen.graph.invalid-selection',
       severity: 'warning',
-      source: {
-        module: 'workspace-persistence',
-        entityType: 'graph',
-        entityId: requestedActiveGraphSelection.issueEntityId,
-      },
-      title: 'The saved active graph could not be restored directly',
-      detail: `Active graph "${snapshotInput.activeGraphId}" could not be reopened, so a valid graph was selected instead.`,
-      userMessage: 'The previously active graph could not be restored directly. A valid graph was selected instead.',
+      source: requestedActiveGraphSelection.source,
+      title: graphSelectionIssue.title,
+      detail: graphSelectionIssue.detail,
+      userMessage: graphSelectionIssue.userMessage,
       graphId: activeGraphId,
       diagnostics: {
+        selection: requestedActiveGraphSelection.selection,
         requestedGraphId: snapshotInput.activeGraphId,
         ...(requestedActiveGraphSelection.normalizedRequestedGraphId
           ? { normalizedRequestedGraphId: requestedActiveGraphSelection.normalizedRequestedGraphId }
@@ -746,7 +1108,7 @@ export function reopenPersistedWorkspaceRecord(
 
   const referenceGraphId = resolveGraphId(
     requestedReferenceGraphSelection.resolutionCandidate,
-    [...validGraphIds],
+    [...recoverableGraphIds],
     activeGraphId,
   );
 
@@ -754,19 +1116,25 @@ export function reopenPersistedWorkspaceRecord(
     requestedReferenceGraphSelection.normalizedRequestedGraphId
     || referenceGraphId !== requestedReferenceGraphSelection.resolutionCandidate
   ) {
+    const graphSelectionIssue = describeGraphSelectionIssue({
+      selection: requestedReferenceGraphSelection.selection,
+      requestedGraphId: snapshotInput.referenceGraphId,
+      resolvedGraphId: referenceGraphId,
+      ...(requestedReferenceGraphSelection.normalizedRequestedGraphId
+        ? { normalizedRequestedGraphId: requestedReferenceGraphSelection.normalizedRequestedGraphId }
+        : {}),
+    });
+
     createIssue({
       kind: 'workspace.reopen.graph.invalid-selection',
       severity: 'warning',
-      source: {
-        module: 'workspace-persistence',
-        entityType: 'graph',
-        entityId: requestedReferenceGraphSelection.issueEntityId,
-      },
-      title: 'The saved reference graph could not be restored directly',
-      detail: `Reference graph "${snapshotInput.referenceGraphId}" could not be reopened, so a valid graph was selected instead.`,
-      userMessage: 'The previously selected reference graph could not be restored directly. A valid graph was selected instead.',
+      source: requestedReferenceGraphSelection.source,
+      title: graphSelectionIssue.title,
+      detail: graphSelectionIssue.detail,
+      userMessage: graphSelectionIssue.userMessage,
       graphId: referenceGraphId,
       diagnostics: {
+        selection: requestedReferenceGraphSelection.selection,
         requestedGraphId: snapshotInput.referenceGraphId,
         ...(requestedReferenceGraphSelection.normalizedRequestedGraphId
           ? { normalizedRequestedGraphId: requestedReferenceGraphSelection.normalizedRequestedGraphId }
@@ -960,26 +1328,40 @@ export function reopenPersistedWorkspaceRecord(
         includedReferenceGraphId: referenceGraphId,
         manifestVersion: '1.0.0',
       };
-  const allIssues = [...persistedIssues, ...localizedIssues];
+  const unmatchedPersistentIssues = [...persistentIssueMatches.values()].filter(
+    (issue) => issue.status === 'open' || issue.status === 'deferred',
+  );
+  const allIssues = [...basePersistedIssues, ...unmatchedPersistentIssues, ...localizedIssues];
   const previousIssueIds = collectExistingIssueIds(snapshotInput.issues);
   const hasPreviousBlockingIssue =
     baseReadiness.blockingIssueIds.some((issueId) => previousIssueIds.has(issueId)) ||
     parsedPersistedIssues.some((issue) => issue.severity === 'blocking' && issue.status !== 'resolved');
+  const hasPreviousWarningIssue =
+    baseReadiness.warningIssueIds.some((issueId) => previousIssueIds.has(issueId)) ||
+    parsedPersistedIssues.some((issue) => issue.severity === 'warning' && issue.status !== 'resolved');
   const validIssueIds = new Set(allIssues.map((issue) => issue.issueId));
+  const openBlockingIssueIds = new Set(
+    allIssues.filter((issue) => issue.severity === 'blocking' && issue.status !== 'resolved').map((issue) => issue.issueId),
+  );
+  const openWarningIssueIds = new Set(
+    allIssues.filter((issue) => issue.severity === 'warning' && issue.status !== 'resolved').map((issue) => issue.issueId),
+  );
   const validEvidenceIds = new Set(evidence.map((entry) => entry.evidenceId));
   const blockingIssueIds = new Set([
     ...baseReadiness.blockingIssueIds.filter(
-      (issueId) => !previousIssueIds.has(issueId) || validIssueIds.has(issueId),
+      (issueId) => !previousIssueIds.has(issueId) || openBlockingIssueIds.has(issueId),
     ),
-    ...allIssues.filter((issue) => issue.severity === 'blocking' && issue.status !== 'resolved').map((issue) => issue.issueId),
+    ...openBlockingIssueIds,
   ]);
   const warningIssueIds = new Set([
     ...baseReadiness.warningIssueIds.filter(
-      (issueId) => !previousIssueIds.has(issueId) || validIssueIds.has(issueId),
+      (issueId) => !previousIssueIds.has(issueId) || openWarningIssueIds.has(issueId),
     ),
-    ...allIssues.filter((issue) => issue.severity === 'warning' && issue.status !== 'resolved').map((issue) => issue.issueId),
+    ...openWarningIssueIds,
   ]);
   const hasExplicitBlockingState = baseReadiness.status === 'blocked' && !hasPreviousBlockingIssue;
+  const hasExplicitWarningState =
+    baseReadiness.status === 'warning' && baseReadiness.provenanceCompleteness === 'complete' && !hasPreviousWarningIssue;
   const snapshot = workspaceSnapshotSchema.parse({
     workspaceId: snapshotInput.workspaceId,
     workspaceFormatVersion: snapshotInput.workspaceFormatVersion,
@@ -1029,7 +1411,7 @@ export function reopenPersistedWorkspaceRecord(
         blockingIssueIds.size > 0 || hasExplicitBlockingState
           ? 'blocked'
           : warningIssueIds.size > 0 ||
-              baseReadiness.status === 'warning' ||
+              hasExplicitWarningState ||
               baseReadiness.provenanceCompleteness !== 'complete'
             ? 'warning'
             : 'ready',
@@ -1085,6 +1467,10 @@ export async function reopenWorkspaceKernel(input: {
     kernelStore: createWorkspaceKernelStore({
       snapshot: report.snapshot,
       ledger: report.ledger,
+      datasetFileHandles: retainDatasetFileHandlesForSnapshot(
+        report.snapshot,
+        parsePersistedDatasetFileHandles(record.datasetFileHandles ?? []),
+      ),
     }),
     report,
   };

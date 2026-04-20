@@ -6,6 +6,7 @@ import { graphDefinitionFixture } from '../../test/fixtures/workspace/graph-defi
 import { workspaceLedgerFixture } from '../../test/fixtures/workspace/workspace-ledger.fixture';
 import { workspaceSnapshotFixture } from '../../test/fixtures/workspace/workspace-snapshot.fixture';
 import {
+  collectAvailableFormulaDependencyIds,
   reopenPersistedWorkspaceRecord,
   type WorkspaceCompatibilityEnvelope,
 } from './reopen-workspace';
@@ -160,7 +161,7 @@ describe('reopenPersistedWorkspaceRecord', () => {
       nowMs: () => 6000,
     });
 
-    expect(reopened.snapshot.transformPipeline).toEqual([]);
+    expect(reopened.snapshot.transformPipeline).toEqual(workspaceSnapshotFixture.transformPipeline);
     expect(reopened.snapshot.formulaColumns).toEqual(workspaceSnapshotFixture.formulaColumns);
     expect(reopened.snapshot.evidence).toEqual(workspaceSnapshotFixture.evidence);
     expect(reopened.localizedIssues).toEqual(
@@ -170,12 +171,220 @@ describe('reopenPersistedWorkspaceRecord', () => {
         }),
         expect.objectContaining({
           kind: 'workspace.reopen.transform.dataset-loss',
+          source: expect.objectContaining({
+            entityType: 'transform',
+            entityId: 'tf_missing_column',
+          }),
         }),
         expect.objectContaining({
           kind: 'workspace.reopen.formula.missing-dependency',
         }),
         expect.objectContaining({
           kind: 'workspace.reopen.evidence.orphaned-graph',
+        }),
+      ]),
+    );
+  });
+
+  it('preserves transforms on surviving datasets when unrelated dataset entries fail validation', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:32:06Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [
+          ...workspaceSnapshotFixture.datasets,
+          {
+            datasetId: 'ds_invalid',
+            displayName: 'broken.csv',
+            sourceKind: 'csv',
+            fingerprint: 'sha256:dataset-invalid',
+            rowCount: 4,
+            columnCount: 1,
+            columns: [
+              {
+                columnId: '',
+                sourceName: 'Broken',
+                dataType: 'string',
+                semanticRole: 'x',
+                unit: null,
+                status: 'confirmed',
+              },
+            ],
+          },
+        ],
+        transformPipeline: [
+          ...structuredClone(workspaceSnapshotFixture.transformPipeline),
+          {
+            transformId: 'tf_invalid_dataset_filter',
+            kind: 'filter',
+            status: 'applied',
+            order: 2,
+            expression: "brokenColumn == 'PASS'",
+            dependencyMetadata: {
+              datasetId: 'ds_invalid',
+              dependsOnColumnIds: ['brokenColumn'],
+              producesColumnIds: [],
+              upstreamTransformIds: [],
+            },
+          },
+        ],
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:32:07Z',
+      nowMs: () => 6025,
+    });
+
+    expect(reopened.snapshot.transformPipeline).toEqual(workspaceSnapshotFixture.transformPipeline);
+    expect(reopened.localizedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.dataset.invalid-contract',
+        }),
+        expect.objectContaining({
+          kind: 'workspace.reopen.transform.missing-dataset',
+          source: expect.objectContaining({
+            entityType: 'transform',
+            entityId: 'tf_invalid_dataset_filter',
+          }),
+        }),
+      ]),
+    );
+    expect(reopened.localizedIssues).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.transform.dataset-loss',
+          source: expect.objectContaining({
+            entityType: 'transform',
+            entityId: 'tf_filter_high_quality',
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('localizes missing persisted file handles to the affected dataset while preserving reopen state', () => {
+    const rawRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:32:10Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [
+          {
+            ...structuredClone(workspaceSnapshotFixture.datasets[0]),
+            sourceFile: {
+              fileName: 'battery-cycles.csv',
+              fileHandleToken: 'dataset.ds_main.source-file',
+            },
+          },
+        ],
+      },
+      datasetFileHandles: [],
+      ledger: structuredClone(workspaceLedgerFixture),
+    } as PersistedWorkspaceRecord;
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:32:15Z',
+      nowMs: () => 6100,
+    });
+
+    expect(reopened.snapshot.datasets).toEqual([
+      expect.objectContaining({
+        datasetId: 'ds_main',
+      }),
+    ]);
+    expect(reopened.localizedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.dataset.missing-file-handle',
+          source: expect.objectContaining({
+            entityType: 'dataset',
+            entityId: 'ds_main',
+          }),
+          userMessage:
+            'The source file handle for dataset "battery-cycles.csv" is missing. The dataset remains available, but it may need to be re-linked before source-backed repairs can continue.',
+          diagnostics: expect.objectContaining({
+            datasetId: 'ds_main',
+            fileName: 'battery-cycles.csv',
+            fileHandleToken: 'dataset.ds_main.source-file',
+          }),
+          repairActions: expect.arrayContaining([
+            expect.objectContaining({
+              command: 'repair.focusDataset',
+              args: expect.objectContaining({
+                datasetId: 'ds_main',
+              }),
+            }),
+          ]),
+        }),
+      ]),
+    );
+  });
+
+  it('treats token-only dataset file-handle matches as incompatible when dataset metadata drifted', () => {
+    const rawRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:32:20Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [
+          {
+            ...structuredClone(workspaceSnapshotFixture.datasets[0]),
+            sourceFile: {
+              fileName: 'battery-cycles.csv',
+              fileHandleToken: 'dataset.ds_main.source-file',
+            },
+          },
+        ],
+      },
+      datasetFileHandles: [
+        {
+          datasetId: 'ds_other',
+          fileName: 'different-source.csv',
+          fileHandleToken: 'dataset.ds_main.source-file',
+          handle: {
+            name: 'different-source.csv',
+            async getFile() {
+              return {
+                name: 'different-source.csv',
+              } as File;
+            },
+            async createWritable() {
+              return {
+                async write() {},
+                async close() {},
+              };
+            },
+          },
+        },
+      ],
+      ledger: structuredClone(workspaceLedgerFixture),
+    } as PersistedWorkspaceRecord;
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:32:25Z',
+      nowMs: () => 6150,
+    });
+
+    expect(reopened.localizedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.dataset.missing-file-handle',
+          source: expect.objectContaining({
+            entityType: 'dataset',
+            entityId: 'ds_main',
+          }),
+          diagnostics: expect.objectContaining({
+            datasetId: 'ds_main',
+            fileName: 'battery-cycles.csv',
+            fileHandleToken: 'dataset.ds_main.source-file',
+          }),
         }),
       ]),
     );
@@ -267,12 +476,16 @@ describe('reopenPersistedWorkspaceRecord', () => {
         expect.objectContaining({
           kind: 'workspace.reopen.graph.invalid-selection',
           source: expect.objectContaining({
-            entityType: 'graph',
-            entityId: 'graph_invalid_id',
+            entityType: 'graph-selection',
+            entityId: 'active-graph-selection',
           }),
           contextRef: expect.objectContaining({
             graphId: 'graph_scatter_secondary',
           }),
+          detail:
+            'Saved active graph selection "graph invalid/id" could not be restored, so graph "graph_scatter_secondary" was selected instead.',
+          userMessage:
+            'The saved active graph selection could not be restored. Graph "graph_scatter_secondary" was selected instead.',
           repairActions: expect.arrayContaining([
             expect.objectContaining({
               command: 'repair.focusGraph',
@@ -282,6 +495,7 @@ describe('reopenPersistedWorkspaceRecord', () => {
             }),
           ]),
           diagnostics: expect.objectContaining({
+            selection: 'active',
             requestedGraphId: 'graph invalid/id',
             resolvedGraphId: 'graph_scatter_secondary',
           }),
@@ -325,13 +539,18 @@ describe('reopenPersistedWorkspaceRecord', () => {
         expect.objectContaining({
           kind: 'workspace.reopen.graph.invalid-selection',
           source: expect.objectContaining({
-            entityType: 'graph',
-            entityId: 'graph_scatter_secondary',
+            entityType: 'graph-selection',
+            entityId: 'active-graph-selection',
           }),
           contextRef: expect.objectContaining({
             graphId: 'graph_scatter_secondary',
           }),
+          detail:
+            'Saved active graph selection "graph scatter secondary" was normalized to "graph_scatter_secondary" during reopen.',
+          userMessage:
+            'The saved active graph selection was normalized to "graph_scatter_secondary" during reopen.',
           diagnostics: expect.objectContaining({
+            selection: 'active',
             requestedGraphId: 'graph scatter secondary',
             normalizedRequestedGraphId: 'graph_scatter_secondary',
             resolvedGraphId: 'graph_scatter_secondary',
@@ -376,13 +595,18 @@ describe('reopenPersistedWorkspaceRecord', () => {
         expect.objectContaining({
           kind: 'workspace.reopen.graph.invalid-selection',
           source: expect.objectContaining({
-            entityType: 'graph',
-            entityId: 'graph_capacity_fade',
+            entityType: 'graph-selection',
+            entityId: 'reference-graph-selection',
           }),
           contextRef: expect.objectContaining({
             graphId: 'graph_capacity_fade',
           }),
+          detail:
+            'Saved reference graph selection "graph capacity fade" was normalized to "graph_capacity_fade" during reopen.',
+          userMessage:
+            'The saved reference graph selection was normalized to "graph_capacity_fade" during reopen.',
           diagnostics: expect.objectContaining({
+            selection: 'reference',
             requestedGraphId: 'graph capacity fade',
             normalizedRequestedGraphId: 'graph_capacity_fade',
             resolvedGraphId: 'graph_capacity_fade',
@@ -485,6 +709,580 @@ describe('reopenPersistedWorkspaceRecord', () => {
               }),
             }),
           ]),
+        }),
+      ]),
+    );
+  });
+
+  it('uses persisted transform dependency metadata to localize stale transform steps without dropping unaffected legacy steps', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:33:10Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        transformPipeline: [
+          {
+            ...structuredClone(workspaceSnapshotFixture.transformPipeline[0]),
+            dependencyMetadata: {
+              datasetId: 'ds_main',
+              dependsOnColumnIds: ['capacityRetention'],
+              producesColumnIds: [],
+              upstreamTransformIds: [],
+            },
+          },
+          {
+            transformId: 'tf_missing_dependency',
+            kind: 'derive-column',
+            status: 'applied',
+            order: 2,
+            expression: 'missingColumn * 2',
+            dependencyMetadata: {
+              datasetId: 'ds_main',
+              dependsOnColumnIds: ['missingColumn'],
+              producesColumnIds: ['missingDerived'],
+              upstreamTransformIds: [],
+            },
+          },
+          {
+            transformId: 'tf_missing_upstream',
+            kind: 'derive-column',
+            status: 'applied',
+            order: 3,
+            expression: 'missingDerived * 3',
+            dependencyMetadata: {
+              datasetId: 'ds_main',
+              dependsOnColumnIds: ['missingDerived'],
+              producesColumnIds: ['missingUpstreamDerived'],
+              upstreamTransformIds: ['tf_missing_dependency'],
+            },
+          },
+          {
+            transformId: 'tf_legacy_expression_only',
+            kind: 'filter',
+            status: 'applied',
+            order: 4,
+            expression: "qualityFlag == 'PASS'",
+          },
+        ],
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:33:15Z',
+      nowMs: () => 6450,
+    });
+
+    expect(reopened.snapshot.transformPipeline.map((transform) => transform.transformId)).toEqual([
+      'tf_filter_high_quality',
+      'tf_legacy_expression_only',
+    ]);
+    expect(reopened.localizedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.transform.missing-dependency',
+          source: expect.objectContaining({
+            entityType: 'transform',
+            entityId: 'tf_missing_dependency',
+          }),
+          repairActions: expect.arrayContaining([
+            expect.objectContaining({
+              command: 'repair.focusTransform',
+              args: expect.objectContaining({
+                transformId: 'tf_missing_dependency',
+              }),
+            }),
+          ]),
+        }),
+        expect.objectContaining({
+          kind: 'workspace.reopen.transform.missing-upstream',
+          source: expect.objectContaining({
+            entityType: 'transform',
+            entityId: 'tf_missing_upstream',
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('treats retained transform outputs as available formula dependencies during reopen', () => {
+    const availableDependencyIds = collectAvailableFormulaDependencyIds({
+      datasets: workspaceSnapshotFixture.datasets,
+      transforms: [
+        ...structuredClone(workspaceSnapshotFixture.transformPipeline),
+        {
+          transformId: 'tf_derived_quality_band',
+          kind: 'derive-column',
+          status: 'applied',
+          order: 2,
+          expression: 'capacityRetention > 0.92',
+          dependencyMetadata: {
+            datasetId: 'ds_main',
+            dependsOnColumnIds: ['capacityRetention'],
+            producesColumnIds: ['qualityBand'],
+            upstreamTransformIds: ['tf_filter_high_quality'],
+          },
+        },
+      ],
+    });
+
+    expect(availableDependencyIds.has('capacityRetention')).toBe(true);
+    expect(availableDependencyIds.has('qualityBand')).toBe(true);
+  });
+
+  it('retains downstream transforms when upstream retained steps produce their required columns', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:33:18Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        transformPipeline: [
+          {
+            transformId: 'tf_derive_quality_band',
+            kind: 'derive-column',
+            status: 'applied',
+            order: 1,
+            expression: 'capacityRetention > 0.92',
+            dependencyMetadata: {
+              datasetId: 'ds_main',
+              dependsOnColumnIds: ['capacityRetention'],
+              producesColumnIds: ['qualityBand'],
+              upstreamTransformIds: [],
+            },
+          },
+          {
+            transformId: 'tf_filter_quality_band',
+            kind: 'filter',
+            status: 'applied',
+            order: 2,
+            expression: "qualityBand == 'high'",
+            dependencyMetadata: {
+              datasetId: 'ds_main',
+              dependsOnColumnIds: ['qualityBand'],
+              producesColumnIds: [],
+              upstreamTransformIds: ['tf_derive_quality_band'],
+            },
+          },
+        ],
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:33:19Z',
+      nowMs: () => 6475,
+    });
+
+    expect(reopened.snapshot.transformPipeline.map((transform) => transform.transformId)).toEqual([
+      'tf_derive_quality_band',
+      'tf_filter_quality_band',
+    ]);
+    expect(reopened.localizedIssues).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.transform.missing-dependency',
+          source: expect.objectContaining({
+            entityType: 'transform',
+            entityId: 'tf_filter_quality_band',
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('infers catalog metadata for legacy graphs and retains blocked compositions as stale repair scopes', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:33:20Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        graphDefinitions: [
+          {
+            ...structuredClone(graphDefinitionFixture),
+            issueIds: [],
+            evidenceIds: [],
+          },
+          {
+            ...structuredClone(graphDefinitionFixture),
+            graphId: 'graph_bar_regression',
+            title: 'Bar With Regression',
+            status: 'candidate',
+            marks: ['bar'],
+            roleAssignments: {
+              x: ['temperatureBand'],
+              y: ['capacityRetention'],
+              color: [],
+              size: [],
+              facetRow: [],
+              facetColumn: [],
+            },
+            overlays: [
+              {
+                overlayId: 'ov_linear_fit_bar',
+                kind: 'regression',
+                method: 'linear',
+                status: 'ready',
+                catalogOverlayId: 'regression_linear',
+              },
+            ],
+            family: 'bar',
+            templateId: 'tpl_bar_grouped_compare',
+            issueIds: [],
+            evidenceIds: [],
+          },
+        ],
+        activeGraphId: 'graph_bar_regression',
+        referenceGraphId: 'graph_capacity_fade',
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:33:25Z',
+      nowMs: () => 6500,
+    });
+
+    expect(reopened.snapshot.graphDefinitions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          graphId: 'graph_capacity_fade',
+          family: 'scatter',
+          templateId: 'tpl_scatter_regression',
+          overlays: [
+            expect.objectContaining({
+              overlayId: 'ov_linear_fit',
+              catalogOverlayId: 'regression_linear',
+            }),
+          ],
+        }),
+        expect.objectContaining({
+          graphId: 'graph_bar_regression',
+          status: 'stale',
+          family: 'bar',
+          templateId: 'tpl_bar_grouped_compare',
+        }),
+      ]),
+    );
+    expect(reopened.snapshot.activeGraphId).toBe('graph_capacity_fade');
+    expect(reopened.localizedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.graph.incompatible-composition',
+          source: expect.objectContaining({
+            entityType: 'graph',
+            entityId: 'graph_bar_regression',
+          }),
+          contextRef: expect.objectContaining({
+            graphId: 'graph_bar_regression',
+          }),
+          repairActions: expect.arrayContaining([
+            expect.objectContaining({
+              command: 'repair.focusGraph',
+              args: expect.objectContaining({
+                graphId: 'graph_bar_regression',
+              }),
+            }),
+          ]),
+          diagnostics: expect.objectContaining({
+            family: 'bar',
+            blockedReasons: expect.arrayContaining([
+              expect.stringContaining('regression_linear'),
+            ]),
+          }),
+        }),
+      ]),
+    );
+    expect(
+      reopened.snapshot.graphDefinitions.find((graph) => graph.graphId === 'graph_bar_regression')?.issueIds,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^workspace\.reopen\./),
+      ]),
+    );
+  });
+
+  it('keeps legacy binned-bar histograms that omit persisted family and template metadata', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:33:30Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        graphDefinitions: [
+          {
+            ...structuredClone(graphDefinitionFixture),
+            issueIds: [],
+            evidenceIds: [],
+          },
+          {
+            graphId: 'graph_legacy_histogram',
+            title: 'Legacy Histogram',
+            status: 'candidate',
+            datasetId: 'ds_main',
+            roleAssignments: {
+              x: ['capacityRetention'],
+              y: [],
+              color: [],
+              size: [],
+              facetRow: [],
+              facetColumn: [],
+            },
+            marks: ['binned-bar'],
+            overlays: [
+              {
+                overlayId: 'ov_reference_line_histogram',
+                kind: 'reference',
+                method: 'line',
+                status: 'ready',
+              },
+            ],
+            presentation: {
+              xAxisLabel: 'Capacity Retention (%)',
+              yAxisLabel: 'Count',
+              legendPosition: 'right',
+            },
+            issueIds: [],
+            evidenceIds: [],
+          },
+        ],
+        activeGraphId: 'graph_legacy_histogram',
+        referenceGraphId: 'graph_capacity_fade',
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:33:35Z',
+      nowMs: () => 6750,
+    });
+
+    expect(reopened.snapshot.activeGraphId).toBe('graph_legacy_histogram');
+    expect(reopened.snapshot.graphDefinitions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          graphId: 'graph_legacy_histogram',
+          family: 'histogram',
+          templateId: 'tpl_histogram_distribution',
+          overlays: [
+            expect.objectContaining({
+              overlayId: 'ov_reference_line_histogram',
+              catalogOverlayId: 'reference_line',
+            }),
+          ],
+        }),
+      ]),
+    );
+    expect(reopened.localizedIssues).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.graph.incompatible-composition',
+          source: expect.objectContaining({
+            entityType: 'graph',
+            entityId: 'graph_legacy_histogram',
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('derives overlay catalog ids from overlay semantics when persisted metadata is contradictory', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:33:40Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        graphDefinitions: [
+          {
+            ...structuredClone(graphDefinitionFixture),
+            graphId: 'graph_reference_overlay_semantics',
+            title: 'Reference Overlay Semantics',
+            status: 'candidate',
+            overlays: [
+              {
+                overlayId: 'ov_reference_line_semantics',
+                kind: 'reference',
+                method: 'line',
+                status: 'ready',
+                catalogOverlayId: 'regression_linear',
+              },
+            ],
+            issueIds: [],
+            evidenceIds: [],
+          },
+        ],
+        activeGraphId: 'graph_reference_overlay_semantics',
+        referenceGraphId: 'graph_reference_overlay_semantics',
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:33:45Z',
+      nowMs: () => 6900,
+    });
+
+    expect(reopened.snapshot.graphDefinitions).toEqual([
+      expect.objectContaining({
+        graphId: 'graph_reference_overlay_semantics',
+        overlays: [
+          expect.objectContaining({
+            overlayId: 'ov_reference_line_semantics',
+            catalogOverlayId: 'reference_line',
+          }),
+        ],
+      }),
+    ]);
+    expect(reopened.localizedIssues).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.graph.incompatible-composition',
+          source: expect.objectContaining({
+            entityType: 'graph',
+            entityId: 'graph_reference_overlay_semantics',
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('rejects overlays whose persisted catalog ids contradict unsupported saved semantics', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:33:42Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        graphDefinitions: [
+          {
+            ...structuredClone(graphDefinitionFixture),
+            graphId: 'graph_invalid_regression_overlay',
+            title: 'Unsupported Regression Overlay',
+            status: 'candidate',
+            overlays: [
+              {
+                overlayId: 'ov_quadratic_fit',
+                kind: 'regression',
+                method: 'quadratic',
+                status: 'ready',
+                catalogOverlayId: 'regression_linear',
+              },
+            ],
+            issueIds: [],
+            evidenceIds: [],
+          },
+        ],
+        activeGraphId: 'graph_invalid_regression_overlay',
+        referenceGraphId: 'graph_invalid_regression_overlay',
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:33:43Z',
+      nowMs: () => 6925,
+    });
+
+    expect(reopened.snapshot.graphDefinitions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          graphId: 'graph_invalid_regression_overlay',
+          status: 'stale',
+          overlays: [
+            expect.not.objectContaining({
+              catalogOverlayId: 'regression_linear',
+            }),
+          ],
+        }),
+      ]),
+    );
+    expect(reopened.localizedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.graph.incompatible-composition',
+          source: expect.objectContaining({
+            entityType: 'graph',
+            entityId: 'graph_invalid_regression_overlay',
+          }),
+          diagnostics: expect.objectContaining({
+            blockedReasons: expect.arrayContaining([
+              expect.stringContaining('locked MVP overlay catalog'),
+            ]),
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('rejects histograms that attempt faceting in the locked catalog', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:33:44Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        graphDefinitions: [
+          {
+            graphId: 'graph_faceted_histogram',
+            title: 'Faceted Histogram',
+            status: 'candidate',
+            datasetId: 'ds_main',
+            family: 'histogram',
+            templateId: 'tpl_histogram_distribution',
+            roleAssignments: {
+              x: ['capacityRetention'],
+              y: [],
+              color: [],
+              size: [],
+              facetRow: ['temperatureBand'],
+              facetColumn: [],
+            },
+            marks: ['binned-bar'],
+            overlays: [],
+            presentation: {
+              xAxisLabel: 'Capacity Retention (%)',
+              yAxisLabel: 'Count',
+              legendPosition: 'right',
+            },
+            issueIds: [],
+            evidenceIds: [],
+          },
+        ],
+        activeGraphId: 'graph_faceted_histogram',
+        referenceGraphId: 'graph_faceted_histogram',
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:33:45Z',
+      nowMs: () => 6950,
+    });
+
+    expect(reopened.snapshot.graphDefinitions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          graphId: 'graph_faceted_histogram',
+          status: 'stale',
+        }),
+      ]),
+    );
+    expect(reopened.localizedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.graph.incompatible-composition',
+          source: expect.objectContaining({
+            entityType: 'graph',
+            entityId: 'graph_faceted_histogram',
+          }),
+          diagnostics: expect.objectContaining({
+            blockedReasons: expect.arrayContaining([
+              expect.stringContaining('cannot use row or column faceting'),
+            ]),
+          }),
         }),
       ]),
     );

@@ -76,6 +76,24 @@ Requirements: FR46, FR47, FR52, NFR7-NFR10
 
 **Acceptance Criteria**
 
-1. Given a reopened workspace contains a stale formula, broken transform, or incompatible graph layer, when validation completes, then each broken element is listed explicitly with scope and impact.
+1. Given a reopened workspace contains a stale formula, invalid saved graph selection, saved issue-record or ledger drift, missing file handle, or another currently deterministically detectable localized reopen failure, when validation completes, then each broken element or failure surface is listed explicitly with scope and impact.
 2. Given at least one issue is detected, when the user continues into the workspace, then valid data, graphs, and controls remain available while repair entry points stay attached to the broken items.
 3. Given a repair is deferred, when the workspace remains open, then the unresolved issue persists in trust state and handoff readiness rather than disappearing from view.
+
+Scope note: Story 1.5 is narrowed to currently deterministically detectable reopen failures. Semantic transform reopen validation and incompatible graph-composition or layer reopen validation are deferred to Story 1.6.
+
+## Story 1.6: Complete Reopen Validation for Transforms and Graph Compositions
+
+As a user,
+I want reopened workspaces to localize stale transforms and incompatible graph compositions precisely,
+so that I can trust which analytical elements are still valid before I continue or hand off the workspace.
+
+Dependencies: Stories 1.2-1.5
+Requirements: FR46, FR47, FR52, NFR7-NFR10, core graph catalog, reopen validation architecture
+
+**Acceptance Criteria**
+
+1. Given reopen validation needs transform semantics beyond a bare saved expression, when a workspace is saved and reopened, then the snapshot and validation contract preserve enough transform dependency metadata to detect and localize stale or invalid saved transform steps.
+2. Given a reopened workspace contains a saved graph layer or overlay that violates the locked graph catalog or current analytical context, when reopen validation runs, then each incompatible composition is surfaced as a localized issue record attached to the affected graph scope while the last valid graph remains usable.
+3. Given an older or partially valid workspace is reopened, when the expanded validation rules run, then migrations and compatibility handling avoid false positives and preserve unaffected valid state, repair actions, and readiness summaries.
+4. Given transform or graph-composition reopen issues are deferred or resolved, when repair selectors and readiness surfaces update, then those issue states persist or clear consistently across reopen, continued work, and later handoff checks.

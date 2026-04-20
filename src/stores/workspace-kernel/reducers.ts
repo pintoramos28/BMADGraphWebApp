@@ -1,4 +1,6 @@
 import { workspaceSnapshotSchema } from '../../schemas/workspace';
+import type { PersistedDatasetFileHandle } from '../../services/persistence';
+import { synchronizeDatasetSourceFileMetadata } from './dataset-file-handle-metadata';
 import { createDefaultMutationMeta, createLedgerEntry, initializeWorkspaceVersion, validateLedgerOrdering } from './events';
 import type {
   ApplyWorkerEnvelopeResult,
@@ -12,6 +14,12 @@ import type {
 } from './types';
 import type { IssueRecord, WorkspaceSnapshot } from '../../schemas/workspace';
 import type { WorkerMessageEnvelope } from '../../schemas/worker';
+
+function clonePersistedDatasetFileHandle(entry: PersistedDatasetFileHandle): PersistedDatasetFileHandle {
+  return {
+    ...entry,
+  };
+}
 
 function commitSnapshotMutation(
   data: WorkspaceKernelData,
@@ -46,6 +54,7 @@ function commitSnapshotMutation(
   return {
     snapshot: nextSnapshot,
     workspaceVersion: nextWorkspaceVersion,
+    datasetFileHandles: data.datasetFileHandles,
     pendingWorkerRequests: data.pendingWorkerRequests,
     ledger: [
       ...data.ledger,
@@ -64,31 +73,37 @@ function commitSnapshotMutation(
 function reconcileReadinessState(snapshot: WorkspaceSnapshot, issues: IssueRecord[]) {
   const { readiness } = snapshot;
   const previousIssueIds = new Set(snapshot.issues.map((issue) => issue.issueId));
-  const validIssueIds = new Set(issues.map((issue) => issue.issueId));
   const hasPreviousBlockingIssue = snapshot.issues.some(
     (issue) => issue.status !== 'resolved' && issue.severity === 'blocking',
+  );
+  const hasPreviousWarningIssue = snapshot.issues.some(
+    (issue) => issue.status !== 'resolved' && issue.severity === 'warning',
+  );
+  const openBlockingIssueIds = new Set(
+    issues.filter((issue) => issue.status !== 'resolved' && issue.severity === 'blocking').map((issue) => issue.issueId),
+  );
+  const openWarningIssueIds = new Set(
+    issues.filter((issue) => issue.status !== 'resolved' && issue.severity === 'warning').map((issue) => issue.issueId),
   );
   const blockingIssueIds = [
     ...new Set([
       ...readiness.blockingIssueIds.filter(
-        (issueId) => !previousIssueIds.has(issueId) || validIssueIds.has(issueId),
+        (issueId) => !previousIssueIds.has(issueId) || openBlockingIssueIds.has(issueId),
       ),
-      ...issues
-        .filter((issue) => issue.status !== 'resolved' && issue.severity === 'blocking')
-        .map((issue) => issue.issueId),
+      ...openBlockingIssueIds,
     ]),
   ];
   const warningIssueIds = [
     ...new Set([
       ...readiness.warningIssueIds.filter(
-        (issueId) => !previousIssueIds.has(issueId) || validIssueIds.has(issueId),
+        (issueId) => !previousIssueIds.has(issueId) || openWarningIssueIds.has(issueId),
       ),
-      ...issues
-        .filter((issue) => issue.status !== 'resolved' && issue.severity === 'warning')
-        .map((issue) => issue.issueId),
+      ...openWarningIssueIds,
     ]),
   ];
   const hasExplicitBlockingState = readiness.status === 'blocked' && !hasPreviousBlockingIssue;
+  const hasExplicitWarningState =
+    readiness.status === 'warning' && readiness.provenanceCompleteness === 'complete' && !hasPreviousWarningIssue;
 
   return {
     ...readiness,
@@ -96,7 +111,7 @@ function reconcileReadinessState(snapshot: WorkspaceSnapshot, issues: IssueRecor
       blockingIssueIds.length > 0 || hasExplicitBlockingState
         ? 'blocked'
         : warningIssueIds.length > 0 ||
-            readiness.status === 'warning' ||
+            hasExplicitWarningState ||
             readiness.provenanceCompleteness !== 'complete'
           ? 'warning'
           : 'ready',
@@ -106,7 +121,12 @@ function reconcileReadinessState(snapshot: WorkspaceSnapshot, issues: IssueRecor
 }
 
 export function replaceSnapshotReducer(data: WorkspaceKernelData, input: ReplaceSnapshotInput) {
-  const nextSnapshot = workspaceSnapshotSchema.parse(input.snapshot);
+  const nextDatasetFileHandles = (input.datasetFileHandles ?? []).map((entry) => clonePersistedDatasetFileHandle(entry));
+  const parsedSnapshot = workspaceSnapshotSchema.parse(input.snapshot);
+  const nextSnapshot =
+    input.datasetFileHandles !== undefined
+      ? synchronizeDatasetSourceFileMetadata(parsedSnapshot, nextDatasetFileHandles)
+      : parsedSnapshot;
   const nextLedger = [...input.ledger];
 
   validateLedgerOrdering(nextLedger);
@@ -115,8 +135,20 @@ export function replaceSnapshotReducer(data: WorkspaceKernelData, input: Replace
     ...data,
     snapshot: nextSnapshot,
     ledger: nextLedger,
+    datasetFileHandles: nextDatasetFileHandles,
     workspaceVersion: initializeWorkspaceVersion(nextLedger),
     pendingWorkerRequests: {},
+  } satisfies WorkspaceKernelData;
+}
+
+export function replaceDatasetFileHandlesReducer(
+  data: WorkspaceKernelData,
+  datasetFileHandles: PersistedDatasetFileHandle[],
+) {
+  return {
+    ...data,
+    snapshot: synchronizeDatasetSourceFileMetadata(data.snapshot, datasetFileHandles),
+    datasetFileHandles: datasetFileHandles.map((entry) => clonePersistedDatasetFileHandle(entry)),
   } satisfies WorkspaceKernelData;
 }
 
