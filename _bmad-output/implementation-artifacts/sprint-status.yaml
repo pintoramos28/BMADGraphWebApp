@@ -35,14 +35,14 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-16T13:50:36-04:00
-last_updated: 2026-04-20T01:20:42-04:00
+last_updated: 2026-04-20T05:34:25-04:00
 project: BMADGraphWebApp
 project_key: NOKEY
 tracking_system: file-system
 story_location: /home/pin81845/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts
 
 development_status:
-  epic-1: in-progress
+  epic-1: done
   1-1-bootstrap-hosted-shell-baseline: done
   1-2-author-canonical-workspace-and-trust-contracts: done
   1-3-create-open-and-reopen-local-workspaces: done
@@ -51,8 +51,8 @@ development_status:
   1-6-complete-reopen-validation-for-transforms-and-graph-compositions: done
   epic-1-retrospective: optional
 
-  epic-2: backlog
-  2-1-import-csv-excel-and-pasted-data-into-a-preview-workspace: backlog
+  epic-2: in-progress
+  2-1-import-csv-excel-and-pasted-data-into-a-preview-workspace: ready-for-dev
   2-2-resolve-import-uncertainty-and-data-quality-issues-before-commit: backlog
   2-3-edit-semantic-roles-types-units-and-dataset-context: backlog
   2-4-deliver-guided-onboarding-and-recovery-through-intake: backlog

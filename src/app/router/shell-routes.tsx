@@ -3,6 +3,7 @@ import type { StoreApi } from 'zustand/vanilla';
 import { useStore } from 'zustand';
 
 import { routePath, ROUTES } from './routes';
+import { WorkspaceImportRoute } from '../../features/import';
 import type { ShellStatusStoreState } from '../../stores/shell-status';
 
 function useShellStore<T>(store: StoreApi<ShellStatusStoreState>, selector: (state: ShellStatusStoreState) => T) {
@@ -263,12 +264,7 @@ function ShellHomeRoute({ store }: { store: StoreApi<ShellStatusStoreState> }) {
 }
 
 function ShellWorkspaceRoute({ workspaceId }: { workspaceId: string | undefined }) {
-  return (
-    <section>
-      <h2 style={{ marginTop: 0 }}>Workspace shell route</h2>
-      <p style={{ lineHeight: 1.6 }}>Workspace shell placeholder for {workspaceId ?? 'unknown workspace'}.</p>
-    </section>
-  );
+  return <WorkspaceImportRoute workspaceId={workspaceId} />;
 }
 
 function ShellReviewRoute({ workspaceId }: { workspaceId: string | undefined }) {
