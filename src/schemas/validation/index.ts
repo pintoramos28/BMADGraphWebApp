@@ -1,2 +1,2 @@
-export * from './helpers';
-export * from './primitives';
+export * from './helpers.ts';
+export * from './primitives.ts';

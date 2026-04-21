@@ -1,0 +1,2600 @@
+diff --git a/home/pinto/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/1-7-provide-hosted-shell-bootstrap-metadata-for-local-and-static-delivery.md b/home/pinto/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/1-7-provide-hosted-shell-bootstrap-metadata-for-local-and-static-delivery.md
+new file mode 100644
+index 0000000..c6b59d6
+--- /dev/null
++++ b/home/pinto/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/1-7-provide-hosted-shell-bootstrap-metadata-for-local-and-static-delivery.md
+@@ -0,0 +1,181 @@
++# Story 1.7: Provide Hosted-Shell Bootstrap Metadata For Local And Static Delivery
++
++Status: review
++
++## Story
++
++As a developer and release owner,
++I want the hosted shell to obtain its bootstrap metadata from an owned thin delivery path,
++so that a fresh clone can load the shell locally and deployed builds can reach a healthy shell state without ad hoc manual servers.
++
++## Acceptance Criteria
++
++1. Given a fresh clone, when the documented local start flow runs, then the hosted shell loads successfully without requiring an ad hoc manual mock server because schema-valid `GET /api/release-manifest` and `GET /api/support-matrix` responses are available to the shell and are sourced from the canonical Story 1.2 release/support contracts.
++2. Given the shell is deployed as static assets, when the thin operational delivery path is provisioned, then `GET /api/release-manifest`, `GET /api/support-matrix`, and `GET /api/health` are served independently of the analytical runtime and without adding any dataset or workspace CRUD API.
++3. Given shell metadata is version-sensitive, when release metadata or support facts change, then local-dev and hosted-delivery sources read from one canonical checked-in source or generation step so manifest/support-matrix drift is detected before release.
++4. Given route-owned shell screens are part of the hosted-shell entry contract, when the local and hosted shell are exercised, then SPA fallback works for `/`, `/workspace`, `/workspace/:workspaceId`, `/review/:workspaceId`, and `/unsupported` while preserving readable workspace-format routing and fail-closed protected-route behavior.
++5. Given shell delivery fails or becomes inconsistent, when bootstrap validation or smoke checks run, then the failure is surfaced as a delivery/setup error before users encounter an unexplained shell-error state in normal startup, including healthy shell home, readable workspace-format route, blocked unreadable workspace-format route, and canonical fail-closed protected-route coverage.
++
++## Dependencies
++
++- Story 1.1: Bootstrap Hosted Shell Baseline
++- Story 1.2: Author Canonical Workspace and Trust Contracts
++- Story 1.4: Surface Shell Readiness, Support, and Update Status
++
++## Contract Boundaries
++
++- In scope: thin bootstrap metadata delivery for local dev/preview and static-hosted shell deployment, canonical checked-in or generated release/support payload sources, `GET /api/release-manifest`, `GET /api/support-matrix`, `GET /api/health`, SPA fallback for the shell route inventory, and shell-delivery smoke validation.
++- Out of scope: telemetry queue implementation, telemetry ingestion durability, production monitoring dashboards, release-shaping regression gates, auth, remote workspace storage, dataset/workspace CRUD APIs, or moving shell bootstrap ownership into the analytical client bundle.
++- Owning paths: thin delivery implementation under `scripts/**` or equivalent host-safe server glue, canonical metadata sources under `src/test/fixtures/api/**` and/or generated assets, shell bootstrap consumers under `src/services/release/**`, route verification under `src/app/router/**`, and delivery smoke coverage under `tests/e2e/**` or equivalent shell-level verification.
++- Downstream consumers after completion: local `npm run dev` or preview-adjacent shell startup, deployed static-host shell bootstrap, Story 1.4 shell readiness surfaces, Epic 2+ protected-route entry, and Epic 6 operational hardening.
++
++## Tasks / Subtasks
++
++- [x] Establish one canonical checked-in source or generation path for release manifest and support matrix payloads so the thin delivery path and shell tests reuse the same data and schema expectations. (AC: 1, 3)
++- [x] Replace the current ad hoc bootstrap helper with an owned thin delivery path that serves `GET /api/release-manifest`, `GET /api/support-matrix`, and `GET /api/health` independently of analytical runtime code and without adding dataset/workspace APIs. (AC: 1, 2)
++- [x] Ensure the thin delivery path serves or fronts the built static shell with SPA fallback for `/`, `/workspace`, `/workspace/:workspaceId`, `/review/:workspaceId`, and `/unsupported` without weakening protected-route fail-closed behavior. (AC: 2, 4)
++- [x] Add shell-delivery validation and smoke coverage for healthy shell startup, readable workspace-format route access, blocked unreadable workspace-format route handling, fail-closed protected routes, and explicit delivery/setup error surfacing. (AC: 4, 5)
++- [x] Document the supported local start and verification flow so a fresh clone can reproduce the hosted-shell bootstrap path without relying on hidden manual setup. (AC: 1, 5)
++
++### Review Findings
++
++- [x] [Review][Patch] Make the thin delivery server self-contained instead of reading live bootstrap metadata from `src/test/fixtures/**` at runtime [scripts/shell-delivery-server.mjs:13]
++- [x] [Review][Patch] Limit hosted-shell SPA fallback to the route-owned shell paths so missing asset requests still fail with `404` instead of returning `index.html` [scripts/shell-delivery-server.mjs:214]
++- [x] [Review][Patch] Restore the runtime guard for `preview:shell` so the documented flow and Playwright web server cannot bypass the Linux Node enforcement [package.json:14]
++- [x] [Review][Patch] Align the Vite dev metadata loader with the preview server invariants so local `/api/health` fails closed on manifest/support drift [vite.config.ts:25]
++- [x] [Review][Patch] Replace the shared fixed-port failure server in the hosted-shell Playwright suite because `fullyParallel` can run `beforeAll` in multiple workers and race on `127.0.0.1:4174` [tests/e2e/shell-delivery.spec.ts:30]
++- [x] [Review][Patch] Validate the full release-manifest and support-matrix schemas before `/api/health` can report `ok` [src/services/release/shell-bootstrap-metadata.ts:16]
++- [x] [Review][Patch] Preserve SPA fallback for slash-terminated shell routes that React Router accepts [scripts/shell-bootstrap-metadata.mjs:93]
++- [x] [Review][Patch] Treat malformed percent-encoded request paths as client errors instead of generic server failures [scripts/shell-delivery-server.mjs:84]
++- [x] [Review][Patch] Add acceptance coverage for the documented `npm run dev` hosted-shell bootstrap flow [playwright.config.ts:10]
++- [x] [Review][Patch] Reserve the `/api/*` namespace in the Vite dev server so unknown shell API requests fail closed instead of returning the app shell [vite.config.ts:47]
++- [x] [Review][Patch] Align `/api/health` probe method handling between `npm run dev` and `preview:shell` so `HEAD` requests cannot report a false-positive HTML success in local validation [vite.config.ts:48]
++- [x] [Review][Patch] Remove the standalone preview server's runtime dependency on `src/**/*.ts` schema modules so the thin delivery path stays deployable without the repo source tree [scripts/shell-bootstrap-metadata.mjs:3]
++- [x] [Review][Patch] Stop returning raw exception messages from the hosted delivery server on `500` responses [scripts/shell-delivery-server.mjs:203]
++- [x] [Review][Patch] Replace checkout-specific absolute paths in the hosted-shell documentation so the verification links resolve in the current workspace [docs/dev-environment.md:21]
++- [x] [Review][Patch] Correct the sprint tracker `story_location` path for this checkout so workflow sync points at the active workspace [sprint-status.yaml:42]
++
++## Dev Notes
++
++### Architecture Alignment
++
++- The architecture explicitly separates the hosted shell from the analytical runtime: static assets and the UI bundle stay portable, while any bootstrap or telemetry service remains a thin operational component rather than a backend for analytical state.
++- Operational endpoints are intentionally narrow and noun-based: `GET /api/release-manifest`, `GET /api/support-matrix`, and `GET /api/health` are allowed here; dataset or workspace network APIs are not.
++- HTTPS, secure-context assumptions, service-worker ownership, and support-matrix enforcement remain shell concerns. This story must not move compatibility logic or bootstrap ownership into feature modules.
++
++### Existing Code Intelligence
++
++- `src/services/release/load-release-manifest.ts` and `src/services/release/load-support-matrix.ts` already parse payloads through strict Zod schemas. The provider created here must serve payloads that satisfy those exact contracts, not loosely similar JSON.
++- `src/services/release/bootstrap-shell.ts` already expects a manifest first, then follows `supportMatrixUrl`, pins the support-matrix version, and degrades service-worker readiness safely. Reuse that client path; do not create a second shell bootstrap client.
++- `src/test/fixtures/api/release-manifest.fixture.ts` and `src/test/fixtures/api/support-matrix.fixture.ts` already encode the expected shell metadata shape. They are the strongest existing canonical source candidates unless a generation step replaces them deliberately.
++- `scripts/manual-epic1-shell-server.mjs` is currently a hard-coded manual helper with inline manifest/support payloads and SPA fallback. This story should replace or formalize that path rather than entrenching duplicated inline metadata.
++- `tests/e2e/import.spec.ts` currently mocks `/api/release-manifest` and `/api/support-matrix` inside Playwright because the default preview server does not provide them. Story 1.7 should make shell-delivery smoke checks possible without those bootstrap mocks for the shell startup path being validated.
++
++### Project Structure Notes
++
++- Keep `src/services/release/**` as the only client-side path for release/support fetches and validation.
++- Prefer a thin operational seam under `scripts/**`, Vite middleware, generated static JSON plus host wrapper, or another deployment-safe delivery adapter that can serve the operational endpoints next to the built shell.
++- If generation scripts are added, keep them aligned with the architecture naming hints for release/support metadata and avoid scattering duplicate manifest/support JSON across server glue, tests, and docs.
++- Preserve `src/app/router/routes.ts` and `src/app/router/shell-routes.tsx` as the route-policy authority. The delivery layer should respect those routes, not redefine them.
++
++### Testing
++
++- Add or update unit/integration checks proving the delivered manifest and support matrix remain schema-valid and version-aligned with the Story 1.2 contracts.
++- Add shell-delivery smoke coverage that exercises the real thin delivery path for:
++  - healthy shell home startup
++  - readable workspace-format route access
++  - blocked unreadable workspace-format route behavior
++  - fail-closed `/workspace/:workspaceId` and `/review/:workspaceId` behavior when compatibility cannot be confirmed
++  - delivery/setup error surfacing when metadata delivery is unavailable or inconsistent
++- Keep the normal repo validation path in scope: `npm run build`, the targeted smoke or Playwright suite, plus `npm run typecheck`, `npm run lint`, and relevant Vitest coverage.
++
++### Previous Story Intelligence
++
++- Story 1.4 already locked shell-owned release-manifest loading, support-matrix fetch/integration, unsupported-environment routing, and shell status surfaces. Story 1.7 must provide the delivery source for that behavior, not re-implement those concerns in the client.
++- Story 1.4 review history already fixed several fail-closed and bootstrap-error regressions around protected routes and shell status. This story must preserve those protections when introducing the thin delivery path.
++- Story 1.2 established shared runtime contracts early so later stories reuse them. Any provider added here that duplicates or drifts from those contracts would directly violate the intended Epic 1 foundation pattern.
++
++### Residual Assumptions
++
++- This story can be implemented with a lightweight server, middleware, generated static JSON plus host wrapper, or another deployment-safe thin delivery option, provided the result remains operationally narrow and deployable with the static shell.
++- Production monitoring, alerting, and broader release hardening remain Epic 6 work even if this story adds a minimal `/api/health` response and local smoke validation.
++- The delivery path may still expose `/api/telemetry` later, but that endpoint is not required scope for Story 1.7 and should not be expanded here beyond what is needed to keep shell bootstrap healthy.
++
++### References
++
++- `/home/pinto/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/epic-1-stories.md` - Story 1.7 scope, acceptance criteria, and Epic 1 completion note
++- `/home/pinto/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/epics.md` - Epic 1 implementation emphasis and thin delivery-path ownership
++- `/home/pinto/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/prd.md` - FR59, FR60, FR62, NFR15, NFR16, NFR18, NFR22, NFR24
++- `/home/pinto/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/architecture.md` - hosted shell delivery topology, minimal API surface, HTTPS/security boundary, and deployment separation
++- `/home/pinto/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/implementation-kickoff-decisions.md` - release manifest example shape, route constants, and shell-only service-worker ownership
++- `/home/pinto/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/implementation-adrs/IK-ADR-09-release-manifest-and-compatibility-envelope.md`
++- `/home/pinto/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/implementation-adrs/IK-ADR-10-browser-support-matrix-and-safari-stance.md`
++- `/home/pinto/repo/BMADGraphWebApp/_bmad-output/planning-artifacts/sprint-change-proposal-2026-04-20-hosted-shell-bootstrap-provider-gap.md` - approved scope rationale and anti-drift guardrails
++- `/home/pinto/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/1-4-surface-shell-readiness-support-and-update-status.md` - existing shell bootstrap/readiness behavior and protected-route review learnings
++
++## Dev Agent Record
++
++### Agent Model Used
++
++GPT-5 Codex
++
++### Debug Log References
++
++- Reviewed the Story 1.7 planning entry, Epic 1 implementation emphasis, PRD hosted-shell requirements, and architecture hosted-shell topology on 2026-04-20.
++- Reviewed Story 1.2 and Story 1.4 implementation artifacts to capture the existing contract boundary and shell-readiness learnings on 2026-04-20.
++- Reviewed `scripts/manual-epic1-shell-server.mjs`, `src/services/release/bootstrap-shell.ts`, `src/test/fixtures/api/release-manifest.fixture.ts`, `src/test/fixtures/api/support-matrix.fixture.ts`, `package.json`, and `playwright.config.ts` to anchor Story 1.7 to the current repo seams on 2026-04-20.
++- Added canonical JSON bootstrap fixtures and rewired the typed fixture wrappers plus contract coverage to validate schema and manifest/support-matrix alignment on 2026-04-20.
++- Added Vite dev bootstrap endpoint middleware, a thin static shell delivery server, hosted-shell Playwright smoke coverage, and local-flow documentation on 2026-04-20.
++- Validated live `/api/release-manifest`, `/api/support-matrix`, and `/api/health` responses from both `npm run dev` and `npm run preview:shell`, then ran `npm run typecheck`, `npm test`, `npm run lint`, `npm run build`, and `npm run test:e2e` on 2026-04-20.
++- Addressed the Story 1.7 review findings by generating deployment-ready bootstrap metadata assets during build, tightening standalone fallback routing, restoring `preview:shell` runtime enforcement, aligning Vite health validation with the hosted preview invariants, and replacing the fixed-port failure server with per-test ephemeral instances on 2026-04-21.
++- Re-ran `bash ./scripts/with-node.sh npm run typecheck`, `bash ./scripts/with-node.sh npm test`, `bash ./scripts/with-node.sh npm run lint`, `bash ./scripts/with-node.sh npm run build`, and `bash ./scripts/with-node.sh npm run test:e2e` after the review-finding patch set on 2026-04-21.
++- Added schema-level bootstrap metadata validation for both dev and preview delivery, normalized slash-terminated shell route fallback matching, hardened malformed request-path handling to return `400`, and added Playwright coverage for the documented `npm run dev` flow on 2026-04-21.
++- Re-ran `bash ./scripts/with-node.sh npm run typecheck`, `bash ./scripts/with-node.sh npm test`, `bash ./scripts/with-node.sh npm run lint`, `bash ./scripts/with-node.sh npm run build`, and `bash ./scripts/with-node.sh npm run test:e2e` after the final review-finding patch set on 2026-04-21.
++- Reserved the Vite dev `/api/*` namespace, aligned dev and preview `HEAD /api/health` handling, removed the preview server dependency on `src/**/*.ts` schema modules by emitting deployment-ready health metadata, sanitized hosted-shell `500` bodies, and corrected checkout-specific workspace paths on 2026-04-21.
++- Re-ran `bash ./scripts/with-node.sh npm run typecheck`, `bash ./scripts/with-node.sh npm test -- src/services/release/shell-bootstrap-metadata.spec.ts`, `bash ./scripts/with-node.sh npx playwright test tests/e2e/shell-delivery.spec.ts`, `bash ./scripts/with-node.sh npm test`, `bash ./scripts/with-node.sh npm run lint`, `bash ./scripts/with-node.sh npm run build`, and `bash ./scripts/with-node.sh npm run test:e2e` after closing the final Story 1.7 review findings on 2026-04-21.
++
++### Completion Notes List
++
++- Story created from the approved Story 1.7 planning entry and aligned to the shell-delivery gap identified after Epic 1’s earlier completion.
++- The story is intentionally narrow: it owns thin release/support metadata delivery and shell-route fallback behavior, not telemetry hardening or any analytical backend.
++- Existing shell bootstrap consumers, strict API schemas, fixtures, and fail-closed route behavior are called out explicitly so implementation reuses them instead of inventing parallel paths.
++- Promoted the release manifest and support matrix into canonical checked-in JSON payloads and kept the typed fixtures reading from those files so schema checks, shell tests, Vite dev delivery, and the thin static server share one source.
++- Added owned thin delivery for local and static-hosted shell bootstrap through Vite `/api/*` middleware and `scripts/shell-delivery-server.mjs`, including `/api/health`, explicit API narrowing, and SPA fallback over the shell route inventory.
++- Added hosted-shell smoke coverage for healthy startup, readable workspace access, blocked unreadable workspace routes, fail-closed protected detail routes, and explicit delivery/setup error surfacing, then documented the supported local verification flow in `docs/dev-environment.md`.
++- Validation passed with live HTTP checks plus `bash ./scripts/with-node.sh npm run typecheck`, `bash ./scripts/with-node.sh npm test`, `bash ./scripts/with-node.sh npm run lint`, `bash ./scripts/with-node.sh npm run build`, and `bash ./scripts/with-node.sh npm run test:e2e`.
++- Resolved the hosted-shell review pass by moving preview bootstrap payload loading onto generated `dist/api/*.json` assets, which keeps the standalone delivery server self-contained while preserving one canonical metadata source.
++- Resolved the fallback and runtime review findings by narrowing standalone SPA fallback to the owned shell routes, restoring `prepreview:shell`, and making the Playwright hosted-shell web server use the Linux Node wrapper path.
++- Added typed shell-bootstrap helper coverage plus a `404` missing-asset smoke assertion, and replaced the shared `4174` failure server with per-test ephemeral server instances so the hosted-shell suite stays stable under `fullyParallel`.
++- Resolved the remaining hosted-shell review findings by validating full manifest/support schemas before health checks report `ok`, preserving slash-terminated shell-route fallback, returning `400` for malformed percent-encoded paths, and proving the documented `npm run dev` bootstrap path through Playwright acceptance coverage.
++- Validation passed again with `bash ./scripts/with-node.sh npm run typecheck`, `bash ./scripts/with-node.sh npm test`, `bash ./scripts/with-node.sh npm run lint`, `bash ./scripts/with-node.sh npm run build`, and `bash ./scripts/with-node.sh npm run test:e2e`.
++- Closed the last Story 1.7 review findings by failing closed on unknown dev `/api/*` requests and `HEAD /api/health`, emitting deployment-ready `dist/api/health.json` so the standalone preview server no longer depends on `src/**/*.ts` at runtime, sanitizing hosted-shell `500` responses, and correcting workspace-local documentation and sprint-tracker paths.
++- Validation passed for the final review pass with `bash ./scripts/with-node.sh npm run typecheck`, `bash ./scripts/with-node.sh npm test -- src/services/release/shell-bootstrap-metadata.spec.ts`, `bash ./scripts/with-node.sh npx playwright test tests/e2e/shell-delivery.spec.ts`, `bash ./scripts/with-node.sh npm test`, `bash ./scripts/with-node.sh npm run lint`, `bash ./scripts/with-node.sh npm run build`, and `bash ./scripts/with-node.sh npm run test:e2e`.
++
++### File List
++
++- _bmad-output/implementation-artifacts/1-7-provide-hosted-shell-bootstrap-metadata-for-local-and-static-delivery.md
++- _bmad-output/implementation-artifacts/sprint-status.yaml
++- docs/dev-environment.md
++- package.json
++- playwright.config.ts
++- scripts/shell-delivery-server.mjs
++- scripts/shell-bootstrap-metadata.mjs
++- src/schemas/api/release-manifest.ts
++- src/schemas/api/support-matrix.ts
++- src/schemas/contracts.spec.ts
++- src/schemas/validation/index.ts
++- src/services/release/shell-bootstrap-metadata.spec.ts
++- src/services/release/shell-bootstrap-metadata.ts
++- src/test/fixtures/api/release-manifest.fixture.json
++- src/test/fixtures/api/release-manifest.fixture.ts
++- src/test/fixtures/api/support-matrix.fixture.json
++- src/test/fixtures/api/support-matrix.fixture.ts
++- tests/e2e/shell-delivery.spec.ts
++- vite.config.ts
++
++## Change Log
++
++- 2026-04-20: Added canonical shell bootstrap JSON fixtures, Vite dev bootstrap metadata delivery, a thin static shell delivery server, hosted-shell smoke coverage, and documented local verification flow; validated with typecheck, unit tests, lint, build, and full Playwright coverage.
++- 2026-04-21: Resolved the Story 1.7 review findings by making preview delivery self-contained from built metadata assets, aligning dev and preview bootstrap validation, tightening standalone fallback behavior, and de-flaking the hosted-shell failure-path smoke test; revalidated with typecheck, full Vitest, lint, build, and full Playwright coverage.
++- 2026-04-21: Closed the remaining review findings by enforcing full schema validation before shell health reports `ok`, preserving slash-terminated shell-route fallback, returning `400` for malformed request paths, and adding Playwright acceptance coverage for the documented `npm run dev` hosted-shell bootstrap flow; revalidated with typecheck, full Vitest, lint, build, and full Playwright coverage.
++- 2026-04-21: Closed the final Story 1.7 review findings by reserving Vite dev `/api/*`, aligning preview and dev `HEAD /api/health` handling, emitting deployment-ready health metadata so `preview:shell` no longer depends on `src/**/*.ts` at runtime, sanitizing hosted-shell `500` responses, and correcting workspace-local documentation and sprint-tracker paths; revalidated with targeted Story 1.7 checks plus full typecheck, Vitest, lint, build, and Playwright coverage.
+diff --git a/_bmad-output/implementation-artifacts/sprint-status.yaml b/_bmad-output/implementation-artifacts/sprint-status.yaml
+index 3029406..9b3c8e4 100644
+--- a/_bmad-output/implementation-artifacts/sprint-status.yaml
++++ b/_bmad-output/implementation-artifacts/sprint-status.yaml
+@@ -1,86 +1,87 @@
+-# generated: 2026-04-16T13:50:36-04:00
+-# last_updated: 2026-04-17T13:49:15-04:00
+-# project: BMADGraphWebApp
+-# project_key: NOKEY
+-# tracking_system: file-system
+-# story_location: /home/pin81845/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts
+-
+-# STATUS DEFINITIONS:
+-# ==================
+-# Epic Status:
+-#   - backlog: Epic not yet started
+-#   - in-progress: Epic actively being worked on
+-#   - done: All stories in epic completed
+-#
+-# Epic Status Transitions:
+-#   - backlog -> in-progress: Automatically when first story is created (via create-story)
+-#   - in-progress -> done: Manually when all stories reach 'done' status
+-#
+-# Story Status:
+-#   - backlog: Story only exists in epic file
+-#   - ready-for-dev: Story file created in stories folder
+-#   - in-progress: Developer actively working on implementation
+-#   - review: Ready for code review (via Dev's code-review workflow)
+-#   - done: Story completed
+-#
+-# Retrospective Status:
+-#   - optional: Can be completed but not required
+-#   - done: Retrospective has been completed
+-#
+-# WORKFLOW NOTES:
+-# ===============
+-# - Epic transitions to 'in-progress' automatically when first story is created
+-# - Stories can be worked in parallel if team capacity allows
+-# - Developer typically creates next story after previous one is 'done' to incorporate learnings
+-# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+-
+-generated: 2026-04-16T13:50:36-04:00
+-last_updated: 2026-04-20T21:23:54-04:00
+-project: BMADGraphWebApp
+-project_key: NOKEY
+-tracking_system: file-system
+-story_location: /home/pin81845/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts
+-
+-development_status:
+-  epic-1: done
++# generated: 2026-04-16T13:50:36-04:00
++# last_updated: 2026-04-17T13:49:15-04:00
++# project: BMADGraphWebApp
++# project_key: NOKEY
++# tracking_system: file-system
++# story_location: /home/pinto/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts
++
++# STATUS DEFINITIONS:
++# ==================
++# Epic Status:
++#   - backlog: Epic not yet started
++#   - in-progress: Epic actively being worked on
++#   - done: All stories in epic completed
++#
++# Epic Status Transitions:
++#   - backlog -> in-progress: Automatically when first story is created (via create-story)
++#   - in-progress -> done: Manually when all stories reach 'done' status
++#
++# Story Status:
++#   - backlog: Story only exists in epic file
++#   - ready-for-dev: Story file created in stories folder
++#   - in-progress: Developer actively working on implementation
++#   - review: Ready for code review (via Dev's code-review workflow)
++#   - done: Story completed
++#
++# Retrospective Status:
++#   - optional: Can be completed but not required
++#   - done: Retrospective has been completed
++#
++# WORKFLOW NOTES:
++# ===============
++# - Epic transitions to 'in-progress' automatically when first story is created
++# - Stories can be worked in parallel if team capacity allows
++# - Developer typically creates next story after previous one is 'done' to incorporate learnings
++# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
++
++generated: 2026-04-16T13:50:36-04:00
++last_updated: 2026-04-21T00:49:40-04:00
++project: BMADGraphWebApp
++project_key: NOKEY
++tracking_system: file-system
++story_location: /home/pinto/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts
++
++development_status:
++  epic-1: in-progress
+   1-1-bootstrap-hosted-shell-baseline: done
+   1-2-author-canonical-workspace-and-trust-contracts: done
+   1-3-create-open-and-reopen-local-workspaces: done
+   1-4-surface-shell-readiness-support-and-update-status: done
+   1-5-localize-reopen-errors-and-provide-repair-entry-points: done
+   1-6-complete-reopen-validation-for-transforms-and-graph-compositions: done
++  1-7-provide-hosted-shell-bootstrap-metadata-for-local-and-static-delivery: review
+   epic-1-retrospective: optional
+-
+-  epic-2: in-progress
+-  2-1-import-csv-excel-and-pasted-data-into-a-preview-workspace: review
+-  2-2-resolve-import-uncertainty-and-data-quality-issues-before-commit: backlog
+-  2-3-edit-semantic-roles-types-units-and-dataset-context: backlog
+-  2-4-deliver-guided-onboarding-and-recovery-through-intake: backlog
+-  epic-2-retrospective: optional
+-
+-  epic-3: backlog
+-  3-1-filter-sort-and-subset-the-active-analytical-view: backlog
+-  3-2-preview-and-commit-structured-data-transformations: backlog
+-  3-3-create-and-inspect-derived-columns: backlog
+-  3-4-repair-failed-transformations-and-support-undo: backlog
+-  epic-3-retrospective: optional
+-
+-  epic-4: backlog
+-  4-1-generate-the-first-graph-from-semantic-role-assignment: backlog
+-  4-2-refine-graph-type-structure-and-presentation-controls: backlog
+-  4-3-add-layers-overlays-and-guardrails-for-invalid-compositions: backlog
+-  4-4-promote-and-track-the-reference-graph: backlog
+-  epic-4-retrospective: optional
+-
+-  epic-5: backlog
+-  5-1-generate-graph-tied-statistical-context: backlog
+-  5-2-attach-evidence-and-mission-history-to-the-reference-graph: backlog
+-  5-3-review-a-workspace-in-local-in-app-review-mode: backlog
+-  5-4-gate-export-on-handoff-readiness: backlog
+-  epic-5-retrospective: optional
+-
+-  epic-6: backlog
+-  6-1-queue-and-flush-privacy-preserving-telemetry: backlog
+-  6-2-publish-support-matrix-update-state-and-offline-guarantees: backlog
+-  6-3-enforce-release-shaping-regression-gates: backlog
+-  epic-6-retrospective: optional
++
++  epic-2: in-progress
++  2-1-import-csv-excel-and-pasted-data-into-a-preview-workspace: review
++  2-2-resolve-import-uncertainty-and-data-quality-issues-before-commit: backlog
++  2-3-edit-semantic-roles-types-units-and-dataset-context: backlog
++  2-4-deliver-guided-onboarding-and-recovery-through-intake: backlog
++  epic-2-retrospective: optional
++
++  epic-3: backlog
++  3-1-filter-sort-and-subset-the-active-analytical-view: backlog
++  3-2-preview-and-commit-structured-data-transformations: backlog
++  3-3-create-and-inspect-derived-columns: backlog
++  3-4-repair-failed-transformations-and-support-undo: backlog
++  epic-3-retrospective: optional
++
++  epic-4: backlog
++  4-1-generate-the-first-graph-from-semantic-role-assignment: backlog
++  4-2-refine-graph-type-structure-and-presentation-controls: backlog
++  4-3-add-layers-overlays-and-guardrails-for-invalid-compositions: backlog
++  4-4-promote-and-track-the-reference-graph: backlog
++  epic-4-retrospective: optional
++
++  epic-5: backlog
++  5-1-generate-graph-tied-statistical-context: backlog
++  5-2-attach-evidence-and-mission-history-to-the-reference-graph: backlog
++  5-3-review-a-workspace-in-local-in-app-review-mode: backlog
++  5-4-gate-export-on-handoff-readiness: backlog
++  epic-5-retrospective: optional
++
++  epic-6: backlog
++  6-1-queue-and-flush-privacy-preserving-telemetry: backlog
++  6-2-publish-support-matrix-update-state-and-offline-guarantees: backlog
++  6-3-enforce-release-shaping-regression-gates: backlog
++  epic-6-retrospective: optional
+diff --git a/docs/dev-environment.md b/docs/dev-environment.md
+index 9d8d29c..ebdccbd 100644
+--- a/docs/dev-environment.md
++++ b/docs/dev-environment.md
+@@ -1,242 +1,274 @@
+-# Development Environment
+-
+-This document defines the recommended local tool setup for BMADGraphWebApp and compares it to the workstation state observed on April 20, 2026.
+-
+-## Goal
+-
+-The environment should support:
+-
+-- day-to-day React and Vite development
+-- unit, integration, and E2E testing
+-- agent-driven repo work inside WSL/Linux
+-- reproducible Node and browser automation behavior
+-- lightweight Python-based helper tooling when needed
+-
+-## Target Workstation Spec
+-
+-### Core runtime
+-
+-- Linux or WSL2 Linux userland as the primary execution environment
+-- `nvm` or `fnm` installed and shell-initialized
+-- Node `24.11.0` active by default for this repo, matching [.nvmrc](/home/pin81845/repo/BMADGraphWebApp/.nvmrc)
+-- `npm` as the default package manager for this repo
+-- repo wrapper available for guarded execution: [`scripts/with-node.sh`](/home/pin81845/repo/BMADGraphWebApp/scripts/with-node.sh)
+-- repo-local direnv activation available through [.envrc](/home/pin81845/repo/BMADGraphWebApp/.envrc)
+-
+-### Web development and testing
+-
+-- Playwright installed with browser binaries available
+-- TypeScript toolchain available through the active Linux Node runtime
+-- `eslint`, `vite`, `vitest`, `tsc`, and `playwright` runnable either directly or through the wrapper
+-- modern Chromium available for Playwright-driven browser testing
+-
+-### Python and agent utility layer
+-
+-- Python `3.11` or `3.12`
+-- `uv` installed
+-- `pip` available for compatibility
+-- `pytest` installed globally or inside a standard local virtual environment
+-- local venv workflow for one-off agent and automation scripts
+-
+-### CLI productivity tools
+-
+-- `git`
+-- `gh`
+-- `jq`
+-- `rg`
+-- `fd`
+-- `sqlite3`
+-- `direnv`
+-- `tmux`
+-- `make` or `just`
+-
+-### Optional but high-value tools
+-
+-- Docker and `docker compose`
+-- `shellcheck`
+-- `tree`
+-
+-## Repo Expectations
+-
+-The repo is currently built around:
+-
+-- Vite dev/build via [`package.json`](/home/pin81845/repo/BMADGraphWebApp/package.json)
+-- Vitest for unit and integration tests via [`vitest.config.ts`](/home/pin81845/repo/BMADGraphWebApp/vitest.config.ts)
+-- Playwright for browser E2E via [`playwright.config.ts`](/home/pin81845/repo/BMADGraphWebApp/playwright.config.ts)
+-- Linux Node from `nvm`, enforced by [`project-context.md`](/home/pin81845/repo/BMADGraphWebApp/project-context.md)
+-
+-The repo explicitly does not want Windows-backed Node/npm shims against the WSL checkout.
+-
+-## Current Workstation Snapshot
+-
+-Observed on April 20, 2026 from `/home/pin81845/repo/BMADGraphWebApp`.
+-
+-### Present and usable
+-
+-- `python3` `3.12.3`
+-- `uv` `0.11.6`
+-- `git` `2.43.0`
+-- `jq` `1.7`
+-- `rg` `15.1.0`
+-- `tmux` present
+-- `~/.nvm/nvm.sh` present
+-- `node_modules` present
+-
+-### Present, but not configured as the default path
+-
+-- Linux Node works through the wrapper:
+-  - `bash ./scripts/with-node.sh node -v` -> `v24.11.0`
+-  - `bash ./scripts/with-node.sh npm -v` -> `11.6.1`
+-  - `bash ./scripts/with-node.sh npx playwright --version` -> `1.59.1`
+-
+-### Missing or not currently available on PATH
+-
+-- bare `node`
+-- `pnpm`
+-- `yarn`
+-- bare `python`
+-- `pip`
+-- `pytest`
+-- `playwright` as a bare global command
+-- `docker`
+-- `gh`
+-- `fd`
+-- `sqlite3`
+-- `make`
+-- `just`
+-- `direnv`
+-
+-### Incorrect default resolution
+-
+-- `npm` resolves to `/mnt/c/Program Files/nodejs/npm`
+-- `npx` resolves to `/mnt/c/Program Files/nodejs/npx`
+-
+-This is the main ergonomics risk in the current setup.
+-
+-### Repo-specific validation results
+-
+-Through the Linux Node wrapper, the current repo is healthy:
+-
+-- `bash ./scripts/with-node.sh npm run typecheck` passed
+-- `bash ./scripts/with-node.sh npm run test` passed
+-  - `24` files
+-  - `168` tests
+-- `bash ./scripts/with-node.sh npm run test:e2e` passed
+-  - `9` Playwright tests
+-
+-## Gap Summary
+-
+-### Green
+-
+-- The repo itself is install-complete and testable.
+-- The pinned Linux Node version is available.
+-- Playwright browser execution works.
+-- Python is present for future agent-side tooling.
+-
+-### Yellow
+-
+-- The shell defaults are unsafe for Node-family commands because Windows npm/npx win path precedence.
+-- The repo wrapper is not executable, so it currently requires `bash ./scripts/with-node.sh ...`.
+-- Python utility tooling is only partially provisioned.
+-
+-### Red
+-
+-- The default shell is not yet a clean “use the repo normally without thinking about it” environment.
+-- Several common CLI tools for agentic workflows are absent.
+-
+-## Applied Remediation
+-
+-Applied on April 20, 2026 without Docker changes.
+-
+-- updated `~/.profile` so login shells load `nvm` and activate the default Linux Node alias
+-- updated `~/.bashrc` to load the `direnv` hook when available
+-- added [.envrc](/home/pin81845/repo/BMADGraphWebApp/.envrc) so the repo auto-selects the pinned Node runtime through `direnv`
+-- made [`scripts/with-node.sh`](/home/pin81845/repo/BMADGraphWebApp/scripts/with-node.sh) executable
+-- installed user-space CLI tools in `~/.local/bin`:
+-  - `pip`
+-  - `pytest`
+-  - `gh`
+-  - `fd`
+-  - `sqlite3`
+-  - `direnv`
+-  - `just`
+-
+-## Post-Remediation Verification
+-
+-Verified after the fixes:
+-
+-- `bash -lc 'command -v node npm npx'` resolves to Linux `nvm` paths
+-- `node -v` -> `v24.11.0`
+-- `npm -v` -> `11.6.1`
+-- `npx playwright --version` -> `1.59.1`
+-- `pip --version` -> `26.0.1`
+-- `pytest --version` -> `9.0.3`
+-- `gh --version` -> `2.90.0`
+-- `fd --version` -> `10.4.2`
+-- `sqlite3 --version` -> `3.53.0`
+-- `direnv --version` -> `2.37.1`
+-- `just --version` -> `1.50.0`
+-- `direnv exec . ...` loads [.envrc](/home/pin81845/repo/BMADGraphWebApp/.envrc) and resolves the pinned Linux Node runtime
+-- `./scripts/with-node.sh npm run test` passes
+-
+-## Priority Remediation Checklist
+-
+-### Priority 1: Fix runtime defaults
+-
+-1. Initialize `nvm` in shell startup so Linux Node is on PATH by default.
+-2. Ensure `node`, `npm`, and `npx` resolve to Linux paths, not `/mnt/c/...`.
+-3. Make [`scripts/with-node.sh`](/home/pin81845/repo/BMADGraphWebApp/scripts/with-node.sh) executable.
+-4. Keep using the wrapper for automation and agent runs even after shell init, because it enforces the pinned repo runtime.
+-
+-### Priority 2: Complete the Python utility layer
+-
+-1. Ensure `pip` is available for `python3`.
+-2. Install `pytest`.
+-3. Standardize on `uv venv` for disposable local helper environments.
+-
+-### Priority 3: Add missing CLI tooling
+-
+-1. Install `gh`.
+-2. Install `fd`.
+-3. Install `sqlite3`.
+-4. Install `direnv`.
+-5. Install either `make` or `just`.
++# Development Environment
++
++This document defines the recommended local tool setup for BMADGraphWebApp and compares it to the workstation state observed on April 20, 2026.
++
++## Goal
++
++The environment should support:
++
++- day-to-day React and Vite development
++- unit, integration, and E2E testing
++- agent-driven repo work inside WSL/Linux
++- reproducible Node and browser automation behavior
++- lightweight Python-based helper tooling when needed
++
++## Target Workstation Spec
++
++### Core runtime
++
++- Linux or WSL2 Linux userland as the primary execution environment
++- `nvm` or `fnm` installed and shell-initialized
++- Node `24.11.0` active by default for this repo, matching [.nvmrc](/home/pinto/repo/BMADGraphWebApp/.nvmrc)
++- `npm` as the default package manager for this repo
++- repo wrapper available for guarded execution: [`scripts/with-node.sh`](/home/pinto/repo/BMADGraphWebApp/scripts/with-node.sh)
++- repo-local direnv activation available through [.envrc](/home/pinto/repo/BMADGraphWebApp/.envrc)
++
++### Web development and testing
++
++- Playwright installed with browser binaries available
++- TypeScript toolchain available through the active Linux Node runtime
++- `eslint`, `vite`, `vitest`, `tsc`, and `playwright` runnable either directly or through the wrapper
++- modern Chromium available for Playwright-driven browser testing
++
++### Python and agent utility layer
++
++- Python `3.11` or `3.12`
++- `uv` installed
++- `pip` available for compatibility
++- `pytest` installed globally or inside a standard local virtual environment
++- local venv workflow for one-off agent and automation scripts
++
++### CLI productivity tools
++
++- `git`
++- `gh`
++- `jq`
++- `rg`
++- `fd`
++- `sqlite3`
++- `direnv`
++- `tmux`
++- `make` or `just`
++
++### Optional but high-value tools
++
++- Docker and `docker compose`
++- `shellcheck`
++- `tree`
++
++## Repo Expectations
++
++The repo is currently built around:
++
++- Vite dev/build via [`package.json`](/home/pinto/repo/BMADGraphWebApp/package.json)
++- Vitest for unit and integration tests via [`vitest.config.ts`](/home/pinto/repo/BMADGraphWebApp/vitest.config.ts)
++- Playwright for browser E2E via [`playwright.config.ts`](/home/pinto/repo/BMADGraphWebApp/playwright.config.ts)
++- Linux Node from `nvm`, enforced by [`project-context.md`](/home/pinto/repo/BMADGraphWebApp/project-context.md)
++
++The repo explicitly does not want Windows-backed Node/npm shims against the WSL checkout.
++
++## Current Workstation Snapshot
++
++Observed on April 20, 2026 from `/home/pinto/repo/BMADGraphWebApp`.
++
++### Present and usable
++
++- `python3` `3.12.3`
++- `uv` `0.11.6`
++- `git` `2.43.0`
++- `jq` `1.7`
++- `rg` `15.1.0`
++- `tmux` present
++- `~/.nvm/nvm.sh` present
++- `node_modules` present
++
++### Present, but not configured as the default path
++
++- Linux Node works through the wrapper:
++  - `bash ./scripts/with-node.sh node -v` -> `v24.11.0`
++  - `bash ./scripts/with-node.sh npm -v` -> `11.6.1`
++  - `bash ./scripts/with-node.sh npx playwright --version` -> `1.59.1`
++
++### Missing or not currently available on PATH
++
++- bare `node`
++- `pnpm`
++- `yarn`
++- bare `python`
++- `pip`
++- `pytest`
++- `playwright` as a bare global command
++- `docker`
++- `gh`
++- `fd`
++- `sqlite3`
++- `make`
++- `just`
++- `direnv`
++
++### Incorrect default resolution
++
++- `npm` resolves to `/mnt/c/Program Files/nodejs/npm`
++- `npx` resolves to `/mnt/c/Program Files/nodejs/npx`
++
++This is the main ergonomics risk in the current setup.
++
++### Repo-specific validation results
++
++Through the Linux Node wrapper, the current repo is healthy:
++
++- `bash ./scripts/with-node.sh npm run typecheck` passed
++- `bash ./scripts/with-node.sh npm run test` passed
++  - `24` files
++  - `168` tests
++- `bash ./scripts/with-node.sh npm run test:e2e` passed
++  - `9` Playwright tests
++
++## Gap Summary
++
++### Green
++
++- The repo itself is install-complete and testable.
++- The pinned Linux Node version is available.
++- Playwright browser execution works.
++- Python is present for future agent-side tooling.
++
++### Yellow
++
++- The shell defaults are unsafe for Node-family commands because Windows npm/npx win path precedence.
++- The repo wrapper is not executable, so it currently requires `bash ./scripts/with-node.sh ...`.
++- Python utility tooling is only partially provisioned.
++
++### Red
++
++- The default shell is not yet a clean “use the repo normally without thinking about it” environment.
++- Several common CLI tools for agentic workflows are absent.
++
++## Applied Remediation
++
++Applied on April 20, 2026 without Docker changes.
++
++- updated `~/.profile` so login shells load `nvm` and activate the default Linux Node alias
++- updated `~/.bashrc` to load the `direnv` hook when available
++- added [.envrc](/home/pinto/repo/BMADGraphWebApp/.envrc) so the repo auto-selects the pinned Node runtime through `direnv`
++- made [`scripts/with-node.sh`](/home/pinto/repo/BMADGraphWebApp/scripts/with-node.sh) executable
++- installed user-space CLI tools in `~/.local/bin`:
++  - `pip`
++  - `pytest`
++  - `gh`
++  - `fd`
++  - `sqlite3`
++  - `direnv`
++  - `just`
++
++## Post-Remediation Verification
++
++Verified after the fixes:
++
++- `bash -lc 'command -v node npm npx'` resolves to Linux `nvm` paths
++- `node -v` -> `v24.11.0`
++- `npm -v` -> `11.6.1`
++- `npx playwright --version` -> `1.59.1`
++- `pip --version` -> `26.0.1`
++- `pytest --version` -> `9.0.3`
++- `gh --version` -> `2.90.0`
++- `fd --version` -> `10.4.2`
++- `sqlite3 --version` -> `3.53.0`
++- `direnv --version` -> `2.37.1`
++- `just --version` -> `1.50.0`
++- `direnv exec . ...` loads [.envrc](/home/pinto/repo/BMADGraphWebApp/.envrc) and resolves the pinned Linux Node runtime
++- `./scripts/with-node.sh npm run test` passes
++
++## Priority Remediation Checklist
++
++### Priority 1: Fix runtime defaults
++
++1. Initialize `nvm` in shell startup so Linux Node is on PATH by default.
++2. Ensure `node`, `npm`, and `npx` resolve to Linux paths, not `/mnt/c/...`.
++3. Make [`scripts/with-node.sh`](/home/pinto/repo/BMADGraphWebApp/scripts/with-node.sh) executable.
++4. Keep using the wrapper for automation and agent runs even after shell init, because it enforces the pinned repo runtime.
++
++### Priority 2: Complete the Python utility layer
++
++1. Ensure `pip` is available for `python3`.
++2. Install `pytest`.
++3. Standardize on `uv venv` for disposable local helper environments.
++
++### Priority 3: Add missing CLI tooling
++
++1. Install `gh`.
++2. Install `fd`.
++3. Install `sqlite3`.
++4. Install `direnv`.
++5. Install either `make` or `just`.
++
++### Priority 4: Add optional container support
++
++1. Install Docker.
++2. Install `docker compose`.
++
++## Recommended Command Baseline
++
++After remediation, these should work from the shell without ambiguity:
++
++```bash
++node -v
++npm -v
++npx playwright --version
++python3 --version
++uv --version
++pytest --version
++gh --version
++fd --version
++sqlite3 --version
++```
++
++These repo commands should remain green:
+ 
+-### Priority 4: Add optional container support
++```bash
++bash ./scripts/with-node.sh npm run typecheck
++bash ./scripts/with-node.sh npm run test
++bash ./scripts/with-node.sh npm run test:e2e
++```
+ 
+-1. Install Docker.
+-2. Install `docker compose`.
++## Hosted Shell Bootstrap Flow
+ 
+-## Recommended Command Baseline
++A fresh clone no longer needs an ad hoc mock server for hosted-shell startup.
+ 
+-After remediation, these should work from the shell without ambiguity:
++Use the Vite dev server for day-to-day development:
+ 
+ ```bash
+-node -v
+-npm -v
+-npx playwright --version
+-python3 --version
+-uv --version
+-pytest --version
+-gh --version
+-fd --version
+-sqlite3 --version
++bash ./scripts/with-node.sh npm run dev
+ ```
+ 
+-These repo commands should remain green:
++That flow now serves the shell bootstrap endpoints directly from the canonical checked-in metadata at:
++
++- `GET /api/release-manifest`
++- `GET /api/support-matrix`
++- `GET /api/health`
++
++To verify the thin static-host delivery path against a built shell bundle:
+ 
+ ```bash
+-bash ./scripts/with-node.sh npm run typecheck
+-bash ./scripts/with-node.sh npm run test
+-bash ./scripts/with-node.sh npm run test:e2e
++bash ./scripts/with-node.sh npm run build
++bash ./scripts/with-node.sh npm run preview:shell -- --host 127.0.0.1 --port 4173
+ ```
+ 
+-## Short Recommendation
++That delivery server serves only the narrow operational shell endpoints plus the built static bundle with SPA fallback for `/`, `/workspace`, `/workspace/:workspaceId`, `/review/:workspaceId`, and `/unsupported`.
+ 
+-For BMADGraphWebApp, the ideal environment is not larger than the current one. It is mostly the current environment with three fixes:
++The canonical bootstrap payloads live in:
+ 
+-- make Linux Node the default instead of Windows shims
+-- finish the lightweight Python tool layer
+-- add a small set of missing CLI tools for agent productivity
++- [release-manifest.fixture.json](/home/pinto/repo/BMADGraphWebApp/src/test/fixtures/api/release-manifest.fixture.json)
++- [support-matrix.fixture.json](/home/pinto/repo/BMADGraphWebApp/src/test/fixtures/api/support-matrix.fixture.json)
+ 
+-That gets the workstation from "works when handled carefully" to "safe and efficient by default."
++The schema and version-alignment checks for those payloads run in the normal test suite before release.
++
++## Short Recommendation
++
++For BMADGraphWebApp, the ideal environment is not larger than the current one. It is mostly the current environment with three fixes:
++
++- make Linux Node the default instead of Windows shims
++- finish the lightweight Python tool layer
++- add a small set of missing CLI tools for agent productivity
++
++That gets the workstation from "works when handled carefully" to "safe and efficient by default."
+diff --git a/package.json b/package.json
+index 2cb10e6..8a0e901 100644
+--- a/package.json
++++ b/package.json
+@@ -1,52 +1,54 @@
+-{
+-  "name": "bmad-graph-web-app",
+-  "private": true,
+-  "version": "0.1.0",
+-  "type": "module",
+-  "engines": {
+-    "node": ">=24.0.0"
+-  },
+-  "scripts": {
+-    "guard:runtime": "node ./scripts/enforce-node-runtime.mjs",
+-    "preinstall": "node ./scripts/enforce-node-runtime.mjs install",
++{
++  "name": "bmad-graph-web-app",
++  "private": true,
++  "version": "0.1.0",
++  "type": "module",
++  "engines": {
++    "node": ">=24.0.0"
++  },
++  "scripts": {
++    "guard:runtime": "node ./scripts/enforce-node-runtime.mjs",
++    "preinstall": "node ./scripts/enforce-node-runtime.mjs install",
+     "predev": "node ./scripts/enforce-node-runtime.mjs dev",
+     "prebuild": "node ./scripts/enforce-node-runtime.mjs build",
+     "prepreview": "node ./scripts/enforce-node-runtime.mjs preview",
++    "prepreview:shell": "node ./scripts/enforce-node-runtime.mjs preview:shell",
+     "prelint": "node ./scripts/enforce-node-runtime.mjs lint",
+-    "pretypecheck": "node ./scripts/enforce-node-runtime.mjs typecheck",
+-    "pretest": "node ./scripts/enforce-node-runtime.mjs test",
+-    "pretest:watch": "node ./scripts/enforce-node-runtime.mjs test:watch",
+-    "pretest:e2e": "node ./scripts/enforce-node-runtime.mjs test:e2e",
++    "pretypecheck": "node ./scripts/enforce-node-runtime.mjs typecheck",
++    "pretest": "node ./scripts/enforce-node-runtime.mjs test",
++    "pretest:watch": "node ./scripts/enforce-node-runtime.mjs test:watch",
++    "pretest:e2e": "node ./scripts/enforce-node-runtime.mjs test:e2e",
+     "dev": "vite",
+     "build": "tsc -b && vite build",
+     "preview": "vite preview",
++    "preview:shell": "node ./scripts/shell-delivery-server.mjs",
+     "lint": "eslint .",
+     "typecheck": "tsc -b",
+     "test": "vitest run",
+-    "test:watch": "vitest",
+-    "test:e2e": "playwright test"
+-  },
+-  "dependencies": {
+-    "papaparse": "^5.5.3",
+-    "react": "^19.2.5",
+-    "react-dom": "^19.2.5",
+-    "react-router": "^7.14.1",
+-    "xlsx": "^0.18.5",
+-    "zod": "^4.3.6",
+-    "zustand": "^5.0.12"
+-  },
+-  "devDependencies": {
+-    "@eslint/js": "^10.0.1",
+-    "@playwright/test": "^1.59.1",
+-    "@types/node": "^25.6.0",
+-    "@types/react": "^19.2.14",
+-    "@types/react-dom": "^19.2.3",
+-    "@vitejs/plugin-react": "^6.0.1",
+-    "eslint": "^10.2.0",
+-    "globals": "^17.5.0",
+-    "typescript": "^6.0.2",
+-    "typescript-eslint": "^8.58.2",
+-    "vite": "^8.0.8",
+-    "vitest": "^4.1.4"
+-  }
+-}
++    "test:watch": "vitest",
++    "test:e2e": "playwright test"
++  },
++  "dependencies": {
++    "papaparse": "^5.5.3",
++    "react": "^19.2.5",
++    "react-dom": "^19.2.5",
++    "react-router": "^7.14.1",
++    "xlsx": "^0.18.5",
++    "zod": "^4.3.6",
++    "zustand": "^5.0.12"
++  },
++  "devDependencies": {
++    "@eslint/js": "^10.0.1",
++    "@playwright/test": "^1.59.1",
++    "@types/node": "^25.6.0",
++    "@types/react": "^19.2.14",
++    "@types/react-dom": "^19.2.3",
++    "@vitejs/plugin-react": "^6.0.1",
++    "eslint": "^10.2.0",
++    "globals": "^17.5.0",
++    "typescript": "^6.0.2",
++    "typescript-eslint": "^8.58.2",
++    "vite": "^8.0.8",
++    "vitest": "^4.1.4"
++  }
++}
+diff --git a/playwright.config.ts b/playwright.config.ts
+index 455c245..58a71c6 100644
+--- a/playwright.config.ts
++++ b/playwright.config.ts
+@@ -1,16 +1,16 @@
+-import { defineConfig } from '@playwright/test';
+-
+-export default defineConfig({
+-  testDir: './tests/e2e',
+-  fullyParallel: true,
+-  retries: process.env.CI ? 2 : 0,
++import { defineConfig } from '@playwright/test';
++
++export default defineConfig({
++  testDir: './tests/e2e',
++  fullyParallel: true,
++  retries: process.env.CI ? 2 : 0,
+   reporter: 'list',
+   use: {
+     baseURL: 'http://127.0.0.1:4173',
+     trace: 'on-first-retry',
+   },
+   webServer: {
+-    command: 'npm run preview -- --host 127.0.0.1 --port 4173',
++    command: 'bash ./scripts/with-node.sh npm run build && bash ./scripts/with-node.sh npm run preview:shell -- --host 127.0.0.1 --port 4173',
+     port: 4173,
+     reuseExistingServer: !process.env.CI,
+     timeout: 120_000,
+diff --git a/home/pinto/repo/BMADGraphWebApp/scripts/shell-delivery-server.mjs b/home/pinto/repo/BMADGraphWebApp/scripts/shell-delivery-server.mjs
+new file mode 100644
+index 0000000..7b9c64d
+--- /dev/null
++++ b/home/pinto/repo/BMADGraphWebApp/scripts/shell-delivery-server.mjs
+@@ -0,0 +1,226 @@
++#!/usr/bin/env node
++
++import { createReadStream, existsSync } from 'node:fs';
++import { readFile, stat } from 'node:fs/promises';
++import http from 'node:http';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++
++import {
++  isShellRoutePathname,
++  loadDeployedShellBootstrapMetadata,
++  loadDeployedShellHealthPayload,
++} from './shell-bootstrap-metadata.mjs';
++
++const __filename = fileURLToPath(import.meta.url);
++const __dirname = path.dirname(__filename);
++const repoRoot = path.resolve(__dirname, '..');
++const distRoot = path.join(repoRoot, 'dist');
++const failureMode = process.env.BMAD_SHELL_DELIVERY_FAILURE_MODE ?? 'none';
++
++function parseCliArgs(argv) {
++  const options = {};
++
++  for (let index = 0; index < argv.length; index += 1) {
++    const current = argv[index];
++    const next = argv[index + 1];
++
++    if (current === '--host' && next) {
++      options.host = next;
++      index += 1;
++      continue;
++    }
++
++    if (current === '--port' && next) {
++      options.port = Number.parseInt(next, 10);
++      index += 1;
++    }
++  }
++
++  return options;
++}
++
++const cliOptions = parseCliArgs(process.argv.slice(2));
++const host = cliOptions.host ?? process.env.HOST ?? '127.0.0.1';
++const port = cliOptions.port ?? Number.parseInt(process.env.PORT ?? '4173', 10);
++
++const mimeTypes = new Map([
++  ['.css', 'text/css; charset=utf-8'],
++  ['.html', 'text/html; charset=utf-8'],
++  ['.ico', 'image/x-icon'],
++  ['.js', 'text/javascript; charset=utf-8'],
++  ['.json', 'application/json; charset=utf-8'],
++  ['.map', 'application/json; charset=utf-8'],
++  ['.png', 'image/png'],
++  ['.svg', 'image/svg+xml'],
++  ['.txt', 'text/plain; charset=utf-8'],
++  ['.webmanifest', 'application/manifest+json; charset=utf-8'],
++  ['.woff', 'font/woff'],
++  ['.woff2', 'font/woff2'],
++]);
++
++const genericServerFailureMessage = 'Unexpected server failure.';
++
++function sendJson(response, payload, statusCode = 200) {
++  const body = Buffer.from(JSON.stringify(payload));
++
++  response.writeHead(statusCode, {
++    'cache-control': 'no-cache',
++    'content-length': body.length,
++    'content-type': 'application/json; charset=utf-8',
++  });
++  response.end(body);
++}
++
++function sendText(response, text, statusCode = 200) {
++  const body = Buffer.from(text);
++
++  response.writeHead(statusCode, {
++    'cache-control': 'no-cache',
++    'content-length': body.length,
++    'content-type': 'text/plain; charset=utf-8',
++  });
++  response.end(body);
++}
++
++async function resolveStaticFile(urlPathname) {
++  const normalizedPathname = decodeURIComponent(urlPathname);
++  const requestedPath = normalizedPathname === '/' ? '/index.html' : normalizedPathname;
++  const filePath = path.normalize(path.join(distRoot, requestedPath));
++  const relativePath = path.relative(distRoot, filePath);
++
++  if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
++    return null;
++  }
++
++  try {
++    const fileStat = await stat(filePath);
++
++    if (!fileStat.isFile()) {
++      return null;
++    }
++
++    return filePath;
++  } catch {
++    return null;
++  }
++}
++
++async function streamFile(response, filePath) {
++  const fileStat = await stat(filePath);
++  const extension = path.extname(filePath).toLowerCase();
++  const contentType = mimeTypes.get(extension) ?? 'application/octet-stream';
++
++  response.writeHead(200, {
++    'content-length': fileStat.size,
++    'content-type': contentType,
++  });
++
++  return new Promise((resolve, reject) => {
++    const stream = createReadStream(filePath);
++
++    stream.on('error', reject);
++    stream.on('close', resolve);
++    stream.pipe(response);
++  });
++}
++
++async function streamIndexHtml(response) {
++  const indexPath = path.join(distRoot, 'index.html');
++  const html = await readFile(indexPath);
++
++  response.writeHead(200, {
++    'cache-control': 'no-cache',
++    'content-length': html.length,
++    'content-type': 'text/html; charset=utf-8',
++  });
++  response.end(html);
++}
++
++if (!existsSync(distRoot)) {
++  console.error('Expected a built app at dist/. Run `bash ./scripts/with-node.sh npm run build` first.');
++  process.exit(1);
++}
++
++const server = http.createServer(async (request, response) => {
++  if (!request.url) {
++    sendText(response, 'Missing request URL.', 400);
++    return;
++  }
++
++  if ((request.method ?? 'GET') !== 'GET') {
++    sendText(response, 'Method not allowed.', 405);
++    return;
++  }
++
++  const requestUrl = new URL(request.url, `http://${host}:${port}`);
++  const { pathname } = requestUrl;
++
++  try {
++    if (pathname === '/api/release-manifest') {
++      const metadata = await loadDeployedShellBootstrapMetadata({ distRoot });
++
++      if (failureMode === 'release-manifest-unavailable') {
++        sendJson(response, { status: 'error', message: 'release manifest unavailable' }, 503);
++        return;
++      }
++
++      sendJson(response, metadata.releaseManifest);
++      return;
++    }
++
++    if (pathname === '/api/support-matrix') {
++      const metadata = await loadDeployedShellBootstrapMetadata({ distRoot });
++
++      if (failureMode === 'support-matrix-unavailable') {
++        sendJson(response, { status: 'error', message: 'support matrix unavailable' }, 503);
++        return;
++      }
++
++      sendJson(response, metadata.supportMatrix);
++      return;
++    }
++
++    if (pathname === '/api/health') {
++      const healthPayload = await loadDeployedShellHealthPayload({ distRoot });
++      sendJson(response, healthPayload);
++      return;
++    }
++
++    if (pathname.startsWith('/api/')) {
++      sendJson(response, { status: 'not-found' }, 404);
++      return;
++    }
++
++    const staticFilePath = await resolveStaticFile(pathname);
++
++    if (staticFilePath) {
++      await streamFile(response, staticFilePath);
++      return;
++    }
++
++    if (isShellRoutePathname(pathname)) {
++      await streamIndexHtml(response);
++      return;
++    }
++
++    sendText(response, 'Not found.', 404);
++  } catch (error) {
++    if (error instanceof URIError) {
++      sendText(response, 'Malformed request path.', 400);
++      return;
++    }
++
++    console.error(error);
++    sendText(response, genericServerFailureMessage, 500);
++  }
++});
++
++server.listen(port, host, () => {
++  const address = server.address();
++  const resolvedPort = typeof address === 'object' && address ? address.port : port;
++
++  console.log(`Hosted shell delivery server ready at http://${host}:${resolvedPort}`);
++  console.log('Operational routes: /api/release-manifest, /api/support-matrix, /api/health');
++  console.log('SPA fallback covers /, /workspace, /workspace/:workspaceId, /review/:workspaceId, and /unsupported.');
++});
+diff --git a/home/pinto/repo/BMADGraphWebApp/scripts/shell-bootstrap-metadata.mjs b/home/pinto/repo/BMADGraphWebApp/scripts/shell-bootstrap-metadata.mjs
+new file mode 100644
+index 0000000..dbb07fc
+--- /dev/null
++++ b/home/pinto/repo/BMADGraphWebApp/scripts/shell-bootstrap-metadata.mjs
+@@ -0,0 +1,181 @@
++import { mkdir, readFile, writeFile } from 'node:fs/promises';
++import path from 'node:path';
++
++export const CANONICAL_BOOTSTRAP_PATHS = {
++  releaseManifest: path.join('src', 'test', 'fixtures', 'api', 'release-manifest.fixture.json'),
++  supportMatrix: path.join('src', 'test', 'fixtures', 'api', 'support-matrix.fixture.json'),
++};
++
++export const DEPLOYED_BOOTSTRAP_ASSET_PATHS = {
++  health: path.join('api', 'health.json'),
++  releaseManifest: path.join('api', 'release-manifest.json'),
++  supportMatrix: path.join('api', 'support-matrix.json'),
++};
++
++async function readJsonFile(filePath) {
++  return JSON.parse(await readFile(filePath, 'utf8'));
++}
++
++export function validateShellBootstrapMetadata(metadata) {
++  const releaseManifest = metadata.releaseManifest;
++  const supportMatrix = metadata.supportMatrix;
++
++  if (!releaseManifest || typeof releaseManifest !== 'object') {
++    throw new Error('Configured shell metadata must include a release manifest object.');
++  }
++
++  if (!supportMatrix || typeof supportMatrix !== 'object') {
++    throw new Error('Configured shell metadata must include a support matrix object.');
++  }
++
++  if (typeof releaseManifest.appBuildVersion !== 'string' || releaseManifest.appBuildVersion.length === 0) {
++    throw new Error('Configured shell metadata must include a release manifest appBuildVersion.');
++  }
++
++  if (
++    !releaseManifest.workspaceCompatibility ||
++    typeof releaseManifest.workspaceCompatibility !== 'object' ||
++    typeof releaseManifest.workspaceCompatibility.minReadableFormat !== 'string' ||
++    typeof releaseManifest.workspaceCompatibility.maxReadableFormat !== 'string'
++  ) {
++    throw new Error('Configured shell metadata must include workspace compatibility bounds in the release manifest.');
++  }
++
++  if (typeof releaseManifest.supportMatrixVersion !== 'string' || releaseManifest.supportMatrixVersion.length === 0) {
++    throw new Error('Configured shell metadata must include a pinned supportMatrixVersion.');
++  }
++
++  if (
++    !supportMatrix.workspaceCompatibility ||
++    typeof supportMatrix.workspaceCompatibility !== 'object' ||
++    typeof supportMatrix.workspaceCompatibility.minimumReadableFormat !== 'string' ||
++    typeof supportMatrix.workspaceCompatibility.maximumReadableFormat !== 'string'
++  ) {
++    throw new Error('Configured shell metadata must include workspace compatibility bounds in the support matrix.');
++  }
++
++  if (typeof supportMatrix.version !== 'string' || supportMatrix.version.length === 0) {
++    throw new Error('Configured shell metadata must include a support matrix version.');
++  }
++
++  if (releaseManifest.supportMatrixVersion !== supportMatrix.version) {
++    throw new Error(
++      `Configured shell metadata is inconsistent: manifest expects ${releaseManifest.supportMatrixVersion} but support matrix is ${supportMatrix.version}.`,
++    );
++  }
++
++  if (releaseManifest.supportMatrixUrl !== '/api/support-matrix') {
++    throw new Error('Configured shell metadata must point supportMatrixUrl at /api/support-matrix.');
++  }
++
++  if (
++    releaseManifest.workspaceCompatibility.minReadableFormat !== supportMatrix.workspaceCompatibility.minimumReadableFormat ||
++    releaseManifest.workspaceCompatibility.maxReadableFormat !== supportMatrix.workspaceCompatibility.maximumReadableFormat
++  ) {
++    throw new Error('Configured shell metadata must keep workspace compatibility aligned with the support matrix.');
++  }
++
++  return {
++    releaseManifest,
++    supportMatrix,
++  };
++}
++
++export function createShellHealthPayload(metadata) {
++  return {
++    status: 'ok',
++    releaseManifestVersion: metadata.releaseManifest.appBuildVersion,
++    supportMatrixVersion: metadata.supportMatrix.version,
++  };
++}
++
++export function validateShellHealthPayload(healthPayload) {
++  if (!healthPayload || typeof healthPayload !== 'object') {
++    throw new Error('Configured shell health payload must be an object.');
++  }
++
++  if (healthPayload.status !== 'ok') {
++    throw new Error('Configured shell health payload must report ok status.');
++  }
++
++  if (
++    typeof healthPayload.releaseManifestVersion !== 'string' ||
++    healthPayload.releaseManifestVersion.length === 0 ||
++    typeof healthPayload.supportMatrixVersion !== 'string' ||
++    healthPayload.supportMatrixVersion.length === 0
++  ) {
++    throw new Error('Configured shell health payload must include manifest and support matrix versions.');
++  }
++
++  return healthPayload;
++}
++
++export async function loadShellBootstrapMetadataFromFiles({ releaseManifestPath, supportMatrixPath }) {
++  const [releaseManifest, supportMatrix] = await Promise.all([
++    readJsonFile(releaseManifestPath),
++    readJsonFile(supportMatrixPath),
++  ]);
++
++  return validateShellBootstrapMetadata({ releaseManifest, supportMatrix });
++}
++
++export async function loadCanonicalShellBootstrapMetadata({ repoRoot }) {
++  return loadShellBootstrapMetadataFromFiles({
++    releaseManifestPath: path.join(repoRoot, CANONICAL_BOOTSTRAP_PATHS.releaseManifest),
++    supportMatrixPath: path.join(repoRoot, CANONICAL_BOOTSTRAP_PATHS.supportMatrix),
++  });
++}
++
++export async function loadDeployedShellBootstrapMetadata({ distRoot }) {
++  return loadShellBootstrapMetadataFromFiles({
++    releaseManifestPath: path.join(distRoot, DEPLOYED_BOOTSTRAP_ASSET_PATHS.releaseManifest),
++    supportMatrixPath: path.join(distRoot, DEPLOYED_BOOTSTRAP_ASSET_PATHS.supportMatrix),
++  });
++}
++
++export async function loadDeployedShellHealthPayload({ distRoot }) {
++  return validateShellHealthPayload(await readJsonFile(path.join(distRoot, DEPLOYED_BOOTSTRAP_ASSET_PATHS.health)));
++}
++
++export async function emitShellBootstrapMetadataAssets({ distRoot, metadata }) {
++  const healthPath = path.join(distRoot, DEPLOYED_BOOTSTRAP_ASSET_PATHS.health);
++  const releaseManifestPath = path.join(distRoot, DEPLOYED_BOOTSTRAP_ASSET_PATHS.releaseManifest);
++  const supportMatrixPath = path.join(distRoot, DEPLOYED_BOOTSTRAP_ASSET_PATHS.supportMatrix);
++
++  await mkdir(path.dirname(releaseManifestPath), { recursive: true });
++
++  await Promise.all([
++    writeFile(healthPath, `${JSON.stringify(createShellHealthPayload(metadata), null, 2)}\n`, 'utf8'),
++    writeFile(releaseManifestPath, `${JSON.stringify(metadata.releaseManifest, null, 2)}\n`, 'utf8'),
++    writeFile(supportMatrixPath, `${JSON.stringify(metadata.supportMatrix, null, 2)}\n`, 'utf8'),
++  ]);
++}
++
++function hasSingleSegmentRoute(pathname, prefix) {
++  if (!pathname.startsWith(prefix)) {
++    return false;
++  }
++
++  const remainder = pathname.slice(prefix.length);
++  return remainder.length > 0 && !remainder.includes('/');
++}
++
++function normalizeShellRoutePathname(pathname) {
++  if (pathname === '/') {
++    return pathname;
++  }
++
++  return pathname.replace(/\/+$/u, '');
++}
++
++export function isShellRoutePathname(pathname) {
++  const normalizedPathname = normalizeShellRoutePathname(pathname);
++
++  return (
++    normalizedPathname === '/' ||
++    normalizedPathname === '/workspace' ||
++    hasSingleSegmentRoute(normalizedPathname, '/workspace/') ||
++    hasSingleSegmentRoute(normalizedPathname, '/review/') ||
++    normalizedPathname === '/unsupported'
++  );
++}
+diff --git a/src/schemas/api/release-manifest.ts b/src/schemas/api/release-manifest.ts
+index da0e94d..3ab2302 100644
+--- a/src/schemas/api/release-manifest.ts
++++ b/src/schemas/api/release-manifest.ts
+@@ -3,43 +3,43 @@ import { z } from 'zod';
+ import {
+   dateVersionSchema,
+   isoDateTimeSchema,
+-  nonEmptyStringSchema,
+-  positiveIntegerSchema,
+-  semverSchema,
+-  sha256TokenSchema,
++  nonEmptyStringSchema,
++  positiveIntegerSchema,
++  semverSchema,
++  sha256TokenSchema,
+   strictObject,
+   versionRangeSchema,
+-} from '../validation';
+-
+-export const releaseManifestSchema = strictObject({
+-  schemaVersion: semverSchema,
+-  appBuildVersion: semverSchema,
+-  releaseDate: isoDateTimeSchema,
+-  channel: nonEmptyStringSchema,
+-  supportMatrixVersion: dateVersionSchema,
+-  supportMatrixUrl: nonEmptyStringSchema,
+-  workspaceCompatibility: strictObject({
+-    minReadableFormat: semverSchema,
+-    maxReadableFormat: versionRangeSchema,
+-    migrationPolicy: z.enum(['migrate-on-open']),
+-  }),
+-  serviceWorker: strictObject({
+-    version: nonEmptyStringSchema,
+-    scope: nonEmptyStringSchema,
+-    offlineReadyTimeoutMs: positiveIntegerSchema,
+-    updatePromptMode: z.enum(['soft-refresh', 'hard-refresh']),
+-  }),
+-  telemetry: strictObject({
+-    endpoint: nonEmptyStringSchema,
+-    schemaVersion: semverSchema,
+-  }),
+-  releaseNotes: strictObject({
+-    title: nonEmptyStringSchema,
+-    url: nonEmptyStringSchema,
+-  }),
+-  integrity: strictObject({
+-    manifestSha256: sha256TokenSchema,
+-  }),
+-});
+-
+-export type ReleaseManifest = z.infer<typeof releaseManifestSchema>;
++} from '../validation/index.ts';
++
++export const releaseManifestSchema = strictObject({
++  schemaVersion: semverSchema,
++  appBuildVersion: semverSchema,
++  releaseDate: isoDateTimeSchema,
++  channel: nonEmptyStringSchema,
++  supportMatrixVersion: dateVersionSchema,
++  supportMatrixUrl: nonEmptyStringSchema,
++  workspaceCompatibility: strictObject({
++    minReadableFormat: semverSchema,
++    maxReadableFormat: versionRangeSchema,
++    migrationPolicy: z.enum(['migrate-on-open']),
++  }),
++  serviceWorker: strictObject({
++    version: nonEmptyStringSchema,
++    scope: nonEmptyStringSchema,
++    offlineReadyTimeoutMs: positiveIntegerSchema,
++    updatePromptMode: z.enum(['soft-refresh', 'hard-refresh']),
++  }),
++  telemetry: strictObject({
++    endpoint: nonEmptyStringSchema,
++    schemaVersion: semverSchema,
++  }),
++  releaseNotes: strictObject({
++    title: nonEmptyStringSchema,
++    url: nonEmptyStringSchema,
++  }),
++  integrity: strictObject({
++    manifestSha256: sha256TokenSchema,
++  }),
++});
++
++export type ReleaseManifest = z.infer<typeof releaseManifestSchema>;
+diff --git a/src/schemas/api/support-matrix.ts b/src/schemas/api/support-matrix.ts
+index 592ae58..3f0830d 100644
+--- a/src/schemas/api/support-matrix.ts
++++ b/src/schemas/api/support-matrix.ts
+@@ -3,34 +3,34 @@ import { z } from 'zod';
+ import {
+   dateVersionSchema,
+   isoDateTimeSchema,
+-  nonEmptyStringSchema,
+-  positiveIntegerSchema,
+-  semverSchema,
++  nonEmptyStringSchema,
++  positiveIntegerSchema,
++  semverSchema,
+   strictObject,
+   versionRangeSchema,
+-} from '../validation';
+-
+-export const supportedBrowserFamilySchema = z.enum(['chrome', 'edge', 'firefox', 'safari']);
+-
+-export const browserSupportSchema = strictObject({
+-  family: supportedBrowserFamilySchema,
+-  supportLevel: z.enum(['supported', 'secondary', 'unsupported']),
+-  minimumMajorVersion: positiveIntegerSchema.optional(),
+-  desktopOnly: z.literal(true),
+-  notes: nonEmptyStringSchema.optional(),
+-});
+-
+-export const supportMatrixSchema = strictObject({
+-  version: dateVersionSchema,
+-  publishedAt: isoDateTimeSchema,
+-  standardZoom: nonEmptyStringSchema,
+-  supportedBrowsers: z.array(browserSupportSchema).min(1),
+-  workspaceCompatibility: strictObject({
+-    minimumReadableFormat: semverSchema,
+-    maximumReadableFormat: versionRangeSchema,
+-  }),
+-});
+-
+-export type SupportedBrowserFamily = z.infer<typeof supportedBrowserFamilySchema>;
+-export type BrowserSupport = z.infer<typeof browserSupportSchema>;
+-export type SupportMatrix = z.infer<typeof supportMatrixSchema>;
++} from '../validation/index.ts';
++
++export const supportedBrowserFamilySchema = z.enum(['chrome', 'edge', 'firefox', 'safari']);
++
++export const browserSupportSchema = strictObject({
++  family: supportedBrowserFamilySchema,
++  supportLevel: z.enum(['supported', 'secondary', 'unsupported']),
++  minimumMajorVersion: positiveIntegerSchema.optional(),
++  desktopOnly: z.literal(true),
++  notes: nonEmptyStringSchema.optional(),
++});
++
++export const supportMatrixSchema = strictObject({
++  version: dateVersionSchema,
++  publishedAt: isoDateTimeSchema,
++  standardZoom: nonEmptyStringSchema,
++  supportedBrowsers: z.array(browserSupportSchema).min(1),
++  workspaceCompatibility: strictObject({
++    minimumReadableFormat: semverSchema,
++    maximumReadableFormat: versionRangeSchema,
++  }),
++});
++
++export type SupportedBrowserFamily = z.infer<typeof supportedBrowserFamilySchema>;
++export type BrowserSupport = z.infer<typeof browserSupportSchema>;
++export type SupportMatrix = z.infer<typeof supportMatrixSchema>;
+diff --git a/src/schemas/contracts.spec.ts b/src/schemas/contracts.spec.ts
+index 3b3ac93..3642efa 100644
+--- a/src/schemas/contracts.spec.ts
++++ b/src/schemas/contracts.spec.ts
+@@ -2,22 +2,24 @@ import { describe, expect, it } from 'vitest';
+ 
+ import { errorEnvelopeSchema, releaseManifestSchema, supportMatrixSchema, telemetryBatchSchema } from './api';
+ import { workerMessageEnvelopeSchema } from './worker';
+-import {
+-  graphDefinitionSchema,
+-  issueRecordSchema,
+-  workspaceLedgerEntrySchema,
+-  workspaceSnapshotSchema,
+-} from './workspace';
+-import { errorEnvelopeFixture } from '../test/fixtures/api/error-envelope.fixture';
+-import { releaseManifestFixture } from '../test/fixtures/api/release-manifest.fixture';
+-import { supportMatrixFixture } from '../test/fixtures/api/support-matrix.fixture';
++import {
++  graphDefinitionSchema,
++  issueRecordSchema,
++  workspaceLedgerEntrySchema,
++  workspaceSnapshotSchema,
++} from './workspace';
++import { errorEnvelopeFixture } from '../test/fixtures/api/error-envelope.fixture';
++import { releaseManifestFixture } from '../test/fixtures/api/release-manifest.fixture';
++import { supportMatrixFixture } from '../test/fixtures/api/support-matrix.fixture';
+ import { telemetryBatchFixture } from '../test/fixtures/api/telemetry-batch.fixture';
+ import { workerMessageEnvelopeFixture } from '../test/fixtures/worker/message-envelope.fixture';
+ import { graphDefinitionFixture } from '../test/fixtures/workspace/graph-definition.fixture';
+ import { issueRecordFixture } from '../test/fixtures/workspace/issue-record.fixture';
+ import { workspaceLedgerFixture } from '../test/fixtures/workspace/workspace-ledger.fixture';
+ import { workspaceSnapshotFixture } from '../test/fixtures/workspace/workspace-snapshot.fixture';
+-
++import canonicalReleaseManifest from '../test/fixtures/api/release-manifest.fixture.json';
++import canonicalSupportMatrix from '../test/fixtures/api/support-matrix.fixture.json';
++
+ describe('contract fixtures', () => {
+   it('accepts the locked graph and workspace fixtures', () => {
+     expect(graphDefinitionSchema.parse(graphDefinitionFixture)).toEqual(graphDefinitionFixture);
+@@ -62,68 +64,68 @@ describe('contract fixtures', () => {
+     expect(issueRecordSchema.parse(issueRecordFixture)).toEqual(issueRecordFixture);
+     expect(releaseManifestSchema.parse(releaseManifestFixture)).toEqual(releaseManifestFixture);
+     expect(supportMatrixSchema.parse(supportMatrixFixture)).toEqual(supportMatrixFixture);
+-    expect(telemetryBatchSchema.parse(telemetryBatchFixture)).toEqual(telemetryBatchFixture);
+-    expect(errorEnvelopeSchema.parse(errorEnvelopeFixture)).toEqual(errorEnvelopeFixture);
+-    expect(workerMessageEnvelopeSchema.parse(workerMessageEnvelopeFixture)).toEqual(workerMessageEnvelopeFixture);
+-  });
+-});
+-
+-describe('contract invariants', () => {
+-  it('rejects workspace snapshots that reintroduce renderer persistence fields', () => {
+-    const candidate = structuredClone(workspaceSnapshotFixture) as any;
+-    candidate.graphDefinitions[0] = {
+-      ...candidate.graphDefinitions[0],
+-      renderer: {
+-        family: 'vega-lite',
+-        mode: 'svg',
+-      },
+-    };
+-
+-    expect(workspaceSnapshotSchema.safeParse(candidate).success).toBe(false);
+-  });
+-
+-  it('rejects workspace snapshots with unresolved active graph references', () => {
+-    const candidate = structuredClone(workspaceSnapshotFixture) as any;
+-    candidate.activeGraphId = 'graph_missing';
+-
+-    expect(workspaceSnapshotSchema.safeParse(candidate).success).toBe(false);
+-  });
+-
+-  it('rejects ledger entries without causality metadata', () => {
+-    const candidate = structuredClone(workspaceLedgerFixture[0]) as any;
+-    delete candidate.correlationId;
+-
+-    expect(workspaceLedgerEntrySchema.safeParse(candidate).success).toBe(false);
+-  });
+-
+-  it('rejects issue records with invalid severity values', () => {
+-    const candidate = structuredClone(issueRecordFixture) as any;
+-    candidate.severity = 'critical';
+-
+-    expect(issueRecordSchema.safeParse(candidate).success).toBe(false);
+-  });
+-
+-  it('rejects issue records with invalid status values', () => {
+-    const candidate = structuredClone(issueRecordFixture) as any;
+-    candidate.status = 'closed';
+-
+-    expect(issueRecordSchema.safeParse(candidate).success).toBe(false);
+-  });
+-
+-  it('rejects telemetry payloads that break the redaction boundary', () => {
+-    const candidate = structuredClone(telemetryBatchFixture) as any;
+-    candidate.privacy.containsDatasetRows = true;
+-
+-    expect(telemetryBatchSchema.safeParse(candidate).success).toBe(false);
+-  });
+-
+-  it('rejects release manifests without a valid compatibility envelope', () => {
+-    const candidate = structuredClone(releaseManifestFixture) as any;
+-    candidate.workspaceCompatibility.maxReadableFormat = '';
+-
+-    expect(releaseManifestSchema.safeParse(candidate).success).toBe(false);
+-  });
+-
++    expect(telemetryBatchSchema.parse(telemetryBatchFixture)).toEqual(telemetryBatchFixture);
++    expect(errorEnvelopeSchema.parse(errorEnvelopeFixture)).toEqual(errorEnvelopeFixture);
++    expect(workerMessageEnvelopeSchema.parse(workerMessageEnvelopeFixture)).toEqual(workerMessageEnvelopeFixture);
++  });
++});
++
++describe('contract invariants', () => {
++  it('rejects workspace snapshots that reintroduce renderer persistence fields', () => {
++    const candidate = structuredClone(workspaceSnapshotFixture) as any;
++    candidate.graphDefinitions[0] = {
++      ...candidate.graphDefinitions[0],
++      renderer: {
++        family: 'vega-lite',
++        mode: 'svg',
++      },
++    };
++
++    expect(workspaceSnapshotSchema.safeParse(candidate).success).toBe(false);
++  });
++
++  it('rejects workspace snapshots with unresolved active graph references', () => {
++    const candidate = structuredClone(workspaceSnapshotFixture) as any;
++    candidate.activeGraphId = 'graph_missing';
++
++    expect(workspaceSnapshotSchema.safeParse(candidate).success).toBe(false);
++  });
++
++  it('rejects ledger entries without causality metadata', () => {
++    const candidate = structuredClone(workspaceLedgerFixture[0]) as any;
++    delete candidate.correlationId;
++
++    expect(workspaceLedgerEntrySchema.safeParse(candidate).success).toBe(false);
++  });
++
++  it('rejects issue records with invalid severity values', () => {
++    const candidate = structuredClone(issueRecordFixture) as any;
++    candidate.severity = 'critical';
++
++    expect(issueRecordSchema.safeParse(candidate).success).toBe(false);
++  });
++
++  it('rejects issue records with invalid status values', () => {
++    const candidate = structuredClone(issueRecordFixture) as any;
++    candidate.status = 'closed';
++
++    expect(issueRecordSchema.safeParse(candidate).success).toBe(false);
++  });
++
++  it('rejects telemetry payloads that break the redaction boundary', () => {
++    const candidate = structuredClone(telemetryBatchFixture) as any;
++    candidate.privacy.containsDatasetRows = true;
++
++    expect(telemetryBatchSchema.safeParse(candidate).success).toBe(false);
++  });
++
++  it('rejects release manifests without a valid compatibility envelope', () => {
++    const candidate = structuredClone(releaseManifestFixture) as any;
++    candidate.workspaceCompatibility.maxReadableFormat = '';
++
++    expect(releaseManifestSchema.safeParse(candidate).success).toBe(false);
++  });
++
+   it('rejects release manifests without a valid SHA-256 integrity token', () => {
+     const candidate = structuredClone(releaseManifestFixture) as any;
+     candidate.integrity.manifestSha256 = 'sha256:release-manifest-001';
+@@ -131,10 +133,24 @@ describe('contract invariants', () => {
+     expect(releaseManifestSchema.safeParse(candidate).success).toBe(false);
+   });
+ 
++  it('keeps canonical shell bootstrap metadata schema-valid and version-aligned', () => {
++    const manifest = releaseManifestSchema.parse(canonicalReleaseManifest);
++    const supportMatrix = supportMatrixSchema.parse(canonicalSupportMatrix);
++
++    expect(manifest.supportMatrixVersion).toBe(supportMatrix.version);
++    expect(manifest.supportMatrixUrl).toBe('/api/support-matrix');
++    expect(manifest.workspaceCompatibility.minReadableFormat).toBe(
++      supportMatrix.workspaceCompatibility.minimumReadableFormat,
++    );
++    expect(manifest.workspaceCompatibility.maxReadableFormat).toBe(
++      supportMatrix.workspaceCompatibility.maximumReadableFormat,
++    );
++  });
++
+   it('rejects worker envelopes without versioned correlation metadata', () => {
+     const candidate = structuredClone(workerMessageEnvelopeFixture) as any;
+     candidate.workspaceVersion = 0;
+-
+-    expect(workerMessageEnvelopeSchema.safeParse(candidate).success).toBe(false);
+-  });
+-});
++
++    expect(workerMessageEnvelopeSchema.safeParse(candidate).success).toBe(false);
++  });
++});
+diff --git a/src/schemas/validation/index.ts b/src/schemas/validation/index.ts
+index 2559a2e..8f4519f 100644
+--- a/src/schemas/validation/index.ts
++++ b/src/schemas/validation/index.ts
+@@ -1,2 +1,2 @@
+-export * from './helpers';
+-export * from './primitives';
++export * from './helpers.ts';
++export * from './primitives.ts';
+diff --git a/home/pinto/repo/BMADGraphWebApp/src/services/release/shell-bootstrap-metadata.spec.ts b/home/pinto/repo/BMADGraphWebApp/src/services/release/shell-bootstrap-metadata.spec.ts
+new file mode 100644
+index 0000000..8481a7f
+--- /dev/null
++++ b/home/pinto/repo/BMADGraphWebApp/src/services/release/shell-bootstrap-metadata.spec.ts
+@@ -0,0 +1,112 @@
++import { mkdtemp, readFile, rm } from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++
++import { afterEach, describe, expect, it } from 'vitest';
++
++import type { ReleaseManifest, SupportMatrix } from '../../schemas/api';
++import releaseManifestFixture from '../../test/fixtures/api/release-manifest.fixture.json';
++import supportMatrixFixture from '../../test/fixtures/api/support-matrix.fixture.json';
++import {
++  DEPLOYED_BOOTSTRAP_ASSET_PATHS,
++  createShellHealthPayload,
++  emitShellBootstrapMetadataAssets,
++  isShellRoutePathname,
++  loadShellBootstrapMetadataFromFiles,
++  validateShellBootstrapMetadata,
++} from './shell-bootstrap-metadata';
++
++const tempDirectories: string[] = [];
++const canonicalReleaseManifest = releaseManifestFixture as ReleaseManifest;
++const canonicalSupportMatrix = supportMatrixFixture as SupportMatrix;
++
++afterEach(async () => {
++  await Promise.all(
++    tempDirectories.splice(0).map((directory) =>
++      rm(directory, {
++        force: true,
++        recursive: true,
++      }),
++    ),
++  );
++});
++
++describe('shell bootstrap metadata helpers', () => {
++  it('rejects schema-invalid metadata before health checks report success', () => {
++    const invalidManifest = {
++      ...canonicalReleaseManifest,
++      telemetry: {
++        ...canonicalReleaseManifest.telemetry,
++        schemaVersion: 'invalid-semver',
++      },
++    } as ReleaseManifest;
++
++    expect(() =>
++      validateShellBootstrapMetadata({
++        releaseManifest: invalidManifest,
++        supportMatrix: canonicalSupportMatrix,
++      }),
++    ).toThrow(/semantic version/i);
++  });
++
++  it('rejects manifest and support matrix drift before health checks report success', () => {
++    const driftedManifest: ReleaseManifest = {
++      ...canonicalReleaseManifest,
++      supportMatrixVersion: '2099-01-01',
++    };
++
++    expect(() =>
++      validateShellBootstrapMetadata({
++        releaseManifest: driftedManifest,
++        supportMatrix: canonicalSupportMatrix,
++      }),
++    ).toThrow(/manifest expects 2099-01-01/);
++  });
++
++  it('writes deployment-ready bootstrap assets that can be reloaded without src fixtures', async () => {
++    const distRoot = await mkdtemp(path.join(os.tmpdir(), 'shell-bootstrap-assets-'));
++    tempDirectories.push(distRoot);
++
++    const metadata = validateShellBootstrapMetadata({
++      releaseManifest: canonicalReleaseManifest,
++      supportMatrix: canonicalSupportMatrix,
++    });
++
++    await emitShellBootstrapMetadataAssets({ distRoot, metadata });
++
++    const reloadedMetadata = await loadShellBootstrapMetadataFromFiles({
++      releaseManifestPath: path.join(distRoot, DEPLOYED_BOOTSTRAP_ASSET_PATHS.releaseManifest),
++      supportMatrixPath: path.join(distRoot, DEPLOYED_BOOTSTRAP_ASSET_PATHS.supportMatrix),
++    });
++
++    expect(reloadedMetadata).toEqual(metadata);
++
++    const releaseManifestAsset = await readFile(path.join(distRoot, DEPLOYED_BOOTSTRAP_ASSET_PATHS.releaseManifest), 'utf8');
++    const supportMatrixAsset = await readFile(path.join(distRoot, DEPLOYED_BOOTSTRAP_ASSET_PATHS.supportMatrix), 'utf8');
++    const healthAsset = await readFile(path.join(distRoot, DEPLOYED_BOOTSTRAP_ASSET_PATHS.health), 'utf8');
++
++    expect(JSON.parse(releaseManifestAsset)).toEqual(canonicalReleaseManifest);
++    expect(JSON.parse(supportMatrixAsset)).toEqual(canonicalSupportMatrix);
++    expect(createShellHealthPayload(reloadedMetadata)).toEqual({
++      status: 'ok',
++      releaseManifestVersion: canonicalReleaseManifest.appBuildVersion,
++      supportMatrixVersion: canonicalSupportMatrix.version,
++    });
++    expect(JSON.parse(healthAsset)).toEqual(createShellHealthPayload(reloadedMetadata));
++  });
++
++  it('limits SPA fallback decisions to the shell-owned route inventory', () => {
++    expect(isShellRoutePathname('/')).toBe(true);
++    expect(isShellRoutePathname('/workspace')).toBe(true);
++    expect(isShellRoutePathname('/workspace/')).toBe(true);
++    expect(isShellRoutePathname('/workspace/demo-workspace')).toBe(true);
++    expect(isShellRoutePathname('/workspace/demo-workspace/')).toBe(true);
++    expect(isShellRoutePathname('/review/demo-workspace')).toBe(true);
++    expect(isShellRoutePathname('/review/demo-workspace/')).toBe(true);
++    expect(isShellRoutePathname('/unsupported')).toBe(true);
++    expect(isShellRoutePathname('/unsupported/')).toBe(true);
++    expect(isShellRoutePathname('/assets/index-missing.js')).toBe(false);
++    expect(isShellRoutePathname('/workspace/demo-workspace/extra')).toBe(false);
++    expect(isShellRoutePathname('/missing')).toBe(false);
++  });
++});
+diff --git a/home/pinto/repo/BMADGraphWebApp/src/services/release/shell-bootstrap-metadata.ts b/home/pinto/repo/BMADGraphWebApp/src/services/release/shell-bootstrap-metadata.ts
+new file mode 100644
+index 0000000..c47769e
+--- /dev/null
++++ b/home/pinto/repo/BMADGraphWebApp/src/services/release/shell-bootstrap-metadata.ts
+@@ -0,0 +1,109 @@
++import { mkdir, readFile, writeFile } from 'node:fs/promises';
++import path from 'node:path';
++
++import { releaseManifestSchema, type ReleaseManifest } from '../../schemas/api/release-manifest';
++import { supportMatrixSchema, type SupportMatrix } from '../../schemas/api/support-matrix';
++
++export type ShellBootstrapMetadata = {
++  releaseManifest: ReleaseManifest;
++  supportMatrix: SupportMatrix;
++};
++
++export const DEPLOYED_BOOTSTRAP_ASSET_PATHS = {
++  health: path.join('api', 'health.json'),
++  releaseManifest: path.join('api', 'release-manifest.json'),
++  supportMatrix: path.join('api', 'support-matrix.json'),
++} as const;
++
++export function validateShellBootstrapMetadata(metadata: ShellBootstrapMetadata): ShellBootstrapMetadata {
++  const releaseManifest = releaseManifestSchema.parse(metadata.releaseManifest);
++  const supportMatrix = supportMatrixSchema.parse(metadata.supportMatrix);
++
++  if (releaseManifest.supportMatrixVersion !== supportMatrix.version) {
++    throw new Error(
++      `Configured shell metadata is inconsistent: manifest expects ${releaseManifest.supportMatrixVersion} but support matrix is ${supportMatrix.version}.`,
++    );
++  }
++
++  if (releaseManifest.supportMatrixUrl !== '/api/support-matrix') {
++    throw new Error('Configured shell metadata must point supportMatrixUrl at /api/support-matrix.');
++  }
++
++  if (
++    releaseManifest.workspaceCompatibility.minReadableFormat !== supportMatrix.workspaceCompatibility.minimumReadableFormat ||
++    releaseManifest.workspaceCompatibility.maxReadableFormat !== supportMatrix.workspaceCompatibility.maximumReadableFormat
++  ) {
++    throw new Error('Configured shell metadata must keep workspace compatibility aligned with the support matrix.');
++  }
++
++  return {
++    releaseManifest,
++    supportMatrix,
++  };
++}
++
++export function createShellHealthPayload(metadata: ShellBootstrapMetadata) {
++  return {
++    status: 'ok' as const,
++    releaseManifestVersion: metadata.releaseManifest.appBuildVersion,
++    supportMatrixVersion: metadata.supportMatrix.version,
++  };
++}
++
++export async function loadShellBootstrapMetadataFromFiles(paths: {
++  releaseManifestPath: string;
++  supportMatrixPath: string;
++}): Promise<ShellBootstrapMetadata> {
++  const [releaseManifest, supportMatrix] = await Promise.all([
++    readFile(paths.releaseManifestPath, 'utf8').then((value) => JSON.parse(value) as ReleaseManifest),
++    readFile(paths.supportMatrixPath, 'utf8').then((value) => JSON.parse(value) as SupportMatrix),
++  ]);
++
++  return validateShellBootstrapMetadata({ releaseManifest, supportMatrix });
++}
++
++export async function emitShellBootstrapMetadataAssets(args: {
++  distRoot: string;
++  metadata: ShellBootstrapMetadata;
++}) {
++  const releaseManifestPath = path.join(args.distRoot, DEPLOYED_BOOTSTRAP_ASSET_PATHS.releaseManifest);
++  const supportMatrixPath = path.join(args.distRoot, DEPLOYED_BOOTSTRAP_ASSET_PATHS.supportMatrix);
++  const healthPath = path.join(args.distRoot, DEPLOYED_BOOTSTRAP_ASSET_PATHS.health);
++
++  await mkdir(path.dirname(releaseManifestPath), { recursive: true });
++
++  await Promise.all([
++    writeFile(healthPath, `${JSON.stringify(createShellHealthPayload(args.metadata), null, 2)}\n`, 'utf8'),
++    writeFile(releaseManifestPath, `${JSON.stringify(args.metadata.releaseManifest, null, 2)}\n`, 'utf8'),
++    writeFile(supportMatrixPath, `${JSON.stringify(args.metadata.supportMatrix, null, 2)}\n`, 'utf8'),
++  ]);
++}
++
++function hasSingleSegmentRoute(pathname: string, prefix: string) {
++  if (!pathname.startsWith(prefix)) {
++    return false;
++  }
++
++  const remainder = pathname.slice(prefix.length);
++  return remainder.length > 0 && !remainder.includes('/');
++}
++
++function normalizeShellRoutePathname(pathname: string) {
++  if (pathname === '/') {
++    return pathname;
++  }
++
++  return pathname.replace(/\/+$/u, '');
++}
++
++export function isShellRoutePathname(pathname: string) {
++  const normalizedPathname = normalizeShellRoutePathname(pathname);
++
++  return (
++    normalizedPathname === '/' ||
++    normalizedPathname === '/workspace' ||
++    hasSingleSegmentRoute(normalizedPathname, '/workspace/') ||
++    hasSingleSegmentRoute(normalizedPathname, '/review/') ||
++    normalizedPathname === '/unsupported'
++  );
++}
+diff --git a/home/pinto/repo/BMADGraphWebApp/src/test/fixtures/api/release-manifest.fixture.json b/home/pinto/repo/BMADGraphWebApp/src/test/fixtures/api/release-manifest.fixture.json
+new file mode 100644
+index 0000000..230c3c7
+--- /dev/null
++++ b/home/pinto/repo/BMADGraphWebApp/src/test/fixtures/api/release-manifest.fixture.json
+@@ -0,0 +1,30 @@
++{
++  "schemaVersion": "1.0.0",
++  "appBuildVersion": "0.1.0",
++  "releaseDate": "2026-04-15T00:00:00Z",
++  "channel": "internal-stable",
++  "supportMatrixVersion": "2026-04-15",
++  "supportMatrixUrl": "/api/support-matrix",
++  "workspaceCompatibility": {
++    "minReadableFormat": "1.0.0",
++    "maxReadableFormat": "1.x",
++    "migrationPolicy": "migrate-on-open"
++  },
++  "serviceWorker": {
++    "version": "sw-0.1.0",
++    "scope": "/",
++    "offlineReadyTimeoutMs": 5000,
++    "updatePromptMode": "soft-refresh"
++  },
++  "telemetry": {
++    "endpoint": "/api/telemetry",
++    "schemaVersion": "1.0.0"
++  },
++  "releaseNotes": {
++    "title": "Initial internal preview",
++    "url": "/release-notes/0.1.0"
++  },
++  "integrity": {
++    "manifestSha256": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
++  }
++}
+diff --git a/src/test/fixtures/api/release-manifest.fixture.ts b/src/test/fixtures/api/release-manifest.fixture.ts
+index bdf5186..6d34ded 100644
+--- a/src/test/fixtures/api/release-manifest.fixture.ts
++++ b/src/test/fixtures/api/release-manifest.fixture.ts
+@@ -1,32 +1,9 @@
++import { readFileSync } from 'node:fs';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++
+ import type { ReleaseManifest } from '../../../schemas/api';
+ 
+-export const releaseManifestFixture = {
+-  schemaVersion: '1.0.0',
+-  appBuildVersion: '0.1.0',
+-  releaseDate: '2026-04-15T00:00:00Z',
+-  channel: 'internal-stable',
+-  supportMatrixVersion: '2026-04-15',
+-  supportMatrixUrl: '/api/support-matrix',
+-  workspaceCompatibility: {
+-    minReadableFormat: '1.0.0',
+-    maxReadableFormat: '1.x',
+-    migrationPolicy: 'migrate-on-open',
+-  },
+-  serviceWorker: {
+-    version: 'sw-0.1.0',
+-    scope: '/',
+-    offlineReadyTimeoutMs: 5000,
+-    updatePromptMode: 'soft-refresh',
+-  },
+-  telemetry: {
+-    endpoint: '/api/telemetry',
+-    schemaVersion: '1.0.0',
+-  },
+-  releaseNotes: {
+-    title: 'Initial internal preview',
+-    url: '/release-notes/0.1.0',
+-  },
+-  integrity: {
+-    manifestSha256: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+-  },
+-} satisfies ReleaseManifest;
++const fixturePath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'release-manifest.fixture.json');
++
++export const releaseManifestFixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as ReleaseManifest;
+diff --git a/home/pinto/repo/BMADGraphWebApp/src/test/fixtures/api/support-matrix.fixture.json b/home/pinto/repo/BMADGraphWebApp/src/test/fixtures/api/support-matrix.fixture.json
+new file mode 100644
+index 0000000..c30de7b
+--- /dev/null
++++ b/home/pinto/repo/BMADGraphWebApp/src/test/fixtures/api/support-matrix.fixture.json
+@@ -0,0 +1,38 @@
++{
++  "version": "2026-04-15",
++  "publishedAt": "2026-04-16T00:00:00Z",
++  "standardZoom": "100%",
++  "supportedBrowsers": [
++    {
++      "family": "chrome",
++      "supportLevel": "supported",
++      "minimumMajorVersion": 125,
++      "desktopOnly": true,
++      "notes": "Current major desktop Chrome is release-blocking."
++    },
++    {
++      "family": "edge",
++      "supportLevel": "supported",
++      "minimumMajorVersion": 125,
++      "desktopOnly": true,
++      "notes": "Current major desktop Edge is release-blocking."
++    },
++    {
++      "family": "firefox",
++      "supportLevel": "secondary",
++      "minimumMajorVersion": 126,
++      "desktopOnly": true,
++      "notes": "Best-effort secondary compatibility target."
++    },
++    {
++      "family": "safari",
++      "supportLevel": "unsupported",
++      "desktopOnly": true,
++      "notes": "Safari is unsupported for the MVP shell."
++    }
++  ],
++  "workspaceCompatibility": {
++    "minimumReadableFormat": "1.0.0",
++    "maximumReadableFormat": "1.x"
++  }
++}
+diff --git a/src/test/fixtures/api/support-matrix.fixture.ts b/src/test/fixtures/api/support-matrix.fixture.ts
+index c37a6a3..9147a7b 100644
+--- a/src/test/fixtures/api/support-matrix.fixture.ts
++++ b/src/test/fixtures/api/support-matrix.fixture.ts
+@@ -1,40 +1,9 @@
++import { readFileSync } from 'node:fs';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++
+ import type { SupportMatrix } from '../../../schemas/api/support-matrix';
+ 
+-export const supportMatrixFixture = {
+-  version: '2026-04-15',
+-  publishedAt: '2026-04-16T00:00:00Z',
+-  standardZoom: '100%',
+-  supportedBrowsers: [
+-    {
+-      family: 'chrome',
+-      supportLevel: 'supported',
+-      minimumMajorVersion: 125,
+-      desktopOnly: true,
+-      notes: 'Current major desktop Chrome is release-blocking.',
+-    },
+-    {
+-      family: 'edge',
+-      supportLevel: 'supported',
+-      minimumMajorVersion: 125,
+-      desktopOnly: true,
+-      notes: 'Current major desktop Edge is release-blocking.',
+-    },
+-    {
+-      family: 'firefox',
+-      supportLevel: 'secondary',
+-      minimumMajorVersion: 126,
+-      desktopOnly: true,
+-      notes: 'Best-effort secondary compatibility target.',
+-    },
+-    {
+-      family: 'safari',
+-      supportLevel: 'unsupported',
+-      desktopOnly: true,
+-      notes: 'Safari is unsupported for the MVP shell.',
+-    },
+-  ],
+-  workspaceCompatibility: {
+-    minimumReadableFormat: '1.0.0',
+-    maximumReadableFormat: '1.x',
+-  },
+-} satisfies SupportMatrix;
++const fixturePath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'support-matrix.fixture.json');
++
++export const supportMatrixFixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as SupportMatrix;
+diff --git a/home/pinto/repo/BMADGraphWebApp/tests/e2e/shell-delivery.spec.ts b/home/pinto/repo/BMADGraphWebApp/tests/e2e/shell-delivery.spec.ts
+new file mode 100644
+index 0000000..b314a43
+--- /dev/null
++++ b/home/pinto/repo/BMADGraphWebApp/tests/e2e/shell-delivery.spec.ts
+@@ -0,0 +1,287 @@
++import { expect, test } from '@playwright/test';
++import { spawn, type ChildProcess } from 'node:child_process';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++
++const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
++const shellDeliveryServerPath = path.join(repoRoot, 'scripts', 'shell-delivery-server.mjs');
++
++async function waitForServer(url: string, attempts = 40) {
++  for (let attempt = 0; attempt < attempts; attempt += 1) {
++    try {
++      const response = await fetch(url);
++
++      if (response.ok) {
++        return;
++      }
++    } catch {
++      // Server has not started accepting connections yet.
++    }
++
++    await new Promise((resolve) => setTimeout(resolve, 250));
++  }
++
++  throw new Error(`Timed out waiting for shell delivery server at ${url}.`);
++}
++
++async function startShellDeliveryServer(
++  env: NodeJS.ProcessEnv = {},
++): Promise<{ baseUrl: string; serverProcess: ChildProcess }> {
++  const serverProcess = spawn(process.execPath, [shellDeliveryServerPath, '--host', '127.0.0.1', '--port', '0'], {
++    cwd: repoRoot,
++    env: {
++      ...process.env,
++      ...env,
++    },
++    stdio: ['ignore', 'pipe', 'pipe'],
++  });
++
++  const baseUrl = await new Promise<string>((resolve, reject) => {
++    let stdoutBuffer = '';
++    let stderrBuffer = '';
++    let settled = false;
++    const timeout = setTimeout(() => {
++      if (!settled) {
++        settled = true;
++        reject(new Error(`Timed out waiting for shell delivery server startup.\n${stderrBuffer}`));
++      }
++    }, 10_000);
++
++    const resolveReadyUrl = (chunk: string) => {
++      stdoutBuffer += chunk;
++      const match = stdoutBuffer.match(/Hosted shell delivery server ready at (http:\/\/[^\s]+)/);
++
++      if (match?.[1] && !settled) {
++        settled = true;
++        clearTimeout(timeout);
++        resolve(match[1]);
++      }
++    };
++
++    serverProcess.stdout?.setEncoding('utf8');
++    serverProcess.stdout?.on('data', resolveReadyUrl);
++    serverProcess.stderr?.setEncoding('utf8');
++    serverProcess.stderr?.on('data', (chunk) => {
++      stderrBuffer += chunk;
++    });
++    serverProcess.once('error', (error) => {
++      if (!settled) {
++        settled = true;
++        clearTimeout(timeout);
++        reject(error);
++      }
++    });
++    serverProcess.once('exit', (code) => {
++      if (!settled) {
++        settled = true;
++        clearTimeout(timeout);
++        reject(new Error(`Shell delivery server exited early with code ${code ?? 'unknown'}.\n${stderrBuffer}`));
++      }
++    });
++  });
++
++  await waitForServer(new URL('/api/health', baseUrl).toString());
++
++  return {
++    baseUrl,
++    serverProcess,
++  };
++}
++
++async function startViteDevServer(): Promise<{ baseUrl: string; serverProcess: ChildProcess }> {
++  const serverProcess = spawn('bash', ['./scripts/with-node.sh', 'npm', 'run', 'dev', '--', '--host', '127.0.0.1', '--port', '0'], {
++    cwd: repoRoot,
++    env: {
++      ...process.env,
++    },
++    stdio: ['ignore', 'pipe', 'pipe'],
++  });
++
++  const baseUrl = await new Promise<string>((resolve, reject) => {
++    let stdoutBuffer = '';
++    let stderrBuffer = '';
++    let settled = false;
++    const timeout = setTimeout(() => {
++      if (!settled) {
++        settled = true;
++        reject(new Error(`Timed out waiting for Vite dev server startup.\n${stderrBuffer}`));
++      }
++    }, 15_000);
++
++    const resolveReadyUrl = (chunk: string) => {
++      stdoutBuffer += chunk;
++      const match = stdoutBuffer.match(/Local:\s+(http:\/\/[^\s]+)/);
++
++      if (match?.[1] && !settled) {
++        settled = true;
++        clearTimeout(timeout);
++        resolve(match[1]);
++      }
++    };
++
++    serverProcess.stdout?.setEncoding('utf8');
++    serverProcess.stdout?.on('data', resolveReadyUrl);
++    serverProcess.stderr?.setEncoding('utf8');
++    serverProcess.stderr?.on('data', (chunk) => {
++      stderrBuffer += chunk;
++    });
++    serverProcess.once('error', (error) => {
++      if (!settled) {
++        settled = true;
++        clearTimeout(timeout);
++        reject(error);
++      }
++    });
++    serverProcess.once('exit', (code) => {
++      if (!settled) {
++        settled = true;
++        clearTimeout(timeout);
++        reject(new Error(`Vite dev server exited early with code ${code ?? 'unknown'}.\n${stderrBuffer}`));
++      }
++    });
++  });
++
++  await waitForServer(new URL('/api/health', baseUrl).toString());
++
++  return {
++    baseUrl,
++    serverProcess,
++  };
++}
++
++async function stopShellDeliveryServer(serverProcess: ChildProcess) {
++  if (serverProcess.exitCode !== null || serverProcess.killed) {
++    return;
++  }
++
++  await new Promise<void>((resolve) => {
++    const timeout = setTimeout(resolve, 5_000);
++
++    serverProcess.once('exit', () => {
++      clearTimeout(timeout);
++      resolve();
++    });
++    serverProcess.kill('SIGTERM');
++  });
++}
++
++test.describe('hosted shell delivery', () => {
++  test('fails closed for unknown shell API routes and non-GET health probes in preview delivery', async ({ request }) => {
++    const notFoundResponse = await request.get('/api/missing-endpoint');
++
++    expect(notFoundResponse.status()).toBe(404);
++    expect(await notFoundResponse.json()).toEqual({ status: 'not-found' });
++
++    const headHealthResponse = await request.fetch('/api/health', { method: 'HEAD' });
++
++    expect(headHealthResponse.status()).toBe(405);
++    expect(headHealthResponse.headers()['content-type']).toContain('text/plain');
++  });
++
++  test('loads the hosted shell home route with real bootstrap metadata delivery', async ({ page }) => {
++    await page.goto('/');
++
++    await expect(page.getByRole('heading', { name: 'BMADGraphWebApp' })).toBeVisible();
++    await expect(page.getByText('Release 0.1.0')).toBeVisible();
++    await expect(page.getByText('Support matrix 2026-04-15')).toBeVisible();
++    await expect(page.getByText('No blocking environment issues detected.')).toBeVisible();
++  });
++
++  test('allows readable workspace-format routes through the hosted shell gate', async ({ page }) => {
++    await page.goto('/workspace?workspaceFormatVersion=1.0.0');
++
++    await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
++    await expect(page).not.toHaveURL(/\/unsupported$/);
++  });
++
++  test('blocks unreadable workspace-format routes through the unsupported shell route', async ({ page }) => {
++    await page.goto('/workspace?workspaceFormatVersion=2.0.0');
++
++    await expect(page).toHaveURL(/\/unsupported$/);
++    await expect(page.getByRole('heading', { name: 'Unsupported environment' })).toBeVisible();
++    await expect(
++      page
++        .getByRole('paragraph')
++        .filter({ hasText: 'Workspace format 2.0.0 is outside the readable range 1.0.0 to 1.x.' }),
++    ).toBeVisible();
++  });
++
++  test('fails closed for protected workspace and review detail routes without a readable saved snapshot', async ({ page }) => {
++    await page.goto('/workspace/workspace_demo');
++    await expect(page).toHaveURL(/\/unsupported$/);
++    await expect(
++      page
++        .getByRole('paragraph')
++        .filter({
++          hasText: 'The shell could not load a saved compatibility snapshot for workspace workspace_demo before reopening it.',
++        }),
++    ).toBeVisible();
++
++    await page.goto('/review/workspace_demo');
++    await expect(page).toHaveURL(/\/unsupported$/);
++    await expect(
++      page
++        .getByRole('paragraph')
++        .filter({
++          hasText: 'The shell could not load a saved compatibility snapshot for workspace workspace_demo before reopening it.',
++        }),
++    ).toBeVisible();
++  });
++
++  test('returns 404 for missing asset paths instead of rewriting them to index.html', async ({ request }) => {
++    const response = await request.get('/assets/missing-shell-chunk.js');
++
++    expect(response.status()).toBe(404);
++    expect(response.headers()['content-type']).toContain('text/plain');
++  });
++
++  test('treats malformed percent-encoded request paths as client errors', async ({ request }) => {
++    const response = await request.get('/workspace/%E0%A4%A');
++
++    expect(response.status()).toBe(400);
++    expect(response.headers()['content-type']).toContain('text/plain');
++  });
++
++  test('surfaces delivery/setup failures before protected routes continue loading', async ({ page }) => {
++    const { baseUrl: brokenBaseUrl, serverProcess } = await startShellDeliveryServer({
++      BMAD_SHELL_DELIVERY_FAILURE_MODE: 'support-matrix-unavailable',
++    });
++
++    try {
++      await page.goto(new URL('/workspace?workspaceFormatVersion=1.0.0', brokenBaseUrl).toString());
++
++      await expect(page.getByRole('heading', { name: 'Shell bootstrap failed' })).toBeVisible();
++      await expect(page.getByText('The shell could not load release metadata and support facts.')).toBeVisible();
++    } finally {
++      await stopShellDeliveryServer(serverProcess);
++    }
++  });
++
++  test('serves hosted-shell bootstrap metadata through the documented npm run dev flow', async ({ page, request }) => {
++    const { baseUrl, serverProcess } = await startViteDevServer();
++
++    try {
++      const healthResponse = await request.get(new URL('/api/health', baseUrl).toString());
++      const unknownApiResponse = await request.get(new URL('/api/missing-endpoint', baseUrl).toString());
++      const headHealthResponse = await request.fetch(new URL('/api/health', baseUrl).toString(), { method: 'HEAD' });
++
++      expect(healthResponse.ok()).toBe(true);
++      expect(await healthResponse.json()).toMatchObject({
++        status: 'ok',
++        releaseManifestVersion: '0.1.0',
++        supportMatrixVersion: '2026-04-15',
++      });
++      expect(unknownApiResponse.status()).toBe(404);
++      expect(await unknownApiResponse.json()).toEqual({ status: 'not-found' });
++      expect(headHealthResponse.status()).toBe(405);
++      expect(headHealthResponse.headers()['content-type']).toContain('text/plain');
++
++      await page.goto(new URL('/workspace/?workspaceFormatVersion=1.0.0', baseUrl).toString());
++
++      await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
++      await expect(page).not.toHaveURL(/\/unsupported\/?$/);
++    } finally {
++      await stopShellDeliveryServer(serverProcess);
++    }
++  });
++});
+diff --git a/vite.config.ts b/vite.config.ts
+index 0466183..8a4a95e 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -1,6 +1,117 @@
+-import { defineConfig } from 'vite';
++import { readFile } from 'node:fs/promises';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++
++import { defineConfig, type Plugin } from 'vite';
+ import react from '@vitejs/plugin-react';
++import {
++  createShellHealthPayload,
++  emitShellBootstrapMetadataAssets,
++  validateShellBootstrapMetadata,
++} from './src/services/release/shell-bootstrap-metadata';
++
++const __filename = fileURLToPath(import.meta.url);
++const __dirname = path.dirname(__filename);
++const repoRoot = __dirname;
++const releaseManifestPath = path.join(repoRoot, 'src', 'test', 'fixtures', 'api', 'release-manifest.fixture.json');
++const supportMatrixPath = path.join(repoRoot, 'src', 'test', 'fixtures', 'api', 'support-matrix.fixture.json');
++const shellApiRoutes = new Set(['/api/release-manifest', '/api/support-matrix', '/api/health']);
++
++function createJsonResponse(res: import('node:http').ServerResponse, payload: unknown, statusCode = 200) {
++  const body = Buffer.from(JSON.stringify(payload));
++
++  res.writeHead(statusCode, {
++    'cache-control': 'no-cache',
++    'content-length': body.length,
++    'content-type': 'application/json; charset=utf-8',
++  });
++  res.end(body);
++}
++
++function createTextResponse(
++  res: import('node:http').ServerResponse,
++  statusCode: number,
++  text: string,
++) {
++  const body = Buffer.from(text);
++
++  res.writeHead(statusCode, {
++    'cache-control': 'no-cache',
++    'content-length': body.length,
++    'content-type': 'text/plain; charset=utf-8',
++  });
++  res.end(body);
++}
++
++async function loadCanonicalShellBootstrapMetadata() {
++  const [releaseManifest, supportMatrix] = await Promise.all([
++    readFile(releaseManifestPath, 'utf8').then((value) => JSON.parse(value)),
++    readFile(supportMatrixPath, 'utf8').then((value) => JSON.parse(value)),
++  ]);
++
++  return validateShellBootstrapMetadata({ releaseManifest, supportMatrix });
++}
++
++function shellBootstrapMetadataPlugin(): Plugin {
++  let buildOutputRoot = path.join(repoRoot, 'dist');
++
++  return {
++    name: 'shell-bootstrap-metadata',
++    configResolved(config) {
++      buildOutputRoot = path.resolve(config.root, config.build.outDir);
++    },
++    configureServer(server) {
++      server.middlewares.use(async (req, res, next) => {
++        if (!req.url) {
++          next();
++          return;
++        }
++
++        const pathname = new URL(req.url, 'http://127.0.0.1').pathname;
++        const isShellApiRequest = pathname.startsWith('/api/');
++
++        if (!isShellApiRequest) {
++          next();
++          return;
++        }
++
++        if ((req.method ?? 'GET') !== 'GET') {
++          createTextResponse(res, 405, 'Method not allowed.');
++          return;
++        }
++
++        if (!shellApiRoutes.has(pathname)) {
++          createJsonResponse(res, { status: 'not-found' }, 404);
++          return;
++        }
++
++        try {
++          const { releaseManifest, supportMatrix } = await loadCanonicalShellBootstrapMetadata();
++
++          if (pathname === '/api/release-manifest') {
++            createJsonResponse(res, releaseManifest);
++            return;
++          }
++
++          if (pathname === '/api/support-matrix') {
++            createJsonResponse(res, supportMatrix);
++            return;
++          }
++
++          createJsonResponse(res, createShellHealthPayload({ releaseManifest, supportMatrix }));
++        } catch (error) {
++          console.error(error);
++          createTextResponse(res, 500, 'Failed to load shell bootstrap metadata.');
++        }
++      });
++    },
++    async writeBundle() {
++      const metadata = await loadCanonicalShellBootstrapMetadata();
++      await emitShellBootstrapMetadataAssets({ distRoot: buildOutputRoot, metadata });
++    },
++  };
++}
+ 
+ export default defineConfig({
+-  plugins: [react()],
++  plugins: [react(), shellBootstrapMetadataPlugin()],
+ });

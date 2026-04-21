@@ -8,7 +8,7 @@ import {
   semverSchema,
   strictObject,
   versionRangeSchema,
-} from '../validation';
+} from '../validation/index.ts';
 
 export const supportedBrowserFamilySchema = z.enum(['chrome', 'edge', 'firefox', 'safari']);
 

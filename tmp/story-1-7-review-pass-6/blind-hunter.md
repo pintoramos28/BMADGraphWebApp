@@ -1,0 +1,1 @@
+No substantive issues found in the provided diff. The patch is internally consistent from the diff itself, and the added coverage meaningfully reduces the main obvious regression risks around schema drift, route fallback, and preview/dev bootstrap parity.

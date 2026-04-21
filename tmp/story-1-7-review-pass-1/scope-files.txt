@@ -1,0 +1,13 @@
+_bmad-output/implementation-artifacts/1-7-provide-hosted-shell-bootstrap-metadata-for-local-and-static-delivery.md
+_bmad-output/implementation-artifacts/sprint-status.yaml
+docs/dev-environment.md
+package.json
+playwright.config.ts
+scripts/shell-delivery-server.mjs
+src/schemas/contracts.spec.ts
+src/test/fixtures/api/release-manifest.fixture.json
+src/test/fixtures/api/release-manifest.fixture.ts
+src/test/fixtures/api/support-matrix.fixture.json
+src/test/fixtures/api/support-matrix.fixture.ts
+tests/e2e/shell-delivery.spec.ts
+vite.config.ts

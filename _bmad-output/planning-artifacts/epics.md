@@ -54,6 +54,7 @@ Users can open BMADGraphWebApp in a supported browser, start or reopen a local w
 - Stand up the `WorkspaceKernel` with explicit separation between canonical persisted state and ephemeral view state.
 - Lock canonical routes and route helpers before route-owned screens diverge.
 - Implement hosted-shell bootstrap, environment gating, release-manifest loading, and service-worker registration at the shell layer only.
+- Provide an owned thin delivery path for release manifest, support matrix, health checks, and SPA fallback so the shell can start cleanly in local development and static deployment without ad hoc manual servers.
 - Add benchmark fixtures and runtime seam tests early so later graph work lands against the locked adapter boundary instead of renderer-specific shortcuts.
 
 **Why this epic is first:**
@@ -150,6 +151,7 @@ Users can understand offline readiness, update state, support status, and privac
 ## Sequencing Notes
 
 - Epic 1 leads with user-visible shell entry, save/reopen trust, and readiness cues while still locking the contract seams that later feature work must honor.
+- Epic 1 should not be treated as complete until the thin hosted-shell delivery path exists for local and static startup, not just the client-side shell surfaces that consume it.
 - Epic 2 begins end-user workflow breadth only after the workspace kernel, shell boundary, and persistence contracts exist.
 - Epic 3 extends the same contract set into transforms, formulas, ledger history, and repair.
 - Epic 4 is the first place broad graph-authoring UX should expand, because it depends on the already-locked graph-definition and renderer boundary.

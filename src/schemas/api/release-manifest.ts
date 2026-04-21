@@ -9,7 +9,7 @@ import {
   sha256TokenSchema,
   strictObject,
   versionRangeSchema,
-} from '../validation';
+} from '../validation/index.ts';
 
 export const releaseManifestSchema = strictObject({
   schemaVersion: semverSchema,

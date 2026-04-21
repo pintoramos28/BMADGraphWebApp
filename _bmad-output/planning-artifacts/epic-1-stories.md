@@ -97,3 +97,43 @@ Requirements: FR46, FR47, FR52, NFR7-NFR10, core graph catalog, reopen validatio
 2. Given a reopened workspace contains a saved graph layer or overlay that violates the locked graph catalog or current analytical context, when reopen validation runs, then each incompatible composition is surfaced as a localized issue record attached to the affected graph scope while the last valid graph remains usable.
 3. Given an older or partially valid workspace is reopened, when the expanded validation rules run, then migrations and compatibility handling avoid false positives and preserve unaffected valid state, repair actions, and readiness summaries.
 4. Given transform or graph-composition reopen issues are deferred or resolved, when repair selectors and readiness surfaces update, then those issue states persist or clear consistently across reopen, continued work, and later handoff checks.
+
+## Story 1.7: Provide Hosted-Shell Bootstrap Metadata For Local And Static Delivery
+
+As a developer and release owner,
+I want the hosted shell to obtain its bootstrap metadata from an owned thin delivery path,
+so that a fresh clone can load the shell locally and deployed builds can reach a healthy shell state without ad hoc manual servers.
+
+Dependencies: Stories 1.1, 1.2, and 1.4
+Requirements: FR59, FR60, FR62, NFR15, NFR16, NFR18, NFR22, NFR24
+
+**Acceptance Criteria**
+
+1. Given a fresh clone, when the documented local start flow runs, then the hosted shell loads successfully without requiring an ad hoc manual mock server because schema-valid `GET /api/release-manifest` and `GET /api/support-matrix` responses are available to the shell and are sourced from the canonical Story 1.2 release/support contracts.
+2. Given the shell is deployed as static assets, when the thin operational delivery path is provisioned, then `GET /api/release-manifest`, `GET /api/support-matrix`, and `GET /api/health` are served independently of the analytical runtime and without adding any dataset or workspace CRUD API.
+3. Given shell metadata is version-sensitive, when release metadata or support facts change, then local-dev and hosted-delivery sources read from one canonical checked-in source or generation step so manifest/support-matrix drift is detected before release.
+4. Given route-owned shell screens are part of the hosted-shell entry contract, when the local and hosted shell are exercised, then SPA fallback works for `/`, `/workspace`, `/workspace/:workspaceId`, `/review/:workspaceId`, and `/unsupported` while preserving readable workspace-format routing and fail-closed protected-route behavior.
+5. Given shell delivery fails or becomes inconsistent, when bootstrap validation or smoke checks run, then the failure is surfaced as a delivery/setup error before users encounter an unexplained shell-error state in normal startup, including healthy shell home, readable workspace-format route, blocked unreadable workspace-format route, and canonical fail-closed protected-route coverage.
+
+**In Scope**
+
+- Thin bootstrap metadata provider for local dev/preview and hosted-shell delivery
+- Canonical source or generation path for release manifest and support matrix payloads
+- Health endpoint for the thin operational surface
+- SPA fallback validation for shell routes
+- Smoke coverage for healthy shell home, readable workspace-format route, blocked unreadable workspace-format route, and canonical fail-closed protected-route behavior
+
+**Out Of Scope**
+
+- Telemetry queue implementation and flush/retry behavior
+- Release-shaping regression gates
+- Production monitoring dashboards and alerting
+- Shared auth, remote workspace storage, or any dataset/workspace network API
+
+**Implementation Notes**
+
+- The story may be implemented as a lightweight local/dev server, dev middleware, generated static JSON plus thin host wrapper, or an equivalent deployment-safe bootstrap path.
+- The story should not move shell bootstrap ownership into the analytical client bundle.
+- The story should not be treated as permission to add a backend for workspace or dataset persistence.
+
+Epic 1 completion note: Stories 1.1-1.6 establish the client shell, persistence, and reopen trust behavior, but Epic 1 is not complete until Story 1.7 provides the thin hosted-shell delivery path needed for healthy local startup and deployable shell bootstrap.

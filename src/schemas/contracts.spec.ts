@@ -17,6 +17,8 @@ import { graphDefinitionFixture } from '../test/fixtures/workspace/graph-definit
 import { issueRecordFixture } from '../test/fixtures/workspace/issue-record.fixture';
 import { workspaceLedgerFixture } from '../test/fixtures/workspace/workspace-ledger.fixture';
 import { workspaceSnapshotFixture } from '../test/fixtures/workspace/workspace-snapshot.fixture';
+import canonicalReleaseManifest from '../test/fixtures/api/release-manifest.fixture.json';
+import canonicalSupportMatrix from '../test/fixtures/api/support-matrix.fixture.json';
 
 describe('contract fixtures', () => {
   it('accepts the locked graph and workspace fixtures', () => {
@@ -129,6 +131,20 @@ describe('contract invariants', () => {
     candidate.integrity.manifestSha256 = 'sha256:release-manifest-001';
 
     expect(releaseManifestSchema.safeParse(candidate).success).toBe(false);
+  });
+
+  it('keeps canonical shell bootstrap metadata schema-valid and version-aligned', () => {
+    const manifest = releaseManifestSchema.parse(canonicalReleaseManifest);
+    const supportMatrix = supportMatrixSchema.parse(canonicalSupportMatrix);
+
+    expect(manifest.supportMatrixVersion).toBe(supportMatrix.version);
+    expect(manifest.supportMatrixUrl).toBe('/api/support-matrix');
+    expect(manifest.workspaceCompatibility.minReadableFormat).toBe(
+      supportMatrix.workspaceCompatibility.minimumReadableFormat,
+    );
+    expect(manifest.workspaceCompatibility.maxReadableFormat).toBe(
+      supportMatrix.workspaceCompatibility.maximumReadableFormat,
+    );
   });
 
   it('rejects worker envelopes without versioned correlation metadata', () => {
