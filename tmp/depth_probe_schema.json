@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "depth",
+    "child_spawned",
+    "stop_reason",
+    "failure_message",
+    "chain"
+  ],
+  "properties": {
+    "depth": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20
+    },
+    "child_spawned": {
+      "type": "boolean"
+    },
+    "stop_reason": {
+      "type": "string"
+    },
+    "failure_message": {
+      "type": "string"
+    },
+    "chain": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 20
+      },
+      "minItems": 1,
+      "maxItems": 20
+    }
+  }
+}

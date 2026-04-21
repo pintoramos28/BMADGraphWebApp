@@ -52,6 +52,7 @@ describe('import preview worker schemas', () => {
             benchmarkScenario: 'import.clean.csv-preview',
           },
           rowCount: 1,
+          isPartialPreview: false,
           columnCount: 2,
           columns: [
             {

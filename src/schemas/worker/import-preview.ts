@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
-import { importPreviewDatasetSchema, importSourceKindSchema } from '../../features/import/preview-model';
+import {
+  importBenchmarkScenarioSchema,
+  importPreviewDatasetSchema,
+  importSourceKindSchema,
+} from '../../features/import/preview-model';
 import { nonEmptyStringSchema, strictObject, positiveIntegerSchema } from '../validation';
 import { workerMessageEnvelopeSchema } from './message-envelope';
 
@@ -14,6 +18,7 @@ export const importPreviewRequestPayloadSchema = strictObject({
   sourceLabel: nonEmptyStringSchema,
   fileName: nonEmptyStringSchema.optional(),
   mimeType: nonEmptyStringSchema.nullable().optional(),
+  benchmarkScenario: importBenchmarkScenarioSchema.nullable().optional(),
   textContent: nonEmptyStringSchema.nullable().optional(),
   binaryContent: arrayBufferSchema.nullable().optional(),
 });

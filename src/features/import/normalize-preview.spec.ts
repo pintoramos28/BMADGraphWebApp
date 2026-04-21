@@ -57,6 +57,7 @@ describe('buildImportPreviewDataset', () => {
       fileName: 'clean-sample.xlsx',
       mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       sheetName: 'Readings',
+      benchmarkScenario: 'import.clean.excel-preview',
       rows: [
         ['Sample', 'Reading'],
         ['A-1', '42.5'],
@@ -69,5 +70,56 @@ describe('buildImportPreviewDataset', () => {
       'Workbook cells do not rely on a delimiter',
     );
     expect(preview.source.benchmarkScenario).toBe('import.clean.excel-preview');
+    expect(preview.isPartialPreview).toBe(false);
+  });
+
+  it('leaves arbitrary imports untagged when they are not owned clean benchmark fixtures', () => {
+    const preview = buildImportPreviewDataset({
+      sourceKind: 'csv-file',
+      sourceLabel: 'Local CSV file',
+      fileName: 'customer-upload.csv',
+      mimeType: 'text/csv',
+      delimiter: ',',
+      rows: [
+        ['Sample', 'Reading'],
+        ['A-1', '42.5'],
+      ],
+      durationMs: 620,
+    });
+
+    expect(preview.source.benchmarkScenario).toBeNull();
+  });
+
+  it('flags capped delimited previews as partial instead of presenting them as full datasets', () => {
+    const preview = buildImportPreviewDataset({
+      sourceKind: 'csv-file',
+      sourceLabel: 'Local CSV file',
+      fileName: 'large.csv',
+      mimeType: 'text/csv',
+      delimiter: ',',
+      rowLimit: 200,
+      rows: [
+        ['Sample', 'Reading'],
+        ...Array.from({ length: 201 }, (_, index) => [`A-${index + 1}`, `${index + 1}`]),
+      ],
+      durationMs: 1800,
+    });
+
+    expect(preview.isPartialPreview).toBe(true);
+    expect(preview.rowCount).toBe(200);
+  });
+
+  it('rejects previews that normalize to zero body rows', () => {
+    expect(() =>
+      buildImportPreviewDataset({
+        sourceKind: 'csv-file',
+        sourceLabel: 'Local CSV file',
+        fileName: 'header-only.csv',
+        mimeType: 'text/csv',
+        delimiter: ',',
+        rows: [['Sample', 'Reading']],
+        durationMs: 410,
+      }),
+    ).toThrow('The selected source did not contain any previewable data rows after normalization.');
   });
 });

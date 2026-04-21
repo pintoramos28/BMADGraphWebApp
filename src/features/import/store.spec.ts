@@ -7,6 +7,94 @@ import { createImportBenchmarkTimingEvent } from './benchmark-timing';
 import { createImportPreviewStore } from './store';
 
 describe('createImportPreviewStore', () => {
+  it('ignores stale worker updates after a newer import starts or the preview is cleared', () => {
+    const previewStore = createImportPreviewStore();
+    const staleTimingEvent = createImportBenchmarkTimingEvent(
+      {
+        previewId: 'preview_csv_stale',
+        source: {
+          sourceKind: 'csv-file',
+          sourceLabel: 'Local CSV file',
+          fileName: 'stale.csv',
+          mimeType: 'text/csv',
+          sheetName: null,
+          benchmarkScenario: 'import.clean.csv-preview',
+        },
+        rowCount: 2,
+        isPartialPreview: false,
+        columnCount: 2,
+        columns: [],
+        sampleRows: [],
+        assumptions: [],
+        uncertainties: [],
+        timing: {
+          durationMs: 1200,
+          budgetMs: 5000,
+          exceededBudget: false,
+        },
+      },
+      () => '2026-04-20T10:00:00.000Z',
+    );
+
+    previewStore.getState().commands.beginImport('import_001', 'csv-file');
+    previewStore.getState().commands.beginImport('import_002', 'excel-file');
+    previewStore.getState().commands.updateProgress(
+      {
+        phase: 'parsing',
+        message: 'Stale CSV progress',
+      },
+      'import_001',
+    );
+    previewStore.getState().commands.resolveImport(
+      {
+        previewId: 'preview_csv_stale',
+        source: {
+          sourceKind: 'csv-file',
+          sourceLabel: 'Local CSV file',
+          fileName: 'stale.csv',
+          mimeType: 'text/csv',
+          sheetName: null,
+          benchmarkScenario: 'import.clean.csv-preview',
+        },
+        rowCount: 2,
+        isPartialPreview: false,
+        columnCount: 2,
+        columns: [],
+        sampleRows: [],
+        assumptions: [],
+        uncertainties: [],
+        timing: {
+          durationMs: 1200,
+          budgetMs: 5000,
+          exceededBudget: false,
+        },
+      },
+      staleTimingEvent,
+      'import_001',
+    );
+
+    expect(previewStore.getState().status).toBe('parsing');
+    expect(previewStore.getState().activeCorrelationId).toBe('import_002');
+    expect(previewStore.getState().progress).toMatchObject({
+      message: 'Preparing the local preview workspace.',
+    });
+    expect(previewStore.getState().preview).toBeNull();
+
+    previewStore.getState().commands.reset();
+    previewStore.getState().commands.failImport(
+      {
+        code: 'import.preview.failed',
+        title: 'Stale import failed',
+        detail: 'This failure should be ignored after reset.',
+        retryable: true,
+      },
+      'import_002',
+    );
+
+    expect(previewStore.getState().status).toBe('idle');
+    expect(previewStore.getState().error).toBeNull();
+  });
+
   it('keeps preview state separate from the committed workspace kernel', () => {
     const kernelStore = createWorkspaceKernelStore({
       snapshot: structuredClone(workspaceSnapshotFixture),
@@ -29,6 +117,7 @@ describe('createImportPreviewStore', () => {
           benchmarkScenario: 'import.clean.csv-preview',
         },
         rowCount: 2,
+        isPartialPreview: false,
         columnCount: 2,
         columns: [
           {
@@ -90,9 +179,10 @@ describe('createImportPreviewStore', () => {
             fileName: 'preview.csv',
             mimeType: 'text/csv',
             sheetName: null,
-            benchmarkScenario: 'import.clean.csv-preview',
+          benchmarkScenario: 'import.clean.csv-preview',
           },
           rowCount: 2,
+          isPartialPreview: false,
           columnCount: 2,
           columns: [],
           sampleRows: [],
@@ -114,5 +204,51 @@ describe('createImportPreviewStore', () => {
     });
     expect(kernelStore.getState().snapshot).toEqual(initialSnapshot);
     expect(kernelStore.getState().ledger).toEqual(initialLedger);
+  });
+
+  it('restores the prior preview when a started file import is canceled', () => {
+    const previewStore = createImportPreviewStore();
+    const readyPreview = {
+      previewId: 'preview_csv',
+      source: {
+        sourceKind: 'csv-file' as const,
+        sourceLabel: 'Local CSV file',
+        fileName: 'preview.csv',
+        mimeType: 'text/csv',
+        sheetName: null,
+        benchmarkScenario: 'import.clean.csv-preview' as const,
+      },
+      rowCount: 2,
+      isPartialPreview: false,
+      columnCount: 2,
+      columns: [],
+      sampleRows: [],
+      assumptions: [],
+      uncertainties: [],
+      timing: {
+        durationMs: 740,
+        budgetMs: 5000,
+        exceededBudget: false,
+      },
+    };
+
+    previewStore.getState().commands.resolveImport(
+      readyPreview,
+      createImportBenchmarkTimingEvent(readyPreview, () => '2026-04-20T10:00:00.000Z'),
+    );
+    previewStore.getState().commands.beginImport('import_003', 'excel-file');
+    previewStore.getState().commands.markBudgetExceeded();
+
+    expect(previewStore.getState().status).toBe('parsing');
+    expect(previewStore.getState().preview).toBeNull();
+
+    previewStore.getState().commands.cancelImport('import_003');
+
+    expect(previewStore.getState().status).toBe('ready');
+    expect(previewStore.getState().preview).toMatchObject({
+      previewId: 'preview_csv',
+    });
+    expect(previewStore.getState().budgetExceeded).toBe(false);
+    expect(previewStore.getState().activeCorrelationId).toBeNull();
   });
 });

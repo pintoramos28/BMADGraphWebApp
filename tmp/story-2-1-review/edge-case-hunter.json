@@ -1,0 +1,26 @@
+[
+  {
+    "location": "src/services/persistence/fs-access/local-import-files.ts:96-115",
+    "trigger_condition": "Hidden-input chooser is canceled without firing `change`",
+    "guard_snippet": "const finish = (file: File | null) => { input.remove(); resolve(file); }; input.addEventListener('change', () => finish(input.files?.[0] ?? null), { once: true }); window.addEventListener('focus', () => queueMicrotask(() => finish(input.files?.[0] ?? null)), { once: true });",
+    "potential_consequence": "Fallback browsers never return control after canceling the chooser."
+  },
+  {
+    "location": "src/features/import/workspace-import-route.tsx:154-179",
+    "trigger_condition": "Older file read finishes after a newer selection",
+    "guard_snippet": "const selectionId = createCorrelationId(); pendingSelectionRef.current = selectionId; const text = await file.text(); if (pendingSelectionRef.current !== selectionId) return; await beginWorkerImport(sourceKind, { ...payload, textContent: text }, selectionId);",
+    "potential_consequence": "The preview can flip back to an older, slower file."
+  },
+  {
+    "location": "src/features/import/workspace-import-route.tsx:154-179",
+    "trigger_condition": "Large file reading exceeds the budget before `beginImport` runs",
+    "guard_snippet": "const correlationId = createCorrelationId(); storeRef.current.getState().commands.beginImport(correlationId, sourceKind); scheduleBudgetTimer(); const binaryContent = await file.arrayBuffer(); if (!isCurrentSelection(correlationId)) return; ensureWorker().postMessage(...);",
+    "potential_consequence": "No progress state appears while the shell is busy reading the file."
+  },
+  {
+    "location": "src/features/import/workspace-import-route.tsx:76-118",
+    "trigger_condition": "Worker bootstrap or runtime error never yields a typed envelope",
+    "guard_snippet": "workerRef.current.onerror = workerRef.current.onmessageerror = () => { clearBudgetTimer(); storeRef.current.getState().commands.failImport({ code: 'import.preview.worker-failed', title: 'Preview worker failed', detail: 'The import worker could not start or respond.', retryable: true }, storeRef.current.getState().activeCorrelationId ?? undefined); };",
+    "potential_consequence": "Import can remain stuck in parsing until the user manually refreshes."
+  }
+]

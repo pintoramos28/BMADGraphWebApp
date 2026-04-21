@@ -263,7 +263,7 @@ function ShellHomeRoute({ store }: { store: StoreApi<ShellStatusStoreState> }) {
   );
 }
 
-function ShellWorkspaceRoute({ workspaceId }: { workspaceId: string | undefined }) {
+function ShellWorkspaceRoute({ workspaceId }: { workspaceId?: string | undefined }) {
   return <WorkspaceImportRoute workspaceId={workspaceId} />;
 }
 

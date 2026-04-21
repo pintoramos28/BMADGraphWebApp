@@ -1,0 +1,26 @@
+[
+  {
+    "location": "/home/pin81845/repo/BMADGraphWebApp/src/features/import/workspace-import-route.tsx:89-169",
+    "trigger_condition": "Second import starts while first worker parse is still running",
+    "guard_snippet": "if (workerRef.current) { workerRef.current.terminate(); workerRef.current = null; } ensureWorker().postMessage(request);",
+    "potential_consequence": "Newest preview stays blocked behind obsolete parsing"
+  },
+  {
+    "location": "/home/pin81845/repo/BMADGraphWebApp/src/features/import/parse-import-preview.ts:56-111",
+    "trigger_condition": "Workbook has far more rows than the delimited preview cap",
+    "guard_snippet": "const rows = workbookRows.slice(0, IMPORT_PREVIEW_ROW_LIMIT + 1); normalizedInput = { ...normalizedInput, rowLimit: IMPORT_PREVIEW_ROW_LIMIT, rows };",
+    "potential_consequence": "Excel previews can stall and lose CSV parity"
+  },
+  {
+    "location": "/home/pin81845/repo/BMADGraphWebApp/src/features/import/workspace-import-route.tsx:137-218",
+    "trigger_condition": "Picker or local file read exceeds budget before worker parsing starts",
+    "guard_snippet": "const startedAt = performance.now(); postWorkerImport(correlationId, sourceKind, { ...payload, startedAt }); // compute final duration from startedAt",
+    "potential_consequence": "Budget telemetry underreports slow end-to-end imports"
+  },
+  {
+    "location": "/home/pin81845/repo/BMADGraphWebApp/src/services/persistence/fs-access/local-import-files.ts:81-93",
+    "trigger_condition": "Native picker filters .txt, .tsv, or legacy .xls files",
+    "guard_snippet": "accept: { 'text/csv': ['.csv'], 'text/plain': ['.txt', '.tsv'], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'], 'application/vnd.ms-excel': ['.xls'] }",
+    "potential_consequence": "Supported local imports cannot be selected"
+  }
+]

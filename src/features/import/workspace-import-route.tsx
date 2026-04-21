@@ -7,9 +7,14 @@ import {
   importPreviewProgressMessageSchema,
   importPreviewSuccessMessageSchema,
 } from '../../schemas/worker';
-import { IMPORT_PREVIEW_BUDGET_MS, dispatchImportBenchmarkTimingEvent } from './benchmark-timing';
-import { createImportPreviewStore } from './store';
-import type { ImportSourceKind } from './preview-model';
+import {
+  IMPORT_PREVIEW_BUDGET_MS,
+  dispatchImportBenchmarkTimingEvent,
+  type ImportBenchmarkTimingEvent,
+} from './benchmark-timing';
+import { getOwnedImportBenchmarkFixture } from './owned-import-benchmarks';
+import { createImportPreviewStore, type ImportPreviewError } from './store';
+import type { ImportBenchmarkScenario, ImportPreviewDataset, ImportSourceKind } from './preview-model';
 
 function createCorrelationId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -23,6 +28,50 @@ function formatDuration(durationMs: number) {
   return `${(durationMs / 1000).toFixed(2)}s`;
 }
 
+export function createImportActivityTracker(now: () => number = () => performance.now()) {
+  let disposed = false;
+  const benchmarkStartedAtByCorrelation = new Map<string, number>();
+
+  return {
+    dispose() {
+      disposed = true;
+      benchmarkStartedAtByCorrelation.clear();
+    },
+    clearBenchmark(correlationId?: string) {
+      if (correlationId === undefined) {
+        benchmarkStartedAtByCorrelation.clear();
+        return;
+      }
+
+      benchmarkStartedAtByCorrelation.delete(correlationId);
+    },
+    isActive(activeCorrelationId: string | null, correlationId: string) {
+      return !disposed && activeCorrelationId === correlationId;
+    },
+    markBenchmarkStart(correlationId: string, startedAt: number = now()) {
+      if (disposed) {
+        return;
+      }
+
+      benchmarkStartedAtByCorrelation.set(correlationId, startedAt);
+    },
+    resolveBenchmarkDuration(correlationId: string, previewDurationMs: number, finishedAt: number = now()) {
+      if (disposed) {
+        return previewDurationMs;
+      }
+
+      const benchmarkStartedAt = benchmarkStartedAtByCorrelation.get(correlationId);
+      benchmarkStartedAtByCorrelation.delete(correlationId);
+
+      if (benchmarkStartedAt === undefined) {
+        return previewDurationMs;
+      }
+
+      return Math.max(previewDurationMs, Math.round(finishedAt - benchmarkStartedAt));
+    },
+  };
+}
+
 const sectionCardStyle = {
   padding: '1rem 1.1rem',
   borderRadius: '1rem',
@@ -30,12 +79,346 @@ const sectionCardStyle = {
   border: '1px solid rgba(31, 42, 54, 0.1)',
 } as const;
 
-export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string }) {
+type WorkerImportPayload = {
+  sourceLabel: string;
+  fileName?: string;
+  mimeType?: string | null;
+  benchmarkScenario?: ImportBenchmarkScenario | null;
+  textContent?: string | null;
+  binaryContent?: ArrayBuffer | null;
+};
+
+const CLEAN_EXCEL_BENCHMARK_SHA256 = '9a3c80dcce51ee6739bc4271b02b722ef5d6e6cdf2057e2251fc820d77b3f8e5';
+
+async function sha256Hex(binaryContent: ArrayBuffer) {
+  if (typeof crypto === 'undefined' || !crypto.subtle) {
+    return null;
+  }
+
+  let digest: ArrayBuffer;
+
+  try {
+    digest = await crypto.subtle.digest('SHA-256', binaryContent);
+  } catch {
+    return null;
+  }
+
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+export async function detectOwnedImportBenchmarkScenario({
+  sourceKind,
+  binaryContent,
+}: {
+  sourceKind: ImportSourceKind;
+  fileName?: string | undefined;
+  textContent?: string | null | undefined;
+  binaryContent?: ArrayBuffer | null | undefined;
+}): Promise<ImportBenchmarkScenario | null> {
+  if (sourceKind === 'excel-file' && binaryContent) {
+    const digest = await sha256Hex(binaryContent);
+
+    return digest === CLEAN_EXCEL_BENCHMARK_SHA256 ? 'import.clean.excel-preview' : null;
+  }
+
+  return null;
+}
+
+export function failImportIfActive({
+  correlationId,
+  importError,
+  isActive,
+  clearBenchmark,
+  clearBudgetTimer,
+  disposeWorker,
+  failImport,
+}: {
+  correlationId: string;
+  importError: ImportPreviewError;
+  isActive: (correlationId: string) => boolean;
+  clearBenchmark: (correlationId: string) => void;
+  clearBudgetTimer: (correlationId: string) => void;
+  disposeWorker: () => void;
+  failImport: (error: ImportPreviewError, correlationId: string) => void;
+}) {
+  if (!isActive(correlationId)) {
+    return false;
+  }
+
+  clearBenchmark(correlationId);
+  clearBudgetTimer(correlationId);
+  disposeWorker();
+  failImport(importError, correlationId);
+
+  return true;
+}
+
+export function postWorkerImportMessageWithBudget({
+  worker,
+  message,
+  transferList,
+  budgetMs,
+  armBudgetTimer,
+  clearBudgetTimer,
+  markBudgetExceeded,
+  now = () => performance.now(),
+}: {
+  worker: Pick<Worker, 'postMessage'>;
+  message: {
+    schemaVersion: string;
+    messageId: string;
+    correlationId: string;
+    workspaceVersion: number;
+    type: 'import.preview.request';
+    payload: {
+      sourceKind: ImportSourceKind;
+    } & WorkerImportPayload;
+  };
+  transferList: Transferable[];
+  budgetMs: number;
+  armBudgetTimer: () => void;
+  clearBudgetTimer: () => void;
+  markBudgetExceeded: () => void;
+  now?: () => number;
+}) {
+  const startedAt = now();
+  armBudgetTimer();
+
+  try {
+    worker.postMessage(message, transferList);
+  } catch (caughtError) {
+    clearBudgetTimer();
+    throw caughtError;
+  }
+
+  if (now() - startedAt >= budgetMs) {
+    markBudgetExceeded();
+  }
+}
+
+export function applyResolvedImportPreviewTiming(preview: ImportPreviewDataset, resolvedDurationMs: number): ImportPreviewDataset {
+  return {
+    ...preview,
+    timing: {
+      ...preview.timing,
+      durationMs: resolvedDurationMs,
+      exceededBudget: preview.timing.exceededBudget || resolvedDurationMs > preview.timing.budgetMs,
+    },
+  };
+}
+
+export function resolveDisplayedBenchmarkScenario(
+  preview: ImportPreviewDataset | null,
+  timingEvent: ImportBenchmarkTimingEvent | null,
+): ImportBenchmarkScenario | null {
+  return timingEvent?.scenario ?? preview?.source.benchmarkScenario ?? null;
+}
+
+export function toImportPreparationError(
+  phase: 'selection' | 'read' | 'benchmark-detection',
+  error: unknown,
+): ImportPreviewError {
+  const detail =
+    error instanceof Error
+      ? error.message
+      : phase === 'selection'
+        ? 'The selected file could not be opened.'
+        : phase === 'read'
+          ? 'The selected file could not be read from local storage.'
+          : 'The owned benchmark classification could not be completed.';
+
+  if (phase === 'selection') {
+    return {
+      code: 'import.preview.selection-failed',
+      title: 'File selection could not start',
+      detail,
+      retryable: true,
+    };
+  }
+
+  if (phase === 'read') {
+    return {
+      code: 'import.preview.read-failed',
+      title: 'Selected file could not be read',
+      detail,
+      retryable: true,
+    };
+  }
+
+  return {
+    code: 'import.preview.benchmark-detection-failed',
+    title: 'Benchmark verification could not finish',
+    detail,
+    retryable: true,
+  };
+}
+
+export function clearActiveImportPreview({
+  clearPasteValidationError,
+  clearBenchmark,
+  clearBudgetTimer,
+  disposeWorker,
+  resetPreview,
+}: {
+  clearPasteValidationError: () => void;
+  clearBenchmark: () => void;
+  clearBudgetTimer: () => void;
+  disposeWorker: () => void;
+  resetPreview: () => void;
+}) {
+  clearPasteValidationError();
+  clearBenchmark();
+  clearBudgetTimer();
+  disposeWorker();
+  resetPreview();
+}
+
+async function readFileText(file: File) {
+  if (typeof File !== 'undefined' && typeof File.prototype.text === 'function') {
+    return File.prototype.text.call(file);
+  }
+
+  return file.text();
+}
+
+async function readFileArrayBuffer(file: File) {
+  if (typeof File !== 'undefined' && typeof File.prototype.arrayBuffer === 'function') {
+    return File.prototype.arrayBuffer.call(file);
+  }
+
+  return file.arrayBuffer();
+}
+
+export function describePartialPreviewNotice(preview: Pick<ImportPreviewDataset, 'rowCount' | 'source'>) {
+  return preview.source.sourceKind === 'excel-file'
+    ? `This workbook preview is showing the first ${preview.rowCount} rows from the first sheet only. Inference summaries below reflect that workbook sample, not the full workbook.`
+    : `This delimited import is showing the first ${preview.rowCount} rows only. Row counts and inference summaries below reflect that preview sample, not the full dataset.`;
+}
+
+export async function awaitImportBudgetThreshold<T>({
+  budgetMs,
+  operation,
+  isActive,
+  onBudgetExceeded,
+  schedule,
+  clearScheduled,
+  now = () => performance.now(),
+}: {
+  budgetMs: number;
+  operation: () => Promise<T> | T;
+  isActive: () => boolean;
+  onBudgetExceeded: () => void;
+  schedule: typeof globalThis.setTimeout;
+  clearScheduled: typeof globalThis.clearTimeout;
+  now?: () => number;
+}) {
+  const startedAt = now();
+  let budgetTriggered = false;
+  let resolveBudget: ((value: { kind: 'budget' }) => void) | null = null;
+  const budgetSignal = new Promise<{ kind: 'budget' }>((resolve) => {
+    resolveBudget = resolve;
+  });
+
+  const markBudgetExceeded = () => {
+    if (budgetTriggered) {
+      return;
+    }
+
+    budgetTriggered = true;
+
+    if (isActive()) {
+      onBudgetExceeded();
+    }
+
+    resolveBudget?.({ kind: 'budget' });
+  };
+  const budgetTimer = schedule(markBudgetExceeded, budgetMs);
+  const waitForBudgetPaint = () => new Promise((resolve) => schedule(resolve, 0));
+  const finalizeBudgetState = async () => {
+    if (!budgetTriggered && now() - startedAt >= budgetMs) {
+      markBudgetExceeded();
+    }
+
+    if (budgetTriggered) {
+      // Yield one paint so the visible in-progress state can render before the next import phase continues.
+      await waitForBudgetPaint();
+    }
+  };
+
+  let operationResult: Promise<T>;
+
+  try {
+    operationResult = Promise.resolve(operation());
+  } catch (caughtError) {
+    clearScheduled(budgetTimer);
+    await finalizeBudgetState();
+    throw caughtError;
+  }
+
+  const budgetOutcome = await Promise.race([
+    operationResult.then(
+      (value) => ({ kind: 'resolved' as const, value }),
+      (error) => ({ kind: 'rejected' as const, error }),
+    ),
+    budgetSignal,
+  ])
+    .finally(() => {
+      clearScheduled(budgetTimer);
+    });
+
+  if (budgetOutcome.kind === 'resolved') {
+    await finalizeBudgetState();
+    return budgetOutcome.value;
+  }
+
+  if (budgetOutcome.kind === 'rejected') {
+    await finalizeBudgetState();
+    throw budgetOutcome.error;
+  }
+
+  // Yield one paint so the visible in-progress state can render before the slow read finishes.
+  await waitForBudgetPaint();
+
+  return operationResult;
+}
+
+export async function runImportBudgetedRead<T>({
+  budgetMs,
+  readOperation,
+  isActive,
+  onBudgetExceeded,
+  schedule,
+  clearScheduled,
+  now = () => performance.now(),
+}: {
+  budgetMs: number;
+  readOperation: () => Promise<T>;
+  isActive: () => boolean;
+  onBudgetExceeded: () => void;
+  schedule: typeof globalThis.setTimeout;
+  clearScheduled: typeof globalThis.clearTimeout;
+  now?: () => number;
+}) {
+  return awaitImportBudgetThreshold({
+    budgetMs,
+    operation: readOperation,
+    isActive,
+    onBudgetExceeded,
+    schedule,
+    clearScheduled,
+    now,
+  });
+}
+
+export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string | undefined }) {
   const storeRef = useRef(createImportPreviewStore());
   const fileAccessRef = useRef(new BrowserLocalImportFileAccess());
+  const activityTrackerRef = useRef(createImportActivityTracker());
   const workerRef = useRef<Worker | null>(null);
   const budgetTimerRef = useRef<number | null>(null);
+  const budgetTimerCorrelationRef = useRef<string | null>(null);
   const [pasteText, setPasteText] = useState('');
+  const [pasteValidationError, setPasteValidationError] = useState<string | null>(null);
 
   const status = useStore(storeRef.current, (state) => state.status);
   const preview = useStore(storeRef.current, (state) => state.preview);
@@ -43,82 +426,229 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string }) 
   const error = useStore(storeRef.current, (state) => state.error);
   const budgetExceeded = useStore(storeRef.current, (state) => state.budgetExceeded);
   const timingEvent = useStore(storeRef.current, (state) => state.lastTimingEvent);
+  const displayedBenchmarkScenario = resolveDisplayedBenchmarkScenario(preview, timingEvent);
 
   useEffect(() => {
     return () => {
+      activityTrackerRef.current.dispose();
+
       if (budgetTimerRef.current !== null) {
         window.clearTimeout(budgetTimerRef.current);
       }
 
+      budgetTimerCorrelationRef.current = null;
       workerRef.current?.terminate();
       workerRef.current = null;
+      storeRef.current.getState().commands.reset();
     };
   }, []);
 
-  function clearBudgetTimer() {
+  function disposeWorker() {
+    workerRef.current?.terminate();
+    workerRef.current = null;
+  }
+
+  function clearBudgetTimer(correlationId?: string) {
     if (budgetTimerRef.current !== null) {
+      if (correlationId !== undefined && budgetTimerCorrelationRef.current !== correlationId) {
+        return;
+      }
+
       window.clearTimeout(budgetTimerRef.current);
       budgetTimerRef.current = null;
+      budgetTimerCorrelationRef.current = null;
     }
   }
 
-  function scheduleBudgetTimer() {
+  function ensureBudgetTimer(correlationId: string) {
+    if (budgetTimerRef.current !== null && budgetTimerCorrelationRef.current === correlationId) {
+      return;
+    }
+
     clearBudgetTimer();
+    budgetTimerCorrelationRef.current = correlationId;
     budgetTimerRef.current = window.setTimeout(() => {
+      if (!isActiveWorkerMessage(correlationId)) {
+        return;
+      }
+
       storeRef.current.getState().commands.markBudgetExceeded();
     }, IMPORT_PREVIEW_BUDGET_MS);
   }
 
-  function ensureWorker() {
+  async function readLocalFileWithBudget<T>(correlationId: string, readOperation: () => Promise<T>) {
+    return runImportBudgetedRead({
+      budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+      readOperation,
+      isActive: () => isActiveWorkerMessage(correlationId),
+      onBudgetExceeded: () => {
+        storeRef.current.getState().commands.markBudgetExceeded();
+      },
+      schedule: window.setTimeout.bind(window),
+      clearScheduled: window.clearTimeout.bind(window),
+    });
+  }
+
+  async function resolveBenchmarkScenarioWithBudget(
+    correlationId: string,
+    detectionInput: Parameters<typeof detectOwnedImportBenchmarkScenario>[0],
+  ) {
+    return awaitImportBudgetThreshold({
+      budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+      operation: () => detectOwnedImportBenchmarkScenario(detectionInput),
+      isActive: () => isActiveWorkerMessage(correlationId),
+      onBudgetExceeded: () => {
+        storeRef.current.getState().commands.markBudgetExceeded();
+      },
+      schedule: window.setTimeout.bind(window),
+      clearScheduled: window.clearTimeout.bind(window),
+    });
+  }
+
+  function isActiveWorkerMessage(correlationId: string) {
+    return activityTrackerRef.current.isActive(storeRef.current.getState().activeCorrelationId, correlationId);
+  }
+
+  function failImportFromWorker(correlationId: string, detail: string) {
+    failImportIfActive({
+      correlationId,
+      importError: {
+        code: 'import.preview.worker-failed',
+        title: 'Preview could not be prepared',
+        detail,
+        retryable: true,
+      },
+      isActive: isActiveWorkerMessage,
+      clearBenchmark: (activeCorrelationId) => {
+        activityTrackerRef.current.clearBenchmark(activeCorrelationId);
+      },
+      clearBudgetTimer: (activeCorrelationId) => {
+        clearBudgetTimer(activeCorrelationId);
+      },
+      disposeWorker,
+      failImport: (importError, activeCorrelationId) => {
+        storeRef.current.getState().commands.failImport(importError, activeCorrelationId);
+      },
+    });
+  }
+
+  function failImportFromRoute(correlationId: string, importError: ImportPreviewError) {
+    failImportIfActive({
+      correlationId,
+      importError,
+      isActive: isActiveWorkerMessage,
+      clearBenchmark: (activeCorrelationId) => {
+        activityTrackerRef.current.clearBenchmark(activeCorrelationId);
+      },
+      clearBudgetTimer: (activeCorrelationId) => {
+        clearBudgetTimer(activeCorrelationId);
+      },
+      disposeWorker,
+      failImport: (errorToApply, activeCorrelationId) => {
+        storeRef.current.getState().commands.failImport(errorToApply, activeCorrelationId);
+      },
+    });
+  }
+
+  function ensureWorker(): Worker {
     if (!workerRef.current) {
-      workerRef.current = new Worker(new URL('../../workers/import.worker.ts', import.meta.url), {
+      const worker = new Worker(new URL('../../workers/import.worker.ts', import.meta.url), {
         type: 'module',
       });
-      workerRef.current.onmessage = (event: MessageEvent) => {
+      worker.onmessage = (event: MessageEvent) => {
         const progressMessage = importPreviewProgressMessageSchema.safeParse(event.data);
 
         if (progressMessage.success) {
-          storeRef.current.getState().commands.updateProgress(progressMessage.data.payload);
+          if (!isActiveWorkerMessage(progressMessage.data.correlationId)) {
+            return;
+          }
+
+          storeRef.current.getState().commands.updateProgress(progressMessage.data.payload, progressMessage.data.correlationId);
           return;
         }
 
         const successMessage = importPreviewSuccessMessageSchema.safeParse(event.data);
 
         if (successMessage.success) {
-          clearBudgetTimer();
-          const benchmarkEvent = dispatchImportBenchmarkTimingEvent(successMessage.data.payload.preview);
-          storeRef.current.getState().commands.resolveImport(successMessage.data.payload.preview, benchmarkEvent);
+          if (!isActiveWorkerMessage(successMessage.data.correlationId)) {
+            return;
+          }
+
+          clearBudgetTimer(successMessage.data.correlationId);
+          const benchmarkDurationMs = activityTrackerRef.current.resolveBenchmarkDuration(
+            successMessage.data.correlationId,
+            successMessage.data.payload.preview.timing.durationMs,
+          );
+          const resolvedPreview = applyResolvedImportPreviewTiming(
+            successMessage.data.payload.preview,
+            benchmarkDurationMs,
+          );
+          const benchmarkEvent = dispatchImportBenchmarkTimingEvent(resolvedPreview);
+          storeRef.current
+            .getState()
+            .commands.resolveImport(resolvedPreview, benchmarkEvent, successMessage.data.correlationId);
           return;
         }
 
         const failureMessage = importPreviewFailureMessageSchema.safeParse(event.data);
 
         if (failureMessage.success) {
-          clearBudgetTimer();
-          storeRef.current.getState().commands.failImport(failureMessage.data.payload);
+          if (!isActiveWorkerMessage(failureMessage.data.correlationId)) {
+            return;
+          }
+
+          activityTrackerRef.current.clearBenchmark(failureMessage.data.correlationId);
+          clearBudgetTimer(failureMessage.data.correlationId);
+          disposeWorker();
+          storeRef.current.getState().commands.failImport(failureMessage.data.payload, failureMessage.data.correlationId);
         }
       };
+      worker.onerror = (event) => {
+        const correlationId = storeRef.current.getState().activeCorrelationId;
+
+        if (!correlationId) {
+          return;
+        }
+
+        failImportFromWorker(correlationId, event.message || 'The import worker could not finish preparing the preview.');
+        event.preventDefault();
+      };
+      worker.onmessageerror = () => {
+        const correlationId = storeRef.current.getState().activeCorrelationId;
+
+        if (!correlationId) {
+          return;
+        }
+
+        failImportFromWorker(correlationId, 'The import worker returned an unreadable preview message.');
+      };
+      workerRef.current = worker;
     }
 
-    return workerRef.current;
+    return workerRef.current!;
   }
 
-  async function beginWorkerImport(
-    sourceKind: ImportSourceKind,
-    payload: {
-      sourceLabel: string;
-      fileName?: string;
-      mimeType?: string | null;
-      textContent?: string | null;
-      binaryContent?: ArrayBuffer | null;
-    },
-  ) {
+  function beginImport(sourceKind: ImportSourceKind) {
+    clearBudgetTimer();
+    disposeWorker();
+    activityTrackerRef.current.clearBenchmark();
     const correlationId = createCorrelationId();
     storeRef.current.getState().commands.beginImport(correlationId, sourceKind);
-    scheduleBudgetTimer();
 
-    ensureWorker().postMessage(
-      {
+    return correlationId;
+  }
+
+  function postWorkerImport(
+    correlationId: string,
+    sourceKind: ImportSourceKind,
+    payload: WorkerImportPayload,
+  ) {
+    const worker = ensureWorker();
+    const transferList = payload.binaryContent ? [payload.binaryContent] : [];
+
+    postWorkerImportMessageWithBudget({
+      worker,
+      message: {
         schemaVersion: '1.0.0',
         messageId: `import_preview_${correlationId}`,
         correlationId,
@@ -129,63 +659,203 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string }) 
           ...payload,
         },
       },
-      payload.binaryContent ? [payload.binaryContent] : [],
-    );
+      transferList,
+      budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+      armBudgetTimer: () => {
+        ensureBudgetTimer(correlationId);
+      },
+      clearBudgetTimer: () => {
+        clearBudgetTimer(correlationId);
+      },
+      markBudgetExceeded: () => {
+        if (!isActiveWorkerMessage(correlationId)) {
+          return;
+        }
+
+        storeRef.current.getState().commands.markBudgetExceeded();
+      },
+    });
   }
 
   async function handleFileImport(sourceKind: Extract<ImportSourceKind, 'csv-file' | 'excel-file'>) {
+    setPasteValidationError(null);
+    const correlationId = beginImport(sourceKind);
+    let file: File | null;
+
     try {
-      const file = await fileAccessRef.current.openLocalImportFile({
+      file = await fileAccessRef.current.openLocalImportFile({
         sourceKind,
       });
+    } catch (caughtError) {
+      failImportFromRoute(correlationId, toImportPreparationError('selection', caughtError));
+      return;
+    }
 
-      if (!file) {
+    if (!file) {
+      activityTrackerRef.current.clearBenchmark(correlationId);
+      clearBudgetTimer(correlationId);
+      storeRef.current.getState().commands.cancelImport(correlationId);
+      return;
+    }
+
+    if (!isActiveWorkerMessage(correlationId)) {
+      return;
+    }
+
+    activityTrackerRef.current.markBenchmarkStart(correlationId);
+    let payload: WorkerImportPayload;
+
+    if (sourceKind === 'excel-file') {
+      let binaryContent: ArrayBuffer;
+
+      try {
+        binaryContent = await readLocalFileWithBudget(correlationId, () => readFileArrayBuffer(file));
+      } catch (caughtError) {
+        failImportFromRoute(correlationId, toImportPreparationError('read', caughtError));
         return;
       }
 
-      if (sourceKind === 'excel-file') {
-        await beginWorkerImport(sourceKind, {
-          sourceLabel: 'Local Excel workbook',
-          fileName: file.name,
-          mimeType: file.type || null,
-          binaryContent: await file.arrayBuffer(),
+      if (!isActiveWorkerMessage(correlationId)) {
+        return;
+      }
+
+      let benchmarkScenario: ImportBenchmarkScenario | null;
+
+      try {
+        benchmarkScenario = await resolveBenchmarkScenarioWithBudget(correlationId, {
+          sourceKind,
+          binaryContent,
         });
+      } catch (caughtError) {
+        failImportFromRoute(correlationId, toImportPreparationError('benchmark-detection', caughtError));
         return;
       }
 
-      await beginWorkerImport(sourceKind, {
+      if (!isActiveWorkerMessage(correlationId)) {
+        return;
+      }
+
+      payload = {
+        sourceLabel: 'Local Excel workbook',
+        fileName: file.name,
+        mimeType: file.type || null,
+        benchmarkScenario,
+        binaryContent,
+      };
+    } else {
+      let textContent: string;
+
+      try {
+        textContent = await readLocalFileWithBudget(correlationId, () => readFileText(file));
+      } catch (caughtError) {
+        failImportFromRoute(correlationId, toImportPreparationError('read', caughtError));
+        return;
+      }
+
+      if (!isActiveWorkerMessage(correlationId)) {
+        return;
+      }
+
+      let benchmarkScenario: ImportBenchmarkScenario | null;
+
+      try {
+        benchmarkScenario = await resolveBenchmarkScenarioWithBudget(correlationId, {
+          sourceKind,
+          textContent,
+        });
+      } catch (caughtError) {
+        failImportFromRoute(correlationId, toImportPreparationError('benchmark-detection', caughtError));
+        return;
+      }
+
+      if (!isActiveWorkerMessage(correlationId)) {
+        return;
+      }
+
+      payload = {
         sourceLabel: 'Local CSV file',
         fileName: file.name,
         mimeType: file.type || null,
-        textContent: await file.text(),
-      });
+        benchmarkScenario,
+        textContent,
+      };
+    }
+
+    try {
+      postWorkerImport(correlationId, sourceKind, payload);
     } catch (caughtError) {
-      clearBudgetTimer();
-      storeRef.current.getState().commands.failImport({
-        code: 'import.preview.selection-failed',
-        title: 'File selection could not start',
-        detail: caughtError instanceof Error ? caughtError.message : 'The selected file could not be opened.',
-        retryable: true,
-      });
+      failImportFromWorker(
+        correlationId,
+        caughtError instanceof Error ? caughtError.message : 'The import worker could not start for the selected source.',
+      );
     }
   }
 
   async function handlePasteImport() {
     if (pasteText.trim().length === 0) {
-      storeRef.current.getState().commands.failImport({
-        code: 'import.preview.empty-paste',
-        title: 'Paste some tabular data first',
-        detail: 'The preview workspace needs at least one row of pasted text before it can infer assumptions.',
-        retryable: true,
-      });
+      setPasteValidationError('Paste some tabular data first');
       return;
     }
 
-    await beginWorkerImport('pasted-table', {
-      sourceLabel: 'Pasted table',
-      mimeType: 'text/plain',
-      textContent: pasteText,
-    });
+    setPasteValidationError(null);
+    const correlationId = beginImport('pasted-table');
+    activityTrackerRef.current.markBenchmarkStart(correlationId);
+
+    let benchmarkScenario: ImportBenchmarkScenario | null;
+
+    try {
+      benchmarkScenario = await resolveBenchmarkScenarioWithBudget(correlationId, {
+        sourceKind: 'pasted-table',
+        textContent: pasteText,
+      });
+    } catch (caughtError) {
+      failImportFromRoute(correlationId, toImportPreparationError('benchmark-detection', caughtError));
+      return;
+    }
+
+    if (!isActiveWorkerMessage(correlationId)) {
+      return;
+    }
+
+    try {
+      postWorkerImport(correlationId, 'pasted-table', {
+        sourceLabel: 'Pasted table',
+        mimeType: 'text/plain',
+        benchmarkScenario,
+        textContent: pasteText,
+      });
+    } catch (caughtError) {
+      failImportFromWorker(
+        correlationId,
+        caughtError instanceof Error ? caughtError.message : 'The import worker could not start for the pasted table.',
+      );
+    }
+  }
+
+  function handleOwnedBenchmarkImport(sourceKind: Extract<ImportSourceKind, 'csv-file' | 'pasted-table'>) {
+    setPasteValidationError(null);
+    const fixture = getOwnedImportBenchmarkFixture(sourceKind);
+    const correlationId = beginImport(sourceKind);
+    activityTrackerRef.current.markBenchmarkStart(correlationId);
+
+    if (sourceKind === 'pasted-table') {
+      setPasteText(fixture.textContent);
+    }
+
+    try {
+      postWorkerImport(correlationId, sourceKind, {
+        sourceLabel: fixture.sourceLabel,
+        mimeType: fixture.mimeType,
+        benchmarkScenario: fixture.benchmarkScenario,
+        textContent: fixture.textContent,
+        ...(fixture.fileName ? { fileName: fixture.fileName } : {}),
+      });
+    } catch (caughtError) {
+      failImportFromWorker(
+        correlationId,
+        caughtError instanceof Error ? caughtError.message : 'The BMAD benchmark preview could not start.',
+      );
+    }
   }
 
   return (
@@ -214,9 +884,14 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string }) 
           <p style={{ lineHeight: 1.6 }}>
             Choose a local comma-, semicolon-, tab-, or pipe-delimited file through the persistence boundary.
           </p>
-          <button type="button" onClick={() => void handleFileImport('csv-file')}>
-            Choose CSV file
-          </button>
+          <div style={{ display: 'grid', gap: '0.5rem' }}>
+            <button type="button" onClick={() => void handleFileImport('csv-file')}>
+              Choose CSV file
+            </button>
+            <button type="button" onClick={() => handleOwnedBenchmarkImport('csv-file')}>
+              {getOwnedImportBenchmarkFixture('csv-file').actionLabel}
+            </button>
+          </div>
         </article>
 
         <article style={sectionCardStyle}>
@@ -235,14 +910,25 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string }) 
           <textarea
             id="pasted-table-input"
             value={pasteText}
-            onChange={(event) => setPasteText(event.currentTarget.value)}
+            onChange={(event) => {
+              setPasteText(event.currentTarget.value);
+              setPasteValidationError(null);
+            }}
             rows={6}
             style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical' }}
             placeholder={'Sample\tReading\tMeasuredAt\nA-1\t42.5\t2026-04-18'}
           />
-          <div style={{ marginTop: '0.75rem' }}>
+          {pasteValidationError ? (
+            <p role="alert" style={{ margin: '0.5rem 0 0', color: '#8a2d1b', lineHeight: 1.5 }}>
+              {pasteValidationError}
+            </p>
+          ) : null}
+          <div style={{ marginTop: '0.75rem', display: 'grid', gap: '0.5rem' }}>
             <button type="button" onClick={() => void handlePasteImport()}>
               Preview pasted table
+            </button>
+            <button type="button" onClick={() => handleOwnedBenchmarkImport('pasted-table')}>
+              {getOwnedImportBenchmarkFixture('pasted-table').actionLabel}
             </button>
           </div>
         </article>
@@ -273,7 +959,9 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string }) 
           <div style={{ display: 'grid', gap: '0.35rem' }}>
             <span>Preview ready. The committed workspace is still unchanged.</span>
             <span>
-              {preview.rowCount} rows, {preview.columnCount} columns, prepared in {formatDuration(preview.timing.durationMs)}.
+              {preview.isPartialPreview
+                ? `Showing the first ${preview.rowCount} preview rows and ${preview.columnCount} columns, prepared in ${formatDuration(preview.timing.durationMs)}.`
+                : `${preview.rowCount} rows, ${preview.columnCount} columns, prepared in ${formatDuration(preview.timing.durationMs)}.`}
             </span>
           </div>
         ) : null}
@@ -306,7 +994,7 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string }) 
               <div>{preview.source.fileName ?? preview.source.sourceLabel}</div>
             </article>
             <article style={sectionCardStyle}>
-              <strong>Rows</strong>
+              <strong>Preview rows</strong>
               <div>{preview.rowCount}</div>
             </article>
             <article style={sectionCardStyle}>
@@ -315,9 +1003,21 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string }) 
             </article>
             <article style={sectionCardStyle}>
               <strong>Benchmark hook</strong>
-              <div>{timingEvent?.scenario ?? preview.source.benchmarkScenario}</div>
+              <div>{displayedBenchmarkScenario ?? 'Not a clean benchmark fixture'}</div>
             </article>
           </section>
+
+          {preview.isPartialPreview ? (
+            <section
+              style={{
+                ...sectionCardStyle,
+                background: 'rgba(31, 42, 54, 0.05)',
+              }}
+            >
+              <strong style={{ display: 'block', marginBottom: '0.35rem' }}>Partial preview</strong>
+              <span>{describePartialPreviewNotice(preview)}</span>
+            </section>
+          ) : null}
 
           <section style={{ display: 'grid', gap: '0.75rem' }}>
             <h3 style={{ marginBottom: 0 }}>Assumptions</h3>
@@ -410,7 +1110,26 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string }) 
           </section>
 
           <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-            <button type="button" onClick={() => storeRef.current.getState().commands.reset()}>
+            <button
+              type="button"
+              onClick={() => {
+                clearActiveImportPreview({
+                  clearPasteValidationError: () => {
+                    setPasteValidationError(null);
+                  },
+                  clearBenchmark: () => {
+                    activityTrackerRef.current.clearBenchmark();
+                  },
+                  clearBudgetTimer: () => {
+                    clearBudgetTimer();
+                  },
+                  disposeWorker,
+                  resetPreview: () => {
+                    storeRef.current.getState().commands.reset();
+                  },
+                });
+              }}
+            >
               Clear preview
             </button>
             <span style={{ alignSelf: 'center', color: '#6f5b45' }}>

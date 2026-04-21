@@ -1,0 +1,32 @@
+[
+  {
+    "location": "src/features/import/parse-import-preview.ts:55-79",
+    "trigger_condition": "Workbook has thousands of rows",
+    "guard_snippet": "const range = XLSX.utils.decode_range(sheet['!ref'] ?? 'A1'); range.e.r = Math.min(range.e.r, IMPORT_PREVIEW_ROW_LIMIT); const workbookRows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false, defval: '', blankrows: false, range });",
+    "potential_consequence": "Excel previews can exceed budget while CSV stays sampled."
+  },
+  {
+    "location": "src/services/persistence/fs-access/local-import-files.ts:129-139",
+    "trigger_condition": "Focus returns before change populates input.files",
+    "guard_snippet": "focusTimeout = this.#interactionHost.setTimeout(() => { if ((input.files?.length ?? 0) === 0 && !settled) settle(null); }, 200);",
+    "potential_consequence": "A successful file pick is misreported as cancellation."
+  },
+  {
+    "location": "src/features/import/store.ts:67-78",
+    "trigger_condition": "New import starts after a prior preview is ready",
+    "guard_snippet": "set({ status: 'parsing', activeCorrelationId: correlationId, activeSourceKind: sourceKind, preview: null, progress: { phase: 'loading', message: 'Preparing the local preview workspace.' }, error: null, budgetExceeded: false });",
+    "potential_consequence": "Old preview remains rendered during the next parse."
+  },
+  {
+    "location": "src/features/import/workspace-import-route.tsx:231-238",
+    "trigger_condition": "Blank paste submission occurs while another preview is already shown",
+    "guard_snippet": "if (pasteText.trim().length === 0) { setPasteValidationError('Paste some tabular data first'); return; }",
+    "potential_consequence": "Existing preview disappears even though no new import started."
+  },
+  {
+    "location": "src/features/import/parse-import-preview.ts:34-52",
+    "trigger_condition": "Delimited source exceeds 200 previewed rows",
+    "guard_snippet": "return { delimiter: parsed.meta.delimiter || null, rows: rows.slice(0, IMPORT_PREVIEW_ROW_LIMIT + 1), truncated: rows.length > IMPORT_PREVIEW_ROW_LIMIT + 1 };",
+    "potential_consequence": "Displayed counts and inferred types describe only the prefix sample."
+  }
+]

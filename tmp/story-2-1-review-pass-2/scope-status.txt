@@ -1,0 +1,21 @@
+?? _bmad-output/benchmarks/benchmark_set_clean/README.md
+?? _bmad-output/benchmarks/benchmark_set_clean/csv/import.clean.csv-preview.csv
+?? _bmad-output/benchmarks/benchmark_set_clean/csv/import.clean.csv-preview.md
+?? _bmad-output/benchmarks/benchmark_set_clean/excel/import.clean.excel-preview.md
+?? _bmad-output/benchmarks/benchmark_set_clean/excel/import.clean.excel-preview.xlsx
+?? _bmad-output/benchmarks/benchmark_set_clean/paste/import.clean.paste-preview.md
+?? _bmad-output/benchmarks/benchmark_set_clean/paste/import.clean.paste-preview.txt
+ M _bmad-output/implementation-artifacts/2-1-import-csv-excel-and-pasted-data-into-a-preview-workspace.md
+ M _bmad-output/implementation-artifacts/sprint-status.yaml
+ M package-lock.json
+ M src/app/router/shell-routes.tsx
+ M src/features/import/normalize-preview.ts
+ M src/features/import/parse-import-preview.ts
+ M src/features/import/preview-model.ts
+ M src/features/import/store.spec.ts
+ M src/features/import/store.ts
+ M src/features/import/workspace-import-route.tsx
+ M src/services/persistence/fs-access/local-import-files.spec.ts
+ M src/services/persistence/fs-access/local-import-files.ts
+?? src/types/papaparse.d.ts
+ M tests/e2e/import.spec.ts

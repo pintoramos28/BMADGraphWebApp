@@ -1,13 +1,23 @@
-import type { ImportConfidence, ImportPreviewDataset, ImportSourceKind } from './preview-model';
+import type {
+  ImportBenchmarkScenario,
+  ImportConfidence,
+  ImportPreviewAssumption,
+  ImportPreviewDataset,
+  ImportPreviewUncertainty,
+  ImportSourceKind,
+} from './preview-model';
 import { IMPORT_PREVIEW_BUDGET_MS } from './benchmark-timing';
 
 export interface TabularPreviewInput {
   sourceKind: ImportSourceKind;
   sourceLabel: string;
-  fileName?: string;
-  mimeType?: string | null;
-  sheetName?: string | null;
-  delimiter?: string | null;
+  fileName?: string | undefined;
+  mimeType?: string | null | undefined;
+  sheetName?: string | null | undefined;
+  benchmarkScenario?: ImportBenchmarkScenario | null | undefined;
+  delimiter?: string | null | undefined;
+  rowLimit?: number | undefined;
+  rowOverflow?: boolean | undefined;
   rows: string[][];
   durationMs: number;
 }
@@ -160,31 +170,26 @@ function inferColumnType(values: string[]) {
   } as const;
 }
 
-function benchmarkScenarioForSource(sourceKind: ImportSourceKind) {
-  if (sourceKind === 'excel-file') {
-    return 'import.clean.excel-preview' as const;
-  }
-
-  if (sourceKind === 'pasted-table') {
-    return 'import.clean.paste-preview' as const;
-  }
-
-  return 'import.clean.csv-preview' as const;
-}
-
 export function buildImportPreviewDataset(input: TabularPreviewInput): ImportPreviewDataset {
   const normalizedRows = normalizeRows(input.rows);
   const headerDetection = detectHeader(normalizedRows);
   const headerRow = headerDetection.hasHeader ? normalizedRows[0] ?? [] : [];
   const bodyRows = headerDetection.hasHeader ? normalizedRows.slice(1) : normalizedRows;
-  const maxColumnCount = normalizedRows.reduce((max, row) => Math.max(max, row.length), 0);
+
+  if (bodyRows.length === 0) {
+    throw new Error('The selected source did not contain any previewable data rows after normalization.');
+  }
+
+  const isPartialPreview = input.rowOverflow === true || (input.rowLimit !== undefined && bodyRows.length > input.rowLimit);
+  const previewRows = input.rowLimit === undefined ? bodyRows : bodyRows.slice(0, input.rowLimit);
+  const maxColumnCount = previewRows.reduce((max, row) => Math.max(max, row.length), headerRow.length);
   const columnNames = Array.from({ length: maxColumnCount }, (_, index) => {
     const candidate = headerRow[index];
 
     return candidate && candidate.length > 0 ? candidate : `Column ${index + 1}`;
   });
   const columns = columnNames.map((sourceName, index) => {
-    const values = bodyRows.map((row) => row[index] ?? '');
+    const values = previewRows.map((row) => row[index] ?? '');
     const inference = inferColumnType(values);
 
     return {
@@ -202,7 +207,7 @@ export function buildImportPreviewDataset(input: TabularPreviewInput): ImportPre
   const dateColumns = columns.filter((column) => column.inferredType === 'date').length;
   const uncertainColumns = columns.filter((column) => column.inferredType === 'mixed');
 
-  const assumptions = [
+  const assumptions: ImportPreviewAssumption[] = [
     {
       assumptionId: 'assumption_delimiter',
       category: 'delimiter' as const,
@@ -253,7 +258,7 @@ export function buildImportPreviewDataset(input: TabularPreviewInput): ImportPre
     },
   ];
 
-  const uncertainties = uncertainColumns.map((column) => ({
+  const uncertainties: ImportPreviewUncertainty[] = uncertainColumns.map((column) => ({
     uncertaintyId: `uncertainty_${column.columnId}`,
     category: 'uncertainty' as const,
     severity: 'medium' as const,
@@ -271,19 +276,20 @@ export function buildImportPreviewDataset(input: TabularPreviewInput): ImportPre
   }
 
   return {
-    previewId: `preview_${input.sourceKind}_${Math.max(1, bodyRows.length)}_${Math.max(1, maxColumnCount)}`,
+    previewId: `preview_${input.sourceKind}_${Math.max(1, previewRows.length)}_${Math.max(1, maxColumnCount)}`,
     source: {
       sourceKind: input.sourceKind,
       sourceLabel: input.sourceLabel,
       ...(input.fileName ? { fileName: input.fileName } : {}),
       mimeType: input.mimeType ?? null,
       sheetName: input.sheetName ?? null,
-      benchmarkScenario: benchmarkScenarioForSource(input.sourceKind),
+      benchmarkScenario: input.benchmarkScenario ?? null,
     },
-    rowCount: bodyRows.length,
+    rowCount: previewRows.length,
+    isPartialPreview,
     columnCount: columns.length,
     columns,
-    sampleRows: bodyRows.slice(0, SAMPLE_ROW_LIMIT).map((row, rowIndex) => ({
+    sampleRows: previewRows.slice(0, SAMPLE_ROW_LIMIT).map((row, rowIndex) => ({
       rowId: toRowId(rowIndex),
       cells: columns.map((column, columnIndex) => ({
         columnId: column.columnId,

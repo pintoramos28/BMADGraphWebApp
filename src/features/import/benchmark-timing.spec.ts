@@ -13,6 +13,7 @@ const previewFixture = {
     benchmarkScenario: 'import.clean.csv-preview' as const,
   },
   rowCount: 12,
+  isPartialPreview: false,
   columnCount: 4,
   columns: [],
   sampleRows: [],
@@ -50,7 +51,39 @@ describe('import benchmark timing hooks', () => {
       dispatchEvent,
     });
 
+    if (!event) {
+      throw new Error('Expected a benchmark timing event for the clean fixture preview.');
+    }
+
     expect(event.scenario).toBe('import.clean.csv-preview');
     expect(dispatchEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('can report end-to-end preview timing when local file reads extend readiness', () => {
+    const event = createImportBenchmarkTimingEvent(
+      previewFixture,
+      () => '2026-04-20T10:30:00.000Z',
+      6789,
+    );
+
+    if (!event) {
+      throw new Error('Expected a benchmark timing event for the clean fixture preview.');
+    }
+
+    expect(event.durationMs).toBe(6789);
+    expect(event.exceededBudget).toBe(true);
+  });
+
+  it('skips benchmark telemetry when the preview is not an owned clean benchmark fixture', () => {
+    expect(
+      createImportBenchmarkTimingEvent({
+        ...previewFixture,
+        source: {
+          ...previewFixture.source,
+          fileName: 'customer-upload.csv',
+          benchmarkScenario: null,
+        },
+      }),
+    ).toBeNull();
   });
 });

@@ -10,6 +10,13 @@ import {
 export const importSourceKindSchema = z.enum(['csv-file', 'excel-file', 'pasted-table']);
 export type ImportSourceKind = z.infer<typeof importSourceKindSchema>;
 
+export const importBenchmarkScenarioSchema = z.enum([
+  'import.clean.csv-preview',
+  'import.clean.excel-preview',
+  'import.clean.paste-preview',
+]);
+export type ImportBenchmarkScenario = z.infer<typeof importBenchmarkScenarioSchema>;
+
 export const importAssumptionCategorySchema = z.enum(['delimiter', 'header', 'numeric', 'date', 'uncertainty']);
 export type ImportAssumptionCategory = z.infer<typeof importAssumptionCategorySchema>;
 
@@ -25,11 +32,7 @@ export const importPreviewSourceSchema = strictObject({
   fileName: nonEmptyStringSchema.optional(),
   mimeType: nonEmptyStringSchema.nullable(),
   sheetName: nonEmptyStringSchema.nullable(),
-  benchmarkScenario: z.enum([
-    'import.clean.csv-preview',
-    'import.clean.excel-preview',
-    'import.clean.paste-preview',
-  ]),
+  benchmarkScenario: importBenchmarkScenarioSchema.nullable(),
 });
 export type ImportPreviewSource = z.infer<typeof importPreviewSourceSchema>;
 
@@ -86,6 +89,7 @@ export const importPreviewDatasetSchema = strictObject({
   previewId: identifierSchema,
   source: importPreviewSourceSchema,
   rowCount: nonNegativeIntegerSchema,
+  isPartialPreview: z.boolean(),
   columnCount: nonNegativeIntegerSchema,
   columns: z.array(importPreviewColumnSchema),
   sampleRows: z.array(importPreviewRowSchema),

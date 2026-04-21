@@ -20,6 +20,7 @@ export interface ImportPreviewStateData {
   activeCorrelationId: string | null;
   activeSourceKind: ImportSourceKind | null;
   preview: ImportPreviewDataset | null;
+  preservedPreview: ImportPreviewDataset | null;
   progress: ImportPreviewProgress | null;
   error: ImportPreviewError | null;
   budgetExceeded: boolean;
@@ -28,10 +29,11 @@ export interface ImportPreviewStateData {
 
 export interface ImportPreviewStateCommands {
   beginImport(correlationId: string, sourceKind: ImportSourceKind): void;
-  updateProgress(progress: ImportPreviewProgress): void;
+  cancelImport(correlationId?: string): void;
+  updateProgress(progress: ImportPreviewProgress, correlationId?: string): void;
   markBudgetExceeded(): void;
-  resolveImport(preview: ImportPreviewDataset, timingEvent: ImportBenchmarkTimingEvent): void;
-  failImport(error: ImportPreviewError): void;
+  resolveImport(preview: ImportPreviewDataset, timingEvent: ImportBenchmarkTimingEvent | null, correlationId?: string): void;
+  failImport(error: ImportPreviewError, correlationId?: string): void;
   reset(): void;
 }
 
@@ -48,36 +50,70 @@ export interface ImportPreviewStateStore {
 
 export type ImportPreviewState = ImportPreviewStateData & ImportPreviewStateStore;
 
+function shouldIgnoreCorrelation(state: ImportPreviewStateData, correlationId?: string) {
+  return correlationId !== undefined && state.activeCorrelationId !== correlationId;
+}
+
 export function createImportPreviewStore() {
   return createStore<ImportPreviewState>((set, get) => ({
     status: 'idle',
     activeCorrelationId: null,
     activeSourceKind: null,
     preview: null,
+    preservedPreview: null,
     progress: null,
     error: null,
     budgetExceeded: false,
     lastTimingEvent: null,
     commands: {
       beginImport(correlationId, sourceKind) {
-        set({
+        set((state) => ({
+          ...state,
           status: 'parsing',
           activeCorrelationId: correlationId,
           activeSourceKind: sourceKind,
           preview: null,
+          preservedPreview: state.preview ?? state.preservedPreview,
           progress: {
             phase: 'loading',
             message: 'Preparing the local preview workspace.',
           },
           error: null,
           budgetExceeded: false,
+        }));
+      },
+      cancelImport(correlationId) {
+        set((state) => {
+          if (shouldIgnoreCorrelation(state, correlationId)) {
+            return state;
+          }
+
+          const preview = state.preservedPreview;
+
+          return {
+            ...state,
+            status: preview ? 'ready' : 'idle',
+            activeCorrelationId: null,
+            activeSourceKind: null,
+            preview,
+            preservedPreview: null,
+            progress: null,
+            error: null,
+            budgetExceeded: preview?.timing.exceededBudget ?? false,
+          };
         });
       },
-      updateProgress(progress) {
-        set((state) => ({
-          ...state,
-          progress,
-        }));
+      updateProgress(progress, correlationId) {
+        set((state) => {
+          if (shouldIgnoreCorrelation(state, correlationId)) {
+            return state;
+          }
+
+          return {
+            ...state,
+            progress,
+          };
+        });
       },
       markBudgetExceeded() {
         set((state) => ({
@@ -85,25 +121,43 @@ export function createImportPreviewStore() {
           budgetExceeded: true,
         }));
       },
-      resolveImport(preview, timingEvent) {
-        set((state) => ({
-          ...state,
-          status: 'ready',
-          preview,
-          progress: null,
-          error: null,
-          budgetExceeded: preview.timing.exceededBudget || state.budgetExceeded,
-          lastTimingEvent: timingEvent,
-        }));
+      resolveImport(preview, timingEvent, correlationId) {
+        set((state) => {
+          if (shouldIgnoreCorrelation(state, correlationId)) {
+            return state;
+          }
+
+          return {
+            ...state,
+            status: 'ready',
+            activeCorrelationId: null,
+            activeSourceKind: null,
+            preview,
+            preservedPreview: null,
+            progress: null,
+            error: null,
+            budgetExceeded: preview.timing.exceededBudget || state.budgetExceeded,
+            lastTimingEvent: timingEvent,
+          };
+        });
       },
-      failImport(error) {
-        set((state) => ({
-          ...state,
-          status: 'error',
-          progress: null,
-          preview: null,
-          error,
-        }));
+      failImport(error, correlationId) {
+        set((state) => {
+          if (shouldIgnoreCorrelation(state, correlationId)) {
+            return state;
+          }
+
+          return {
+            ...state,
+            status: 'error',
+            activeCorrelationId: null,
+            activeSourceKind: null,
+            progress: null,
+            preview: null,
+            preservedPreview: null,
+            error,
+          };
+        });
       },
       reset() {
         set({
@@ -111,6 +165,7 @@ export function createImportPreviewStore() {
           activeCorrelationId: null,
           activeSourceKind: null,
           preview: null,
+          preservedPreview: null,
           progress: null,
           error: null,
           budgetExceeded: false,

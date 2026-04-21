@@ -1,0 +1,644 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { IMPORT_PREVIEW_BUDGET_MS } from './benchmark-timing';
+import {
+  failImportIfActive,
+  applyResolvedImportPreviewTiming,
+  awaitImportBudgetThreshold,
+  clearActiveImportPreview,
+  createImportActivityTracker,
+  detectOwnedImportBenchmarkScenario,
+  describePartialPreviewNotice,
+  postWorkerImportMessageWithBudget,
+  resolveDisplayedBenchmarkScenario,
+  runImportBudgetedRead,
+  toImportPreparationError,
+} from './workspace-import-route';
+
+const repoRoot = path.resolve(__dirname, '..', '..', '..');
+const cleanCsvFixtureText = fs.readFileSync(
+  path.join(repoRoot, '_bmad-output', 'benchmarks', 'benchmark_set_clean', 'csv', 'import.clean.csv-preview.csv'),
+  'utf8',
+);
+const cleanExcelFixtureBuffer = fs.readFileSync(
+  path.join(repoRoot, '_bmad-output', 'benchmarks', 'benchmark_set_clean', 'excel', 'import.clean.excel-preview.xlsx'),
+);
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe('describePartialPreviewNotice', () => {
+  it('uses workbook-specific copy for capped Excel previews', () => {
+    expect(
+      describePartialPreviewNotice({
+        rowCount: 200,
+        source: {
+          sourceKind: 'excel-file',
+          sourceLabel: 'Local Excel workbook',
+          fileName: 'sparse.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sheetName: 'Readings',
+          benchmarkScenario: 'import.clean.excel-preview',
+        },
+      }),
+    ).toContain('This workbook preview is showing the first 200 rows from the first sheet only.');
+  });
+
+  it('uses delimited-copy wording for CSV and pasted previews', () => {
+    expect(
+      describePartialPreviewNotice({
+        rowCount: 200,
+        source: {
+          sourceKind: 'csv-file',
+          sourceLabel: 'Local CSV file',
+          fileName: 'large.csv',
+          mimeType: 'text/csv',
+          sheetName: null,
+          benchmarkScenario: 'import.clean.csv-preview',
+        },
+      }),
+    ).toContain('This delimited import is showing the first 200 rows only.');
+  });
+
+  it('marks the AC3 budget as exceeded while a clean CSV fixture read is still pending', async () => {
+    vi.useFakeTimers();
+
+    const file = new File([cleanCsvFixtureText], 'import.clean.csv-preview.csv', {
+      type: 'text/csv',
+    });
+    let budgetExceeded = false;
+
+    const pendingRead = awaitImportBudgetThreshold({
+      budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+      operation: () =>
+        new Promise<string>((resolve) => {
+          globalThis.setTimeout(async () => {
+            resolve(await File.prototype.text.call(file));
+          }, IMPORT_PREVIEW_BUDGET_MS + 1_500);
+        }),
+      isActive: () => true,
+      onBudgetExceeded: () => {
+        budgetExceeded = true;
+      },
+      schedule: globalThis.setTimeout,
+      clearScheduled: globalThis.clearTimeout,
+    });
+
+    await vi.advanceTimersByTimeAsync(IMPORT_PREVIEW_BUDGET_MS);
+
+    expect(budgetExceeded).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    await expect(pendingRead).resolves.toContain('Sample,Reading,MeasuredAt');
+  });
+
+  it('marks the AC3 budget as exceeded while a clean Excel fixture read is still pending', async () => {
+    vi.useFakeTimers();
+
+    const file = new File([cleanExcelFixtureBuffer], 'import.clean.excel-preview.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    let budgetExceeded = false;
+
+    const pendingRead = awaitImportBudgetThreshold({
+      budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+      operation: () =>
+        new Promise<ArrayBuffer>((resolve) => {
+          globalThis.setTimeout(async () => {
+            resolve(await File.prototype.arrayBuffer.call(file));
+          }, IMPORT_PREVIEW_BUDGET_MS + 1_500);
+        }),
+      isActive: () => true,
+      onBudgetExceeded: () => {
+        budgetExceeded = true;
+      },
+      schedule: globalThis.setTimeout,
+      clearScheduled: globalThis.clearTimeout,
+    });
+
+    await vi.advanceTimersByTimeAsync(IMPORT_PREVIEW_BUDGET_MS);
+
+    expect(budgetExceeded).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    await expect(pendingRead).resolves.toMatchObject({
+      byteLength: cleanExcelFixtureBuffer.byteLength,
+    });
+  });
+
+  it('marks the AC3 budget as exceeded while owned benchmark verification is still pending', async () => {
+    vi.useFakeTimers();
+
+    let budgetExceeded = false;
+
+    const pendingVerification = awaitImportBudgetThreshold({
+      budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+      operation: () =>
+        new Promise<null>((resolve) => {
+          globalThis.setTimeout(() => {
+            resolve(null);
+          }, IMPORT_PREVIEW_BUDGET_MS + 1_500);
+        }),
+      isActive: () => true,
+      onBudgetExceeded: () => {
+        budgetExceeded = true;
+      },
+      schedule: globalThis.setTimeout,
+      clearScheduled: globalThis.clearTimeout,
+    });
+
+    await vi.advanceTimersByTimeAsync(IMPORT_PREVIEW_BUDGET_MS);
+
+    expect(budgetExceeded).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    await expect(pendingVerification).resolves.toBeNull();
+  });
+
+  it('marks the AC3 budget as exceeded when verification only finishes after synchronous over-budget work', async () => {
+    vi.useFakeTimers();
+
+    let budgetExceeded = false;
+    let nowValue = 0;
+
+    const pendingVerification = awaitImportBudgetThreshold({
+      budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+      operation: () => {
+        nowValue = IMPORT_PREVIEW_BUDGET_MS + 250;
+
+        return 'import.clean.csv-preview' as const;
+      },
+      isActive: () => true,
+      onBudgetExceeded: () => {
+        budgetExceeded = true;
+      },
+      schedule: globalThis.setTimeout,
+      clearScheduled: globalThis.clearTimeout,
+      now: () => nowValue,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(budgetExceeded).toBe(true);
+    await expect(pendingVerification).resolves.toBe('import.clean.csv-preview');
+  });
+
+  it('keeps the AC3 over-budget state visible when synchronous over-budget work rejects', async () => {
+    vi.useFakeTimers();
+
+    let budgetExceeded = false;
+    let nowValue = 0;
+
+    const pendingVerification = awaitImportBudgetThreshold({
+      budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+      operation: () => {
+        nowValue = IMPORT_PREVIEW_BUDGET_MS + 250;
+
+        throw new Error('benchmark verification failed');
+      },
+      isActive: () => true,
+      onBudgetExceeded: () => {
+        budgetExceeded = true;
+      },
+      schedule: globalThis.setTimeout,
+      clearScheduled: globalThis.clearTimeout,
+      now: () => nowValue,
+    });
+    const rejectedVerification = pendingVerification.catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(budgetExceeded).toBe(true);
+    await expect(rejectedVerification).resolves.toMatchObject({
+      message: 'benchmark verification failed',
+    });
+  });
+
+  it('starts the local-read budget before invoking synchronous file APIs', async () => {
+    vi.useFakeTimers();
+
+    let budgetExceeded = false;
+    let nowValue = 0;
+
+    const pendingRead = runImportBudgetedRead({
+      budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+      readOperation: () => {
+        nowValue = IMPORT_PREVIEW_BUDGET_MS + 250;
+
+        return Promise.resolve('Sample,Reading,MeasuredAt');
+      },
+      isActive: () => true,
+      onBudgetExceeded: () => {
+        budgetExceeded = true;
+      },
+      schedule: globalThis.setTimeout,
+      clearScheduled: globalThis.clearTimeout,
+      now: () => nowValue,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(budgetExceeded).toBe(true);
+    await expect(pendingRead).resolves.toBe('Sample,Reading,MeasuredAt');
+  });
+});
+
+describe('detectOwnedImportBenchmarkScenario', () => {
+  it('tags only the owned clean Excel fixture through standard import detection', async () => {
+    await expect(
+      detectOwnedImportBenchmarkScenario({
+        sourceKind: 'excel-file',
+        fileName: 'renamed-clean-fixture.xlsx',
+        binaryContent: cleanExcelFixtureBuffer.buffer.slice(
+          cleanExcelFixtureBuffer.byteOffset,
+          cleanExcelFixtureBuffer.byteOffset + cleanExcelFixtureBuffer.byteLength,
+        ),
+      }),
+    ).resolves.toBe('import.clean.excel-preview');
+  });
+
+  it('leaves CSV and pasted table imports untagged during standard detection even when they match BMAD fixture content', async () => {
+    await expect(
+      detectOwnedImportBenchmarkScenario({
+        sourceKind: 'csv-file',
+        fileName: 'import.clean.csv-preview.csv',
+        textContent: cleanCsvFixtureText,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      detectOwnedImportBenchmarkScenario({
+        sourceKind: 'pasted-table',
+        textContent: 'Sample\tReading\tMeasuredAt\nA-1\t42.5\t2026-04-18\nA-2\t44.1\t2026-04-19\nA-3\t43.8\t2026-04-20',
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it('leaves arbitrary imports untagged even when filenames mimic owned fixtures', async () => {
+    const mismatchedExcelFixtureBuffer = cleanExcelFixtureBuffer.subarray();
+    mismatchedExcelFixtureBuffer[0] = mismatchedExcelFixtureBuffer[0] === 0 ? 1 : 0;
+
+    await expect(
+      detectOwnedImportBenchmarkScenario({
+        sourceKind: 'csv-file',
+        fileName: 'import.clean.csv-preview.csv',
+        textContent: 'Sample,Reading,MeasuredAt\nA-1,99.0,2026-04-18',
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      detectOwnedImportBenchmarkScenario({
+        sourceKind: 'excel-file',
+        fileName: 'import.clean.excel-preview.xlsx',
+        binaryContent: mismatchedExcelFixtureBuffer.buffer.slice(
+          mismatchedExcelFixtureBuffer.byteOffset,
+          mismatchedExcelFixtureBuffer.byteOffset + mismatchedExcelFixtureBuffer.byteLength,
+        ),
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      detectOwnedImportBenchmarkScenario({
+        sourceKind: 'pasted-table',
+        textContent: 'Sample\tReading\nA-1\t42.5',
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it('falls back to a non-benchmark Excel classification when digest verification rejects', async () => {
+    vi.spyOn(globalThis.crypto.subtle, 'digest').mockRejectedValue(new Error('digest unavailable'));
+
+    await expect(
+      detectOwnedImportBenchmarkScenario({
+        sourceKind: 'excel-file',
+        binaryContent: cleanExcelFixtureBuffer.buffer.slice(
+          cleanExcelFixtureBuffer.byteOffset,
+          cleanExcelFixtureBuffer.byteOffset + cleanExcelFixtureBuffer.byteLength,
+        ),
+      }),
+    ).resolves.toBeNull();
+  });
+});
+
+describe('failImportIfActive', () => {
+  it('ignores stale route-side failures without tearing down the active import worker', () => {
+    const clearBenchmark = vi.fn();
+    const clearBudgetTimer = vi.fn();
+    const disposeWorker = vi.fn();
+    const failImport = vi.fn();
+
+    const handled = failImportIfActive({
+      correlationId: 'stale-import',
+      importError: {
+        code: 'import.preview.read-failed',
+        title: 'Selected file could not be read',
+        detail: 'stale failure',
+        retryable: true,
+      },
+      isActive: () => false,
+      clearBenchmark,
+      clearBudgetTimer,
+      disposeWorker,
+      failImport,
+    });
+
+    expect(handled).toBe(false);
+    expect(clearBenchmark).not.toHaveBeenCalled();
+    expect(clearBudgetTimer).not.toHaveBeenCalled();
+    expect(disposeWorker).not.toHaveBeenCalled();
+    expect(failImport).not.toHaveBeenCalled();
+  });
+
+  it('applies teardown for the active import failure only', () => {
+    const clearBenchmark = vi.fn();
+    const clearBudgetTimer = vi.fn();
+    const disposeWorker = vi.fn();
+    const failImport = vi.fn();
+    const importError = {
+      code: 'import.preview.read-failed',
+      title: 'Selected file could not be read',
+      detail: 'active failure',
+      retryable: true,
+    };
+
+    const handled = failImportIfActive({
+      correlationId: 'active-import',
+      importError,
+      isActive: (correlationId) => correlationId === 'active-import',
+      clearBenchmark,
+      clearBudgetTimer,
+      disposeWorker,
+      failImport,
+    });
+
+    expect(handled).toBe(true);
+    expect(clearBenchmark).toHaveBeenCalledWith('active-import');
+    expect(clearBudgetTimer).toHaveBeenCalledWith('active-import');
+    expect(disposeWorker).toHaveBeenCalledOnce();
+    expect(failImport).toHaveBeenCalledWith(importError, 'active-import');
+  });
+});
+
+describe('createImportActivityTracker', () => {
+  it('invalidates in-flight imports after the route is disposed', () => {
+    const tracker = createImportActivityTracker(() => 1_000);
+
+    expect(tracker.isActive('import_001', 'import_001')).toBe(true);
+
+    tracker.dispose();
+
+    expect(tracker.isActive('import_001', 'import_001')).toBe(false);
+    expect(tracker.resolveBenchmarkDuration('import_001', 700, 1_500)).toBe(700);
+  });
+
+  it('extends benchmark durations to include local file-read time', () => {
+    const tracker = createImportActivityTracker(() => 1_000);
+    tracker.markBenchmarkStart('import_001');
+
+    expect(tracker.resolveBenchmarkDuration('import_001', 900, 2_650)).toBe(1650);
+  });
+});
+
+describe('applyResolvedImportPreviewTiming', () => {
+  it('writes end-to-end readiness timing back into the resolved preview payload', () => {
+    const resolvedPreview = applyResolvedImportPreviewTiming(
+      {
+        previewId: 'preview_csv',
+        source: {
+          sourceKind: 'csv-file',
+          sourceLabel: 'Local CSV file',
+          fileName: 'import.clean.csv-preview.csv',
+          mimeType: 'text/csv',
+          sheetName: null,
+          benchmarkScenario: 'import.clean.csv-preview',
+        },
+        rowCount: 2,
+        isPartialPreview: false,
+        columnCount: 2,
+        columns: [],
+        sampleRows: [],
+        assumptions: [],
+        uncertainties: [],
+        timing: {
+          durationMs: 900,
+          budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+          exceededBudget: false,
+        },
+      },
+      6_250,
+    );
+
+    expect(resolvedPreview.timing.durationMs).toBe(6_250);
+    expect(resolvedPreview.timing.exceededBudget).toBe(true);
+  });
+});
+
+describe('resolveDisplayedBenchmarkScenario', () => {
+  it('uses the preview benchmark scenario when it was already verified upstream', () => {
+    expect(
+      resolveDisplayedBenchmarkScenario(
+        {
+          previewId: 'preview_csv',
+          source: {
+            sourceKind: 'csv-file',
+            sourceLabel: 'Local CSV file',
+            fileName: 'import.clean.csv-preview.csv',
+            mimeType: 'text/csv',
+            sheetName: null,
+            benchmarkScenario: 'import.clean.csv-preview',
+          },
+          rowCount: 3,
+          isPartialPreview: false,
+          columnCount: 3,
+          columns: [],
+          sampleRows: [],
+          assumptions: [],
+          uncertainties: [],
+          timing: {
+            durationMs: 420,
+            budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+            exceededBudget: false,
+          },
+        },
+        null,
+      ),
+    ).toBe('import.clean.csv-preview');
+  });
+
+  it('does not recover a clean benchmark label from matching preview rows alone', () => {
+    expect(
+      resolveDisplayedBenchmarkScenario(
+        {
+          previewId: 'preview_csv',
+          source: {
+            sourceKind: 'csv-file',
+            sourceLabel: 'Local CSV file',
+            fileName: 'customer-upload.csv',
+            mimeType: 'text/csv',
+            sheetName: null,
+            benchmarkScenario: null,
+          },
+          rowCount: 3,
+          isPartialPreview: false,
+          columnCount: 3,
+          columns: [
+            {
+              columnId: 'col_1',
+              sourceName: 'Sample',
+              sampleValues: ['A-1', 'A-2', 'A-3'],
+              inferredType: 'text',
+              confidence: 'high',
+              nonEmptyCount: 3,
+              nullCount: 0,
+            },
+            {
+              columnId: 'col_2',
+              sourceName: 'Reading',
+              sampleValues: ['42.5', '44.1', '43.8'],
+              inferredType: 'numeric',
+              confidence: 'high',
+              nonEmptyCount: 3,
+              nullCount: 0,
+            },
+            {
+              columnId: 'col_3',
+              sourceName: 'MeasuredAt',
+              sampleValues: ['2026-04-18', '2026-04-19', '2026-04-20'],
+              inferredType: 'date',
+              confidence: 'high',
+              nonEmptyCount: 3,
+              nullCount: 0,
+            },
+          ],
+          sampleRows: [
+            {
+              rowId: 'row_1',
+              cells: [
+                { columnId: 'col_1', value: 'A-1' },
+                { columnId: 'col_2', value: '42.5' },
+                { columnId: 'col_3', value: '2026-04-18' },
+              ],
+            },
+            {
+              rowId: 'row_2',
+              cells: [
+                { columnId: 'col_1', value: 'A-2' },
+                { columnId: 'col_2', value: '44.1' },
+                { columnId: 'col_3', value: '2026-04-19' },
+              ],
+            },
+            {
+              rowId: 'row_3',
+              cells: [
+                { columnId: 'col_1', value: 'A-3' },
+                { columnId: 'col_2', value: '43.8' },
+                { columnId: 'col_3', value: '2026-04-20' },
+              ],
+            },
+          ],
+          assumptions: [],
+          uncertainties: [],
+          timing: {
+            durationMs: 420,
+            budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+            exceededBudget: false,
+          },
+        },
+        null,
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('toImportPreparationError', () => {
+  it('separates picker startup failures from later file preparation failures', () => {
+    expect(toImportPreparationError('selection', new Error('picker blocked'))).toMatchObject({
+      code: 'import.preview.selection-failed',
+      title: 'File selection could not start',
+      detail: 'picker blocked',
+    });
+    expect(toImportPreparationError('read', new Error('filesystem read failed'))).toMatchObject({
+      code: 'import.preview.read-failed',
+      title: 'Selected file could not be read',
+      detail: 'filesystem read failed',
+    });
+    expect(toImportPreparationError('benchmark-detection', new Error('digest timeout'))).toMatchObject({
+      code: 'import.preview.benchmark-detection-failed',
+      title: 'Benchmark verification could not finish',
+      detail: 'digest timeout',
+    });
+  });
+});
+
+describe('clearActiveImportPreview', () => {
+  it('resets route state and terminates the active worker when the preview is cleared', () => {
+    const clearPasteValidationError = vi.fn();
+    const clearBenchmark = vi.fn();
+    const clearBudgetTimer = vi.fn();
+    const disposeWorker = vi.fn();
+    const resetPreview = vi.fn();
+
+    clearActiveImportPreview({
+      clearPasteValidationError,
+      clearBenchmark,
+      clearBudgetTimer,
+      disposeWorker,
+      resetPreview,
+    });
+
+    expect(clearPasteValidationError).toHaveBeenCalledOnce();
+    expect(clearBenchmark).toHaveBeenCalledOnce();
+    expect(clearBudgetTimer).toHaveBeenCalledOnce();
+    expect(disposeWorker).toHaveBeenCalledOnce();
+    expect(resetPreview).toHaveBeenCalledOnce();
+  });
+});
+
+describe('postWorkerImportMessageWithBudget', () => {
+  it('arms the budget before postMessage and marks over-budget synchronous clone time', () => {
+    let nowValue = 0;
+    const armBudgetTimer = vi.fn();
+    const clearBudgetTimer = vi.fn();
+    const markBudgetExceeded = vi.fn();
+    const postMessage = vi.fn(() => {
+      nowValue = IMPORT_PREVIEW_BUDGET_MS + 250;
+    });
+    const worker = {
+      postMessage,
+    } as Pick<Worker, 'postMessage'>;
+
+    postWorkerImportMessageWithBudget({
+      worker,
+      message: {
+        schemaVersion: '1.0.0',
+        messageId: 'import_preview_active-import',
+        correlationId: 'active-import',
+        workspaceVersion: 1,
+        type: 'import.preview.request',
+        payload: {
+          sourceKind: 'pasted-table',
+          sourceLabel: 'Pasted table',
+          textContent: 'Sample\tReading',
+        },
+      },
+      transferList: [],
+      budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+      armBudgetTimer,
+      clearBudgetTimer,
+      markBudgetExceeded,
+      now: () => nowValue,
+    });
+
+    expect(armBudgetTimer.mock.invocationCallOrder[0]).toBeDefined();
+    expect(postMessage.mock.invocationCallOrder[0]).toBeDefined();
+    expect(armBudgetTimer.mock.invocationCallOrder[0]!).toBeLessThan(postMessage.mock.invocationCallOrder[0]!);
+    expect(clearBudgetTimer).not.toHaveBeenCalled();
+    expect(markBudgetExceeded).toHaveBeenCalledOnce();
+  });
+});
