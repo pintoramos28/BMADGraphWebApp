@@ -16,6 +16,50 @@ export const DEPLOYED_BOOTSTRAP_ASSET_PATHS = {
   supportMatrix: path.join('api', 'support-matrix.json'),
 } as const;
 
+const absoluteRequestTargetPattern = /^https?:\/\//iu;
+
+function stripRequestTargetPathname(requestTarget: string) {
+  return requestTarget.split('#', 1)[0]?.split('?', 1)[0] ?? '/';
+}
+
+export function resolveRequestPathname(requestTarget: string) {
+  if (!absoluteRequestTargetPattern.test(requestTarget)) {
+    return {
+      rawPathname: stripRequestTargetPathname(requestTarget),
+      isAbsoluteForm: false,
+    };
+  }
+
+  try {
+    return {
+      rawPathname: new URL(requestTarget).pathname || '/',
+      isAbsoluteForm: true,
+    };
+  } catch {
+    throw new URIError('Malformed request path.');
+  }
+}
+
+function decodeRequestPathSegments(rawPathname: string) {
+  return rawPathname.split('/').map((segment) => decodeURIComponent(segment));
+}
+
+function expandDecodedRequestPathSegments(rawPathname: string) {
+  return decodeRequestPathSegments(rawPathname).flatMap((segment) => segment.split('/'));
+}
+
+function hasPathSeparatorAlias(rawPathname: string) {
+  return decodeRequestPathSegments(rawPathname).some((segment) => segment.includes('/'));
+}
+
+export function decodeRequestPathname(rawPathname: string) {
+  return expandDecodedRequestPathSegments(rawPathname).join('/');
+}
+
+export function hasDotSegmentPathAlias(rawPathname: string) {
+  return expandDecodedRequestPathSegments(rawPathname).some((segment) => segment === '.' || segment === '..');
+}
+
 function serializeJsonAsset(payload: unknown) {
   return `${JSON.stringify(payload, null, 2)}\n`;
 }
@@ -124,4 +168,12 @@ export function isShellRoutePathname(pathname: string) {
     hasSingleSegmentRoute(normalizedPathname, '/review/') ||
     normalizedPathname === '/unsupported'
   );
+}
+
+export function isCanonicalShellRouteRequestPath(rawPathname: string) {
+  if (hasPathSeparatorAlias(rawPathname)) {
+    return false;
+  }
+
+  return isShellRoutePathname(decodeRequestPathname(rawPathname));
 }

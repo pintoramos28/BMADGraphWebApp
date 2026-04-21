@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { z } from 'zod';
+import { releaseManifestSchema, supportMatrixSchema } from './shell-bootstrap-contracts.mjs';
 
 export const CANONICAL_BOOTSTRAP_PATHS = {
   releaseManifest: path.join('src', 'test', 'fixtures', 'api', 'release-manifest.fixture.json'),
@@ -14,75 +14,73 @@ export const DEPLOYED_BOOTSTRAP_ASSET_PATHS = {
   supportMatrix: path.join('api', 'support-matrix.json'),
 };
 
-const semverPattern = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
-const dateVersionPattern = /^\d{4}-\d{2}-\d{2}$/;
-const versionRangePattern = /^\d+(?:\.\d+)?\.x$/;
-const sha256Pattern = /^sha256:[A-Fa-f0-9]{64}$/;
+const absoluteRequestTargetPattern = /^https?:\/\//iu;
 
-const nonEmptyStringSchema = z.string().trim().min(1);
-const isoDateTimeSchema = nonEmptyStringSchema.refine(
-  (value) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value) && !Number.isNaN(Date.parse(value)),
-  'Expected an ISO-8601 UTC timestamp.',
-);
-const semverSchema = nonEmptyStringSchema.regex(semverPattern, 'Expected a semantic version like 1.0.0.');
-const versionRangeSchema = nonEmptyStringSchema.regex(versionRangePattern, 'Expected a version range like 1.x.');
-const dateVersionSchema = nonEmptyStringSchema.regex(dateVersionPattern, 'Expected a YYYY-MM-DD contract version.');
-const sha256TokenSchema = nonEmptyStringSchema.regex(sha256Pattern, 'Expected a sha256 token.');
-const positiveIntegerSchema = z.number().int().positive();
-
-function strictObject(shape) {
-  return z.object(shape).strict();
+function stripRequestTargetPathname(requestTarget) {
+  return requestTarget.split('#', 1)[0]?.split('?', 1)[0] ?? '/';
 }
 
-const releaseManifestSchema = strictObject({
-  schemaVersion: semverSchema,
-  appBuildVersion: semverSchema,
-  releaseDate: isoDateTimeSchema,
-  channel: nonEmptyStringSchema,
-  supportMatrixVersion: dateVersionSchema,
-  supportMatrixUrl: nonEmptyStringSchema,
-  workspaceCompatibility: strictObject({
-    minReadableFormat: semverSchema,
-    maxReadableFormat: versionRangeSchema,
-    migrationPolicy: z.enum(['migrate-on-open']),
-  }),
-  serviceWorker: strictObject({
-    version: nonEmptyStringSchema,
-    scope: nonEmptyStringSchema,
-    offlineReadyTimeoutMs: positiveIntegerSchema,
-    updatePromptMode: z.enum(['soft-refresh', 'hard-refresh']),
-  }),
-  telemetry: strictObject({
-    endpoint: nonEmptyStringSchema,
-    schemaVersion: semverSchema,
-  }),
-  releaseNotes: strictObject({
-    title: nonEmptyStringSchema,
-    url: nonEmptyStringSchema,
-  }),
-  integrity: strictObject({
-    manifestSha256: sha256TokenSchema,
-  }),
-});
+export function resolveRequestPathname(requestTarget) {
+  if (!absoluteRequestTargetPattern.test(requestTarget)) {
+    return {
+      rawPathname: stripRequestTargetPathname(requestTarget),
+      isAbsoluteForm: false,
+    };
+  }
 
-const browserSupportSchema = strictObject({
-  family: z.enum(['chrome', 'edge', 'firefox', 'safari']),
-  supportLevel: z.enum(['supported', 'secondary', 'unsupported']),
-  minimumMajorVersion: positiveIntegerSchema.optional(),
-  desktopOnly: z.literal(true),
-  notes: nonEmptyStringSchema.optional(),
-});
+  try {
+    return {
+      rawPathname: new URL(requestTarget).pathname || '/',
+      isAbsoluteForm: true,
+    };
+  } catch {
+    throw new URIError('Malformed request path.');
+  }
+}
 
-const supportMatrixSchema = strictObject({
-  version: dateVersionSchema,
-  publishedAt: isoDateTimeSchema,
-  standardZoom: nonEmptyStringSchema,
-  supportedBrowsers: z.array(browserSupportSchema).min(1),
-  workspaceCompatibility: strictObject({
-    minimumReadableFormat: semverSchema,
-    maximumReadableFormat: versionRangeSchema,
-  }),
-});
+function decodeRequestPathSegments(rawPathname) {
+  return rawPathname.split('/').map((segment) => decodeURIComponent(segment));
+}
+
+function expandDecodedRequestPathSegments(rawPathname) {
+  return decodeRequestPathSegments(rawPathname).flatMap((segment) => segment.split('/'));
+}
+
+function hasPathSeparatorAlias(rawPathname) {
+  return decodeRequestPathSegments(rawPathname).some((segment) => segment.includes('/'));
+}
+
+export function decodeRequestPathname(rawPathname) {
+  return expandDecodedRequestPathSegments(rawPathname).join('/');
+}
+
+export function hasDotSegmentPathAlias(rawPathname) {
+  return expandDecodedRequestPathSegments(rawPathname).some((segment) => segment === '.' || segment === '..');
+}
+
+export function createShellDeliveryFailureResponse(pathname, failureMode) {
+  if (failureMode === 'release-manifest-unavailable') {
+    if (pathname === '/api/release-manifest' || pathname === '/api/health') {
+      return {
+        statusCode: 503,
+        payload: { status: 'error', message: 'release manifest unavailable' },
+      };
+    }
+
+    return null;
+  }
+
+  if (failureMode === 'support-matrix-unavailable') {
+    if (pathname === '/api/support-matrix' || pathname === '/api/health') {
+      return {
+        statusCode: 503,
+        payload: { status: 'error', message: 'support matrix unavailable' },
+      };
+    }
+  }
+
+  return null;
+}
 
 async function readJsonFile(filePath) {
   return JSON.parse(await readFile(filePath, 'utf8'));
@@ -259,4 +257,12 @@ export function isShellRoutePathname(pathname) {
     hasSingleSegmentRoute(normalizedPathname, '/review/') ||
     normalizedPathname === '/unsupported'
   );
+}
+
+export function isCanonicalShellRouteRequestPath(rawPathname) {
+  if (hasPathSeparatorAlias(rawPathname)) {
+    return false;
+  }
+
+  return isShellRoutePathname(decodeRequestPathname(rawPathname));
 }

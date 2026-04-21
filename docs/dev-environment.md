@@ -18,10 +18,10 @@ The environment should support:
 
 - Linux or WSL2 Linux userland as the primary execution environment
 - `nvm` or `fnm` installed and shell-initialized
-- Node `24.11.0` active by default for this repo, matching [.nvmrc](/home/pinto/repo/BMADGraphWebApp/.nvmrc)
+- Node `24.11.0` active by default for this repo, matching [.nvmrc](../.nvmrc)
 - `npm` as the default package manager for this repo
-- repo wrapper available for guarded execution: [`scripts/with-node.sh`](/home/pinto/repo/BMADGraphWebApp/scripts/with-node.sh)
-- repo-local direnv activation available through [.envrc](/home/pinto/repo/BMADGraphWebApp/.envrc)
+- repo wrapper available for guarded execution: [`scripts/with-node.sh`](../scripts/with-node.sh)
+- repo-local direnv activation available through [.envrc](../.envrc)
 
 ### Web development and testing
 
@@ -60,16 +60,16 @@ The environment should support:
 
 The repo is currently built around:
 
-- Vite dev/build via [`package.json`](/home/pinto/repo/BMADGraphWebApp/package.json)
-- Vitest for unit and integration tests via [`vitest.config.ts`](/home/pinto/repo/BMADGraphWebApp/vitest.config.ts)
-- Playwright for browser E2E via [`playwright.config.ts`](/home/pinto/repo/BMADGraphWebApp/playwright.config.ts)
-- Linux Node from `nvm`, enforced by [`project-context.md`](/home/pinto/repo/BMADGraphWebApp/project-context.md)
+- Vite dev/build via [`package.json`](../package.json)
+- Vitest for unit and integration tests via [`vitest.config.ts`](../vitest.config.ts)
+- Playwright for browser E2E via [`playwright.config.ts`](../playwright.config.ts)
+- Linux Node from `nvm`, enforced by [`project-context.md`](../project-context.md)
 
 The repo explicitly does not want Windows-backed Node/npm shims against the WSL checkout.
 
 ## Current Workstation Snapshot
 
-Observed on April 20, 2026 from `/home/pinto/repo/BMADGraphWebApp`.
+Observed on April 20, 2026 from the BMADGraphWebApp repo root.
 
 ### Present and usable
 
@@ -150,8 +150,8 @@ Applied on April 20, 2026 without Docker changes.
 
 - updated `~/.profile` so login shells load `nvm` and activate the default Linux Node alias
 - updated `~/.bashrc` to load the `direnv` hook when available
-- added [.envrc](/home/pinto/repo/BMADGraphWebApp/.envrc) so the repo auto-selects the pinned Node runtime through `direnv`
-- made [`scripts/with-node.sh`](/home/pinto/repo/BMADGraphWebApp/scripts/with-node.sh) executable
+- added [.envrc](../.envrc) so the repo auto-selects the pinned Node runtime through `direnv`
+- made [`scripts/with-node.sh`](../scripts/with-node.sh) executable
 - installed user-space CLI tools in `~/.local/bin`:
   - `pip`
   - `pytest`
@@ -176,7 +176,7 @@ Verified after the fixes:
 - `sqlite3 --version` -> `3.53.0`
 - `direnv --version` -> `2.37.1`
 - `just --version` -> `1.50.0`
-- `direnv exec . ...` loads [.envrc](/home/pinto/repo/BMADGraphWebApp/.envrc) and resolves the pinned Linux Node runtime
+- `direnv exec . ...` loads [.envrc](../.envrc) and resolves the pinned Linux Node runtime
 - `./scripts/with-node.sh npm run test` passes
 
 ## Priority Remediation Checklist
@@ -185,7 +185,7 @@ Verified after the fixes:
 
 1. Initialize `nvm` in shell startup so Linux Node is on PATH by default.
 2. Ensure `node`, `npm`, and `npx` resolve to Linux paths, not `/mnt/c/...`.
-3. Make [`scripts/with-node.sh`](/home/pinto/repo/BMADGraphWebApp/scripts/with-node.sh) executable.
+3. Make [`scripts/with-node.sh`](../scripts/with-node.sh) executable.
 4. Keep using the wrapper for automation and agent runs even after shell init, because it enforces the pinned repo runtime.
 
 ### Priority 2: Complete the Python utility layer
@@ -258,8 +258,8 @@ That delivery server serves only the narrow operational shell endpoints plus the
 
 The canonical bootstrap payloads live in:
 
-- [release-manifest.fixture.json](/home/pinto/repo/BMADGraphWebApp/src/test/fixtures/api/release-manifest.fixture.json)
-- [support-matrix.fixture.json](/home/pinto/repo/BMADGraphWebApp/src/test/fixtures/api/support-matrix.fixture.json)
+- [release-manifest.fixture.json](../src/test/fixtures/api/release-manifest.fixture.json)
+- [support-matrix.fixture.json](../src/test/fixtures/api/support-matrix.fixture.json)
 
 The schema and version-alignment checks for those payloads run in the normal test suite before release.
 

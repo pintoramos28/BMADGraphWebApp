@@ -6,7 +6,10 @@ import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import {
   createShellHealthPayload,
+  decodeRequestPathname,
   emitShellBootstrapMetadataAssets,
+  hasDotSegmentPathAlias,
+  resolveRequestPathname,
   validateShellBootstrapMetadata,
 } from './src/services/release/shell-bootstrap-metadata';
 
@@ -67,41 +70,62 @@ function shellBootstrapMetadataPlugin(): Plugin {
           return;
         }
 
-        const pathname = new URL(req.url, 'http://127.0.0.1').pathname;
-        const isShellApiRequest = pathname === '/api' || pathname.startsWith('/api/');
-
-        if (!isShellApiRequest) {
-          next();
-          return;
-        }
-
-        if ((req.method ?? 'GET') !== 'GET') {
-          createTextResponse(res, 405, 'Method not allowed.');
-          return;
-        }
-
-        if (!shellApiRoutes.has(pathname)) {
-          createJsonResponse(res, { status: 'not-found' }, 404);
-          return;
-        }
-
         try {
-          const { releaseManifest, supportMatrix } = await loadCanonicalShellBootstrapMetadata();
-
-          if (pathname === '/api/release-manifest') {
-            createJsonResponse(res, releaseManifest);
+          const { rawPathname, isAbsoluteForm } = resolveRequestPathname(req.url);
+          const pathname = decodeRequestPathname(rawPathname);
+          if (hasDotSegmentPathAlias(rawPathname)) {
+            createJsonResponse(res, { status: 'not-found' }, 404);
             return;
           }
 
-          if (pathname === '/api/support-matrix') {
-            createJsonResponse(res, supportMatrix);
+          const isCanonicalShellApiRequest = !isAbsoluteForm && (rawPathname === '/api' || rawPathname.startsWith('/api/'));
+          const isEncodedShellApiRequest = pathname === '/api' || pathname.startsWith('/api/');
+
+          if (!isCanonicalShellApiRequest && !isEncodedShellApiRequest) {
+            next();
             return;
           }
 
-          createJsonResponse(res, createShellHealthPayload({ releaseManifest, supportMatrix }));
+          if ((req.method ?? 'GET') !== 'GET') {
+            createTextResponse(res, 405, 'Method not allowed.');
+            return;
+          }
+
+          if (!isCanonicalShellApiRequest && isEncodedShellApiRequest) {
+            createJsonResponse(res, { status: 'not-found' }, 404);
+            return;
+          }
+
+          if (!shellApiRoutes.has(rawPathname)) {
+            createJsonResponse(res, { status: 'not-found' }, 404);
+            return;
+          }
+
+          try {
+            const { releaseManifest, supportMatrix } = await loadCanonicalShellBootstrapMetadata();
+
+            if (rawPathname === '/api/release-manifest') {
+              createJsonResponse(res, releaseManifest);
+              return;
+            }
+
+            if (rawPathname === '/api/support-matrix') {
+              createJsonResponse(res, supportMatrix);
+              return;
+            }
+
+            createJsonResponse(res, createShellHealthPayload({ releaseManifest, supportMatrix }));
+          } catch (error) {
+            console.error(error);
+            createTextResponse(res, 500, 'Failed to load shell bootstrap metadata.');
+          }
         } catch (error) {
-          console.error(error);
-          createTextResponse(res, 500, 'Failed to load shell bootstrap metadata.');
+          if (error instanceof URIError) {
+            createTextResponse(res, 400, 'Malformed request path.');
+            return;
+          }
+
+          throw error;
         }
       });
     },

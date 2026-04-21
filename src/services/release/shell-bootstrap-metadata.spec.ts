@@ -10,9 +10,13 @@ import supportMatrixFixture from '../../test/fixtures/api/support-matrix.fixture
 import {
   DEPLOYED_BOOTSTRAP_ASSET_PATHS,
   createShellHealthPayload,
+  decodeRequestPathname,
   emitShellBootstrapMetadataAssets,
+  hasDotSegmentPathAlias,
+  isCanonicalShellRouteRequestPath,
   isShellRoutePathname,
   loadShellBootstrapMetadataFromFiles,
+  resolveRequestPathname,
   validateShellBootstrapMetadata,
 } from './shell-bootstrap-metadata';
 // @ts-expect-error Vitest imports the preview helper directly from the Node ESM script for parity coverage.
@@ -197,6 +201,71 @@ describe('shell bootstrap metadata helpers', () => {
     await expect(loadDeployedShellBootstrapMetadata({ distRoot })).rejects.toThrow(/semantic version/i);
   });
 
+  it('decodes request paths without normalizing dot-segment aliases away', () => {
+    expect(decodeRequestPathname('/foo/%2e%2e/api/health')).toBe('/foo/../api/health');
+    expect(decodeRequestPathname('/foo%2F..%2Fapi%2Fhealth')).toBe('/foo/../api/health');
+    expect(hasDotSegmentPathAlias('/foo/%2e%2e/api/health')).toBe(true);
+    expect(hasDotSegmentPathAlias('/foo%2F..%2Fapi%2Fhealth')).toBe(true);
+    expect(hasDotSegmentPathAlias('/assets%2F..%2Findex.html')).toBe(true);
+    expect(previewShellBootstrapMetadata.decodeRequestPathname('/foo/%2e%2e/api/health')).toBe('/foo/../api/health');
+    expect(previewShellBootstrapMetadata.decodeRequestPathname('/foo%2F..%2Fapi%2Fhealth')).toBe('/foo/../api/health');
+    expect(previewShellBootstrapMetadata.hasDotSegmentPathAlias('/foo/%2e%2e/api/health')).toBe(true);
+    expect(previewShellBootstrapMetadata.hasDotSegmentPathAlias('/foo%2F..%2Fapi%2Fhealth')).toBe(true);
+    expect(previewShellBootstrapMetadata.hasDotSegmentPathAlias('/assets%2F..%2Findex.html')).toBe(true);
+    expect(hasDotSegmentPathAlias('/api%2Fhealth')).toBe(false);
+  });
+
+  it('extracts raw pathnames from origin-form and absolute-form request targets', () => {
+    expect(resolveRequestPathname('/api%2Fhealth?probe=1')).toEqual({
+      rawPathname: '/api%2Fhealth',
+      isAbsoluteForm: false,
+    });
+    expect(resolveRequestPathname('http://127.0.0.1:43174/api%2Fhealth?probe=1')).toEqual({
+      rawPathname: '/api%2Fhealth',
+      isAbsoluteForm: true,
+    });
+    expect(previewShellBootstrapMetadata.resolveRequestPathname('/api%2Fhealth?probe=1')).toEqual({
+      rawPathname: '/api%2Fhealth',
+      isAbsoluteForm: false,
+    });
+    expect(previewShellBootstrapMetadata.resolveRequestPathname('http://127.0.0.1:43174/api%2Fhealth?probe=1')).toEqual({
+      rawPathname: '/api%2Fhealth',
+      isAbsoluteForm: true,
+    });
+  });
+
+  it('maps preview outage modes to branch-specific bootstrap API failures', () => {
+    expect(
+      previewShellBootstrapMetadata.createShellDeliveryFailureResponse(
+        '/api/release-manifest',
+        'release-manifest-unavailable',
+      ),
+    ).toEqual({
+      statusCode: 503,
+      payload: {
+        status: 'error',
+        message: 'release manifest unavailable',
+      },
+    });
+    expect(
+      previewShellBootstrapMetadata.createShellDeliveryFailureResponse('/api/support-matrix', 'support-matrix-unavailable'),
+    ).toEqual({
+      statusCode: 503,
+      payload: {
+        status: 'error',
+        message: 'support matrix unavailable',
+      },
+    });
+    expect(previewShellBootstrapMetadata.createShellDeliveryFailureResponse('/api/support-matrix', 'release-manifest-unavailable')).toBeNull();
+    expect(previewShellBootstrapMetadata.createShellDeliveryFailureResponse('/api/health', 'release-manifest-unavailable')).toEqual({
+      statusCode: 503,
+      payload: {
+        status: 'error',
+        message: 'release manifest unavailable',
+      },
+    });
+  });
+
   it('limits SPA fallback decisions to the shell-owned route inventory', () => {
     expect(isShellRoutePathname('/')).toBe(true);
     expect(isShellRoutePathname('/workspace')).toBe(true);
@@ -210,5 +279,16 @@ describe('shell bootstrap metadata helpers', () => {
     expect(isShellRoutePathname('/assets/index-missing.js')).toBe(false);
     expect(isShellRoutePathname('/workspace/demo-workspace/extra')).toBe(false);
     expect(isShellRoutePathname('/missing')).toBe(false);
+  });
+
+  it('rejects encoded separator aliases for protected shell routes', () => {
+    expect(isCanonicalShellRouteRequestPath('/workspace/demo-workspace')).toBe(true);
+    expect(isCanonicalShellRouteRequestPath('/workspace/%64emo-workspace')).toBe(true);
+    expect(isCanonicalShellRouteRequestPath('/workspace%2Fdemo-workspace')).toBe(false);
+    expect(isCanonicalShellRouteRequestPath('/review%2Fdemo-workspace')).toBe(false);
+    expect(previewShellBootstrapMetadata.isCanonicalShellRouteRequestPath('/workspace/demo-workspace')).toBe(true);
+    expect(previewShellBootstrapMetadata.isCanonicalShellRouteRequestPath('/workspace/%64emo-workspace')).toBe(true);
+    expect(previewShellBootstrapMetadata.isCanonicalShellRouteRequestPath('/workspace%2Fdemo-workspace')).toBe(false);
+    expect(previewShellBootstrapMetadata.isCanonicalShellRouteRequestPath('/review%2Fdemo-workspace')).toBe(false);
   });
 });

@@ -7,9 +7,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  createShellDeliveryFailureResponse,
+  decodeRequestPathname,
+  hasDotSegmentPathAlias,
+  isCanonicalShellRouteRequestPath,
   isShellRoutePathname,
   loadDeployedShellBootstrapMetadata,
   loadDeployedShellHealthPayload,
+  resolveRequestPathname,
 } from './shell-bootstrap-metadata.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -84,8 +89,7 @@ function sendText(response, text, statusCode = 200) {
 }
 
 async function resolveStaticFile(urlPathname) {
-  const normalizedPathname = decodeURIComponent(urlPathname);
-  const requestedPath = normalizedPathname === '/' ? '/index.html' : normalizedPathname;
+  const requestedPath = urlPathname === '/' ? '/index.html' : urlPathname;
   const filePath = path.normalize(path.join(distRoot, requestedPath));
   const relativePath = path.relative(distRoot, filePath);
 
@@ -153,41 +157,60 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
-  const requestUrl = new URL(request.url, `http://${host}:${port}`);
-  const { pathname } = requestUrl;
-
   try {
-    if (pathname === '/api/release-manifest') {
-      const metadata = await loadDeployedShellBootstrapMetadata({ distRoot });
+    const { rawPathname, isAbsoluteForm } = resolveRequestPathname(request.url);
+    const pathname = decodeRequestPathname(rawPathname);
+    const isCanonicalShellApiRequest = !isAbsoluteForm && (rawPathname === '/api' || rawPathname.startsWith('/api/'));
+    const isEncodedShellApiRequest = pathname === '/api' || pathname.startsWith('/api/');
+    const failureResponse = createShellDeliveryFailureResponse(pathname, failureMode);
 
-      if (failureMode === 'release-manifest-unavailable') {
-        sendJson(response, { status: 'error', message: 'release manifest unavailable' }, 503);
+    if (hasDotSegmentPathAlias(rawPathname)) {
+      sendText(response, 'Not found.', 404);
+      return;
+    }
+
+    if (!isCanonicalShellApiRequest && isEncodedShellApiRequest) {
+      sendJson(response, { status: 'not-found' }, 404);
+      return;
+    }
+
+    if (pathname === '/api/release-manifest') {
+      if (failureResponse) {
+        sendJson(response, failureResponse.payload, failureResponse.statusCode);
         return;
       }
+
+      const metadata = await loadDeployedShellBootstrapMetadata({ distRoot });
 
       sendJson(response, metadata.releaseManifest);
       return;
     }
 
     if (pathname === '/api/support-matrix') {
-      const metadata = await loadDeployedShellBootstrapMetadata({ distRoot });
-
-      if (failureMode === 'support-matrix-unavailable') {
-        sendJson(response, { status: 'error', message: 'support matrix unavailable' }, 503);
+      if (failureResponse) {
+        sendJson(response, failureResponse.payload, failureResponse.statusCode);
         return;
       }
+
+      const metadata = await loadDeployedShellBootstrapMetadata({ distRoot });
 
       sendJson(response, metadata.supportMatrix);
       return;
     }
 
     if (pathname === '/api/health') {
+      if (failureResponse) {
+        sendJson(response, failureResponse.payload, failureResponse.statusCode);
+        return;
+      }
+
+      await loadDeployedShellBootstrapMetadata({ distRoot });
       const healthPayload = await loadDeployedShellHealthPayload({ distRoot });
       sendJson(response, healthPayload);
       return;
     }
 
-    if (pathname.startsWith('/api/')) {
+    if (isCanonicalShellApiRequest) {
       sendJson(response, { status: 'not-found' }, 404);
       return;
     }
@@ -199,7 +222,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (isShellRoutePathname(pathname)) {
+    if (isCanonicalShellRouteRequestPath(rawPathname) && isShellRoutePathname(pathname)) {
       await streamIndexHtml(response);
       return;
     }
