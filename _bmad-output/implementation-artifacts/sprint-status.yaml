@@ -1,5 +1,5 @@
 # generated: 2026-04-16T13:50:36-04:00
-# last_updated: 2026-04-21T17:16:00-04:00
+# last_updated: 2026-04-21T23:36:15-04:00
 # project: BMADGraphWebApp
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,22 +35,22 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-16T13:50:36-04:00
-last_updated: 2026-04-21T17:16:00-04:00
+last_updated: 2026-04-21T23:59:00-04:00
 project: BMADGraphWebApp
 project_key: NOKEY
 tracking_system: file-system
 story_location: _bmad-output/implementation-artifacts
 
 development_status:
-  epic-1: in-progress
+  epic-1: done
   1-1-bootstrap-hosted-shell-baseline: done
   1-2-author-canonical-workspace-and-trust-contracts: done
   1-3-create-open-and-reopen-local-workspaces: done
   1-4-surface-shell-readiness-support-and-update-status: done
   1-5-localize-reopen-errors-and-provide-repair-entry-points: done
   1-6-complete-reopen-validation-for-transforms-and-graph-compositions: done
-  1-7-provide-hosted-shell-bootstrap-metadata-for-local-and-static-delivery: review
-  epic-1-retrospective: optional
+  1-7-provide-hosted-shell-bootstrap-metadata-for-local-and-static-delivery: done
+  epic-1-retrospective: done
 
   epic-2: in-progress
   2-1-import-csv-excel-and-pasted-data-into-a-preview-workspace: review

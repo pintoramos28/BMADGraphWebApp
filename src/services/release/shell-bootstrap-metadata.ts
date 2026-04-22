@@ -17,6 +17,7 @@ export const DEPLOYED_BOOTSTRAP_ASSET_PATHS = {
 } as const;
 
 const absoluteRequestTargetPattern = /^https?:\/\//iu;
+const decodedPathSeparatorPattern = /[\\/]/u;
 
 function stripRequestTargetPathname(requestTarget: string) {
   return requestTarget.split('#', 1)[0]?.split('?', 1)[0] ?? '/';
@@ -45,11 +46,11 @@ function decodeRequestPathSegments(rawPathname: string) {
 }
 
 function expandDecodedRequestPathSegments(rawPathname: string) {
-  return decodeRequestPathSegments(rawPathname).flatMap((segment) => segment.split('/'));
+  return decodeRequestPathSegments(rawPathname).flatMap((segment) => segment.split(decodedPathSeparatorPattern));
 }
 
-function hasPathSeparatorAlias(rawPathname: string) {
-  return decodeRequestPathSegments(rawPathname).some((segment) => segment.includes('/'));
+export function hasPathSeparatorAlias(rawPathname: string) {
+  return decodeRequestPathSegments(rawPathname).some((segment) => decodedPathSeparatorPattern.test(segment));
 }
 
 export function decodeRequestPathname(rawPathname: string) {

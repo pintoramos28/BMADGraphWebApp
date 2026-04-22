@@ -25,14 +25,14 @@ const supportMatrixFixture = JSON.parse(
   };
 };
 
-async function requestRawPath(baseUrl: string, rawPath: string) {
+async function requestRawPath(baseUrl: string, rawPath: string, method = 'GET') {
   const url = new URL(baseUrl);
 
   return new Promise<{ body: string; headers: http.IncomingHttpHeaders; statusCode: number }>((resolve, reject) => {
     const request = http.request(
       {
         host: url.hostname,
-        method: 'GET',
+        method,
         path: rawPath,
         port: url.port ? Number.parseInt(url.port, 10) : undefined,
       },
@@ -56,6 +56,16 @@ async function requestRawPath(baseUrl: string, rawPath: string) {
     request.on('error', reject);
     request.end();
   });
+}
+
+function extractFirstBuiltAssetPath(html: string) {
+  const match = html.match(/(?:src|href)="(\/assets\/[^"]+)"/u);
+
+  if (!match?.[1]) {
+    throw new Error('Expected preview HTML to reference at least one built /assets/ path.');
+  }
+
+  return match[1];
 }
 
 async function waitForServer(url: string, attempts = 40) {
@@ -224,6 +234,8 @@ test.describe('hosted shell delivery', () => {
     const aliasedShellPathResponse = await requestRawPath(previewBaseUrl, '/assets/%2e%2e/index.html');
     const encodedSeparatorApiResponse = await requestRawPath(previewBaseUrl, '/foo%2F..%2Fapi%2Fhealth');
     const encodedSeparatorShellPathResponse = await requestRawPath(previewBaseUrl, '/assets%2F..%2Findex.html');
+    const encodedBackslashApiResponse = await requestRawPath(previewBaseUrl, '/foo%5C..%5Capi%5Chealth');
+    const encodedBackslashShellPathResponse = await requestRawPath(previewBaseUrl, '/assets%5C..%5Cindex.html');
 
     expect(notFoundResponse.status()).toBe(404);
     expect(await notFoundResponse.json()).toEqual({ status: 'not-found' });
@@ -235,6 +247,10 @@ test.describe('hosted shell delivery', () => {
     expect(encodedSeparatorApiResponse.headers['content-type']).toContain('text/plain');
     expect(encodedSeparatorShellPathResponse.statusCode).toBe(404);
     expect(encodedSeparatorShellPathResponse.headers['content-type']).toContain('text/plain');
+    expect(encodedBackslashApiResponse.statusCode).toBe(404);
+    expect(encodedBackslashApiResponse.headers['content-type']).toContain('text/plain');
+    expect(encodedBackslashShellPathResponse.statusCode).toBe(404);
+    expect(encodedBackslashShellPathResponse.headers['content-type']).toContain('text/plain');
 
     const malformedApiResponse = await request.get('/api/%E0%A4%A');
 
@@ -245,6 +261,18 @@ test.describe('hosted shell delivery', () => {
 
     expect(headHealthResponse.status()).toBe(405);
     expect(headHealthResponse.headers()['content-type']).toContain('text/plain');
+  });
+
+  test('rejects encoded backslash asset aliases in preview delivery before resolving dist assets', async ({ request }) => {
+    const indexHtmlResponse = await request.get('/');
+    const builtAssetPath = extractFirstBuiltAssetPath(await indexHtmlResponse.text());
+    const encodedBackslashAssetResponse = await requestRawPath(
+      previewBaseUrl,
+      builtAssetPath.replace('/assets/', '/assets%5C'),
+    );
+
+    expect(encodedBackslashAssetResponse.statusCode).toBe(404);
+    expect(encodedBackslashAssetResponse.headers['content-type']).toContain('text/plain');
   });
 
   test('loads the hosted shell home route with real bootstrap metadata delivery', async ({ page }) => {
@@ -311,13 +339,37 @@ test.describe('hosted shell delivery', () => {
   });
 
   test('does not rewrite encoded protected-route separator aliases to the hosted shell', async () => {
+    const absoluteFormWorkspaceResponse = await requestRawPath(
+      previewBaseUrl,
+      new URL('/workspace/workspace_demo', previewBaseUrl).toString(),
+    );
+    const absoluteFormReviewResponse = await requestRawPath(
+      previewBaseUrl,
+      new URL('/review/workspace_demo', previewBaseUrl).toString(),
+    );
     const workspaceAliasResponse = await requestRawPath(previewBaseUrl, '/workspace%2Fworkspace_demo');
     const reviewAliasResponse = await requestRawPath(previewBaseUrl, '/review%2Fworkspace_demo');
+    const workspaceBackslashAliasResponse = await requestRawPath(previewBaseUrl, '/workspace%5Cworkspace_demo');
+    const reviewBackslashAliasResponse = await requestRawPath(previewBaseUrl, '/review%5Cworkspace_demo');
+    const headWorkspaceAliasResponse = await requestRawPath(previewBaseUrl, '/workspace%2Fworkspace_demo', 'HEAD');
+    const optionsReviewAliasResponse = await requestRawPath(previewBaseUrl, '/review%5Cworkspace_demo', 'OPTIONS');
 
+    expect(absoluteFormWorkspaceResponse.statusCode).toBe(404);
+    expect(absoluteFormWorkspaceResponse.headers['content-type']).toContain('text/plain');
+    expect(absoluteFormReviewResponse.statusCode).toBe(404);
+    expect(absoluteFormReviewResponse.headers['content-type']).toContain('text/plain');
     expect(workspaceAliasResponse.statusCode).toBe(404);
     expect(workspaceAliasResponse.headers['content-type']).toContain('text/plain');
     expect(reviewAliasResponse.statusCode).toBe(404);
     expect(reviewAliasResponse.headers['content-type']).toContain('text/plain');
+    expect(workspaceBackslashAliasResponse.statusCode).toBe(404);
+    expect(workspaceBackslashAliasResponse.headers['content-type']).toContain('text/plain');
+    expect(reviewBackslashAliasResponse.statusCode).toBe(404);
+    expect(reviewBackslashAliasResponse.headers['content-type']).toContain('text/plain');
+    expect(headWorkspaceAliasResponse.statusCode).toBe(404);
+    expect(headWorkspaceAliasResponse.headers['content-type']).toContain('text/plain');
+    expect(optionsReviewAliasResponse.statusCode).toBe(404);
+    expect(optionsReviewAliasResponse.headers['content-type']).toContain('text/plain');
   });
 
   test('returns 404 for missing asset paths instead of rewriting them to index.html', async ({ request }) => {
@@ -470,10 +522,34 @@ test.describe('hosted shell delivery', () => {
       const unknownApiResponse = await request.get(new URL('/api/missing-endpoint', baseUrl).toString());
       const encodedApiResponse = await request.get(new URL('/api%2Fhealth', baseUrl).toString());
       const absoluteFormApiResponse = await requestRawPath(baseUrl, new URL('/api/health', baseUrl).toString());
+      const absoluteFormWorkspaceResponse = await requestRawPath(
+        baseUrl,
+        new URL('/workspace/workspace_demo', baseUrl).toString(),
+      );
+      const absoluteFormReviewResponse = await requestRawPath(
+        baseUrl,
+        new URL('/review/workspace_demo', baseUrl).toString(),
+      );
+      const encodedLeadingSlashApiResponse = await requestRawPath(baseUrl, '/%2Fapi%2Fhealth');
       const aliasedApiResponse = await requestRawPath(baseUrl, '/foo/%2e%2e/api/health');
       const aliasedShellPathResponse = await requestRawPath(baseUrl, '/assets/%2e%2e/index.html');
       const encodedSeparatorApiResponse = await requestRawPath(baseUrl, '/foo%2F..%2Fapi%2Fhealth');
       const encodedSeparatorShellPathResponse = await requestRawPath(baseUrl, '/assets%2F..%2Findex.html');
+      const encodedBackslashApiResponse = await requestRawPath(baseUrl, '/foo%5C..%5Capi%5Chealth');
+      const encodedBackslashShellPathResponse = await requestRawPath(baseUrl, '/assets%5C..%5Cindex.html');
+      const workspaceAliasResponse = await requestRawPath(baseUrl, '/workspace%2Fworkspace_demo');
+      const reviewAliasResponse = await requestRawPath(baseUrl, '/review%2Fworkspace_demo');
+      const workspaceBackslashAliasResponse = await requestRawPath(baseUrl, '/workspace%5Cworkspace_demo');
+      const reviewBackslashAliasResponse = await requestRawPath(baseUrl, '/review%5Cworkspace_demo');
+      const workspaceExtraAliasResponse = await requestRawPath(baseUrl, '/workspace%2Fworkspace_demo%2Fextra');
+      const reviewExtraBackslashAliasResponse = await requestRawPath(baseUrl, '/review%5Cworkspace_demo%5Cextra');
+      const absoluteFormWorkspaceExtraResponse = await requestRawPath(
+        baseUrl,
+        new URL('/workspace/workspace_demo/extra', baseUrl).toString(),
+      );
+      const optionsTransformedAssetResponse = await requestRawPath(baseUrl, '/src/main.tsx', 'OPTIONS');
+      const headWorkspaceAliasResponse = await requestRawPath(baseUrl, '/workspace%2Fworkspace_demo', 'HEAD');
+      const optionsReviewAliasResponse = await requestRawPath(baseUrl, '/review%5Cworkspace_demo', 'OPTIONS');
       const headHealthResponse = await request.fetch(new URL('/api/health', baseUrl).toString(), { method: 'HEAD' });
 
       expect(releaseManifestResponse.ok()).toBe(true);
@@ -494,6 +570,12 @@ test.describe('hosted shell delivery', () => {
       expect(await encodedApiResponse.json()).toEqual({ status: 'not-found' });
       expect(absoluteFormApiResponse.statusCode).toBe(404);
       expect(JSON.parse(absoluteFormApiResponse.body)).toEqual({ status: 'not-found' });
+      expect(absoluteFormWorkspaceResponse.statusCode).toBe(404);
+      expect(JSON.parse(absoluteFormWorkspaceResponse.body)).toEqual({ status: 'not-found' });
+      expect(absoluteFormReviewResponse.statusCode).toBe(404);
+      expect(JSON.parse(absoluteFormReviewResponse.body)).toEqual({ status: 'not-found' });
+      expect(encodedLeadingSlashApiResponse.statusCode).toBe(404);
+      expect(JSON.parse(encodedLeadingSlashApiResponse.body)).toEqual({ status: 'not-found' });
       expect(aliasedApiResponse.statusCode).toBe(404);
       expect(JSON.parse(aliasedApiResponse.body)).toEqual({ status: 'not-found' });
       expect(aliasedShellPathResponse.statusCode).toBe(404);
@@ -502,6 +584,29 @@ test.describe('hosted shell delivery', () => {
       expect(JSON.parse(encodedSeparatorApiResponse.body)).toEqual({ status: 'not-found' });
       expect(encodedSeparatorShellPathResponse.statusCode).toBe(404);
       expect(JSON.parse(encodedSeparatorShellPathResponse.body)).toEqual({ status: 'not-found' });
+      expect(encodedBackslashApiResponse.statusCode).toBe(404);
+      expect(JSON.parse(encodedBackslashApiResponse.body)).toEqual({ status: 'not-found' });
+      expect(encodedBackslashShellPathResponse.statusCode).toBe(404);
+      expect(JSON.parse(encodedBackslashShellPathResponse.body)).toEqual({ status: 'not-found' });
+      expect(workspaceAliasResponse.statusCode).toBe(404);
+      expect(JSON.parse(workspaceAliasResponse.body)).toEqual({ status: 'not-found' });
+      expect(reviewAliasResponse.statusCode).toBe(404);
+      expect(JSON.parse(reviewAliasResponse.body)).toEqual({ status: 'not-found' });
+      expect(workspaceBackslashAliasResponse.statusCode).toBe(404);
+      expect(JSON.parse(workspaceBackslashAliasResponse.body)).toEqual({ status: 'not-found' });
+      expect(reviewBackslashAliasResponse.statusCode).toBe(404);
+      expect(JSON.parse(reviewBackslashAliasResponse.body)).toEqual({ status: 'not-found' });
+      expect(workspaceExtraAliasResponse.statusCode).toBe(404);
+      expect(JSON.parse(workspaceExtraAliasResponse.body)).toEqual({ status: 'not-found' });
+      expect(reviewExtraBackslashAliasResponse.statusCode).toBe(404);
+      expect(JSON.parse(reviewExtraBackslashAliasResponse.body)).toEqual({ status: 'not-found' });
+      expect(absoluteFormWorkspaceExtraResponse.statusCode).toBe(404);
+      expect(JSON.parse(absoluteFormWorkspaceExtraResponse.body)).toEqual({ status: 'not-found' });
+      expect(optionsTransformedAssetResponse.statusCode).toBe(204);
+      expect(headWorkspaceAliasResponse.statusCode).toBe(404);
+      expect(headWorkspaceAliasResponse.headers['content-type']).toContain('application/json');
+      expect(optionsReviewAliasResponse.statusCode).toBe(404);
+      expect(optionsReviewAliasResponse.headers['content-type']).toContain('application/json');
       expect(headHealthResponse.status()).toBe(405);
       expect(headHealthResponse.headers()['content-type']).toContain('text/plain');
 

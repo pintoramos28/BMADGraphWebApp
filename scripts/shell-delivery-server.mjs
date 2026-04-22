@@ -10,6 +10,7 @@ import {
   createShellDeliveryFailureResponse,
   decodeRequestPathname,
   hasDotSegmentPathAlias,
+  hasPathSeparatorAlias,
   isCanonicalShellRouteRequestPath,
   isShellRoutePathname,
   loadDeployedShellBootstrapMetadata,
@@ -65,6 +66,18 @@ const mimeTypes = new Map([
 ]);
 
 const genericServerFailureMessage = 'Unexpected server failure.';
+
+function isShellOwnedRoutePrefixPathname(pathname) {
+  return (
+    pathname === '/' ||
+    pathname === '/workspace' ||
+    pathname.startsWith('/workspace/') ||
+    pathname === '/review' ||
+    pathname.startsWith('/review/') ||
+    pathname === '/unsupported' ||
+    pathname.startsWith('/unsupported/')
+  );
+}
 
 function sendJson(response, payload, statusCode = 200) {
   const body = Buffer.from(JSON.stringify(payload));
@@ -152,16 +165,13 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
-  if ((request.method ?? 'GET') !== 'GET') {
-    sendText(response, 'Method not allowed.', 405);
-    return;
-  }
-
   try {
     const { rawPathname, isAbsoluteForm } = resolveRequestPathname(request.url);
     const pathname = decodeRequestPathname(rawPathname);
     const isCanonicalShellApiRequest = !isAbsoluteForm && (rawPathname === '/api' || rawPathname.startsWith('/api/'));
     const isEncodedShellApiRequest = pathname === '/api' || pathname.startsWith('/api/');
+    const isCanonicalShellRouteRequest = !isAbsoluteForm && isCanonicalShellRouteRequestPath(rawPathname);
+    const isShellOwnedRouteRequest = isShellRoutePathname(pathname) || isShellOwnedRoutePrefixPathname(pathname);
     const failureResponse = createShellDeliveryFailureResponse(pathname, failureMode);
 
     if (hasDotSegmentPathAlias(rawPathname)) {
@@ -169,8 +179,23 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (hasPathSeparatorAlias(rawPathname)) {
+      sendText(response, 'Not found.', 404);
+      return;
+    }
+
     if (!isCanonicalShellApiRequest && isEncodedShellApiRequest) {
       sendJson(response, { status: 'not-found' }, 404);
+      return;
+    }
+
+    if (!isCanonicalShellRouteRequest && isShellOwnedRouteRequest) {
+      sendText(response, 'Not found.', 404);
+      return;
+    }
+
+    if ((request.method ?? 'GET') !== 'GET') {
+      sendText(response, 'Method not allowed.', 405);
       return;
     }
 
@@ -222,7 +247,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (isCanonicalShellRouteRequestPath(rawPathname) && isShellRoutePathname(pathname)) {
+    if (isCanonicalShellRouteRequest && isShellRoutePathname(pathname)) {
       await streamIndexHtml(response);
       return;
     }

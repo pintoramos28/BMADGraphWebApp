@@ -204,14 +204,20 @@ describe('shell bootstrap metadata helpers', () => {
   it('decodes request paths without normalizing dot-segment aliases away', () => {
     expect(decodeRequestPathname('/foo/%2e%2e/api/health')).toBe('/foo/../api/health');
     expect(decodeRequestPathname('/foo%2F..%2Fapi%2Fhealth')).toBe('/foo/../api/health');
+    expect(decodeRequestPathname('/foo%5C..%5Capi%5Chealth')).toBe('/foo/../api/health');
     expect(hasDotSegmentPathAlias('/foo/%2e%2e/api/health')).toBe(true);
     expect(hasDotSegmentPathAlias('/foo%2F..%2Fapi%2Fhealth')).toBe(true);
+    expect(hasDotSegmentPathAlias('/foo%5C..%5Capi%5Chealth')).toBe(true);
     expect(hasDotSegmentPathAlias('/assets%2F..%2Findex.html')).toBe(true);
+    expect(hasDotSegmentPathAlias('/assets%5C..%5Cindex.html')).toBe(true);
     expect(previewShellBootstrapMetadata.decodeRequestPathname('/foo/%2e%2e/api/health')).toBe('/foo/../api/health');
     expect(previewShellBootstrapMetadata.decodeRequestPathname('/foo%2F..%2Fapi%2Fhealth')).toBe('/foo/../api/health');
+    expect(previewShellBootstrapMetadata.decodeRequestPathname('/foo%5C..%5Capi%5Chealth')).toBe('/foo/../api/health');
     expect(previewShellBootstrapMetadata.hasDotSegmentPathAlias('/foo/%2e%2e/api/health')).toBe(true);
     expect(previewShellBootstrapMetadata.hasDotSegmentPathAlias('/foo%2F..%2Fapi%2Fhealth')).toBe(true);
+    expect(previewShellBootstrapMetadata.hasDotSegmentPathAlias('/foo%5C..%5Capi%5Chealth')).toBe(true);
     expect(previewShellBootstrapMetadata.hasDotSegmentPathAlias('/assets%2F..%2Findex.html')).toBe(true);
+    expect(previewShellBootstrapMetadata.hasDotSegmentPathAlias('/assets%5C..%5Cindex.html')).toBe(true);
     expect(hasDotSegmentPathAlias('/api%2Fhealth')).toBe(false);
   });
 
@@ -285,10 +291,14 @@ describe('shell bootstrap metadata helpers', () => {
     expect(isCanonicalShellRouteRequestPath('/workspace/demo-workspace')).toBe(true);
     expect(isCanonicalShellRouteRequestPath('/workspace/%64emo-workspace')).toBe(true);
     expect(isCanonicalShellRouteRequestPath('/workspace%2Fdemo-workspace')).toBe(false);
+    expect(isCanonicalShellRouteRequestPath('/workspace%5Cdemo-workspace')).toBe(false);
     expect(isCanonicalShellRouteRequestPath('/review%2Fdemo-workspace')).toBe(false);
+    expect(isCanonicalShellRouteRequestPath('/review%5Cdemo-workspace')).toBe(false);
     expect(previewShellBootstrapMetadata.isCanonicalShellRouteRequestPath('/workspace/demo-workspace')).toBe(true);
     expect(previewShellBootstrapMetadata.isCanonicalShellRouteRequestPath('/workspace/%64emo-workspace')).toBe(true);
     expect(previewShellBootstrapMetadata.isCanonicalShellRouteRequestPath('/workspace%2Fdemo-workspace')).toBe(false);
+    expect(previewShellBootstrapMetadata.isCanonicalShellRouteRequestPath('/workspace%5Cdemo-workspace')).toBe(false);
     expect(previewShellBootstrapMetadata.isCanonicalShellRouteRequestPath('/review%2Fdemo-workspace')).toBe(false);
+    expect(previewShellBootstrapMetadata.isCanonicalShellRouteRequestPath('/review%5Cdemo-workspace')).toBe(false);
   });
 });

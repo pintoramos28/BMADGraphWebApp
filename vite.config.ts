@@ -9,6 +9,8 @@ import {
   decodeRequestPathname,
   emitShellBootstrapMetadataAssets,
   hasDotSegmentPathAlias,
+  isCanonicalShellRouteRequestPath,
+  isShellRoutePathname,
   resolveRequestPathname,
   validateShellBootstrapMetadata,
 } from './src/services/release/shell-bootstrap-metadata';
@@ -19,6 +21,19 @@ const repoRoot = __dirname;
 const releaseManifestPath = path.join(repoRoot, 'src', 'test', 'fixtures', 'api', 'release-manifest.fixture.json');
 const supportMatrixPath = path.join(repoRoot, 'src', 'test', 'fixtures', 'api', 'support-matrix.fixture.json');
 const shellApiRoutes = new Set(['/api/release-manifest', '/api/support-matrix', '/api/health']);
+const repeatedSlashPattern = /\/{2,}/gu;
+
+function isShellOwnedRoutePrefixPathname(pathname: string) {
+  return (
+    pathname === '/' ||
+    pathname === '/workspace' ||
+    pathname.startsWith('/workspace/') ||
+    pathname === '/review' ||
+    pathname.startsWith('/review/') ||
+    pathname === '/unsupported' ||
+    pathname.startsWith('/unsupported/')
+  );
+}
 
 function createJsonResponse(res: import('node:http').ServerResponse, payload: unknown, statusCode = 200) {
   const body = Buffer.from(JSON.stringify(payload));
@@ -46,6 +61,32 @@ function createTextResponse(
   res.end(body);
 }
 
+function shouldContinueShellPreflight(requestTarget: string) {
+  try {
+    const { rawPathname, isAbsoluteForm } = resolveRequestPathname(requestTarget);
+    const pathname = decodeRequestPathname(rawPathname);
+    const normalizedPathname = pathname.replace(repeatedSlashPattern, '/');
+
+    if (hasDotSegmentPathAlias(rawPathname)) {
+      return true;
+    }
+
+    const isCanonicalShellApiRequest = !isAbsoluteForm && (rawPathname === '/api' || rawPathname.startsWith('/api/'));
+    const isCanonicalShellRouteRequest = !isAbsoluteForm && isCanonicalShellRouteRequestPath(rawPathname);
+    const isShellOwnedApiRequest = normalizedPathname === '/api' || normalizedPathname.startsWith('/api/');
+    const isShellOwnedRouteRequest =
+      isShellRoutePathname(normalizedPathname) || isShellOwnedRoutePrefixPathname(normalizedPathname);
+
+    return (
+      isCanonicalShellApiRequest ||
+      (!isCanonicalShellApiRequest && isShellOwnedApiRequest) ||
+      (!isCanonicalShellRouteRequest && isShellOwnedRouteRequest)
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function loadCanonicalShellBootstrapMetadata() {
   const [releaseManifest, supportMatrix] = await Promise.all([
     readFile(releaseManifestPath, 'utf8').then((value) => JSON.parse(value)),
@@ -60,11 +101,27 @@ function shellBootstrapMetadataPlugin(): Plugin {
 
   return {
     name: 'shell-bootstrap-metadata',
+    enforce: 'pre',
+    config() {
+      return {
+        server: {
+          cors: ((req: import('node:http').IncomingMessage, callback: (error: null, options: { preflightContinue: boolean }) => void) => {
+            callback(null, {
+              preflightContinue: shouldContinueShellPreflight(req.url ?? '/'),
+            });
+          }) as unknown as import('vite').CorsOptions,
+        },
+      };
+    },
     configResolved(config) {
       buildOutputRoot = path.resolve(config.root, config.build.outDir);
     },
     configureServer(server) {
-      server.middlewares.use(async (req, res, next) => {
+      const middleware = async (
+        req: import('node:http').IncomingMessage,
+        res: import('node:http').ServerResponse,
+        next: () => void,
+      ) => {
         if (!req.url) {
           next();
           return;
@@ -73,26 +130,37 @@ function shellBootstrapMetadataPlugin(): Plugin {
         try {
           const { rawPathname, isAbsoluteForm } = resolveRequestPathname(req.url);
           const pathname = decodeRequestPathname(rawPathname);
+          const normalizedPathname = pathname.replace(repeatedSlashPattern, '/');
           if (hasDotSegmentPathAlias(rawPathname)) {
             createJsonResponse(res, { status: 'not-found' }, 404);
             return;
           }
 
           const isCanonicalShellApiRequest = !isAbsoluteForm && (rawPathname === '/api' || rawPathname.startsWith('/api/'));
-          const isEncodedShellApiRequest = pathname === '/api' || pathname.startsWith('/api/');
+          const isCanonicalShellRouteRequest = !isAbsoluteForm && isCanonicalShellRouteRequestPath(rawPathname);
+          const isShellOwnedApiRequest = normalizedPathname === '/api' || normalizedPathname.startsWith('/api/');
+          const isShellOwnedRouteRequest =
+            isShellRoutePathname(normalizedPathname) || isShellOwnedRoutePrefixPathname(normalizedPathname);
+          const isNonCanonicalShellApiRequest = !isCanonicalShellApiRequest && isShellOwnedApiRequest;
+          const isNonCanonicalShellRouteRequest = !isCanonicalShellRouteRequest && isShellOwnedRouteRequest;
 
-          if (!isCanonicalShellApiRequest && !isEncodedShellApiRequest) {
+          if (!isCanonicalShellApiRequest && !isNonCanonicalShellApiRequest && !isNonCanonicalShellRouteRequest) {
+            next();
+            return;
+          }
+
+          if (isNonCanonicalShellApiRequest || isNonCanonicalShellRouteRequest) {
+            createJsonResponse(res, { status: 'not-found' }, 404);
+            return;
+          }
+
+          if (!isCanonicalShellApiRequest) {
             next();
             return;
           }
 
           if ((req.method ?? 'GET') !== 'GET') {
             createTextResponse(res, 405, 'Method not allowed.');
-            return;
-          }
-
-          if (!isCanonicalShellApiRequest && isEncodedShellApiRequest) {
-            createJsonResponse(res, { status: 'not-found' }, 404);
             return;
           }
 
@@ -127,7 +195,9 @@ function shellBootstrapMetadataPlugin(): Plugin {
 
           throw error;
         }
-      });
+      };
+
+      server.middlewares.use(middleware);
     },
     async writeBundle() {
       const metadata = await loadCanonicalShellBootstrapMetadata();
