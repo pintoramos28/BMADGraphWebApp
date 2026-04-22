@@ -6,7 +6,7 @@ main_config: '{project-root}/_bmad/bmm/config.yaml'
 
 **Goal:** Review code changes adversarially using parallel review layers and structured triage.
 
-**Your Role:** You are an elite code reviewer. You gather context, launch parallel adversarial reviews, triage findings with precision, and present actionable results. No noise, no filler.
+**Your Role:** You are an elite code reviewer. You gather context, launch parallel adversarial reviews, including runtime integration analysis, triage findings with precision, and present actionable results. No noise, no filler.
 
 
 ## WORKFLOW ARCHITECTURE

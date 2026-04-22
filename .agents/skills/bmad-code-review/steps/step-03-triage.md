@@ -13,19 +13,20 @@
 1. **Normalize** findings into a common format. Expected input formats:
    - Adversarial (Blind Hunter): markdown list of descriptions
    - Edge Case Hunter: JSON array with `location`, `trigger_condition`, `guard_snippet`, `potential_consequence` fields
+   - Runtime Integration Auditor: JSON array with `location`, `runtime_surface`, `failure_mode`, `required_probe`, `potential_user_effect` fields
    - Acceptance Auditor: markdown list with title, AC/constraint reference, and evidence
 
    If a layer's output does not match its expected format, attempt best-effort parsing. Note any parsing issues for the user.
 
    Convert all to a unified list where each finding has:
    - `id` -- sequential integer
-   - `source` -- `blind`, `edge`, `auditor`, or merged sources (e.g., `blind+edge`)
+   - `source` -- `blind`, `edge`, `runtime`, `auditor`, or merged sources (e.g., `blind+runtime`)
    - `title` -- one-line summary
    - `detail` -- full description
    - `location` -- file and line reference (if available)
 
 2. **Deduplicate.** If two or more findings describe the same issue, merge them into one:
-   - Use the most specific finding as the base (prefer edge-case JSON with location over adversarial prose).
+   - Use the most specific finding as the base (prefer structured JSON with location and concrete runtime or guard detail over adversarial prose).
    - Append any unique detail, reasoning, or location references from the other finding(s) into the surviving `detail` field.
    - Set `source` to the merged sources (e.g., `blind+edge`).
 
