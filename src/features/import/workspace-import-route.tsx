@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from 'zustand';
 
-import { BrowserLocalImportFileAccess } from '../../services/persistence';
 import {
   importPreviewFailureMessageSchema,
   importPreviewProgressMessageSchema,
@@ -79,6 +78,16 @@ const sectionCardStyle = {
   border: '1px solid rgba(31, 42, 54, 0.1)',
 } as const;
 
+const hiddenFileInputStyle = {
+  position: 'fixed',
+  left: '-9999px',
+  top: 0,
+  width: '1px',
+  height: '1px',
+  opacity: 0,
+  pointerEvents: 'none',
+} as const;
+
 type WorkerImportPayload = {
   sourceLabel: string;
   fileName?: string;
@@ -149,6 +158,185 @@ export function failImportIfActive({
   clearBudgetTimer(correlationId);
   disposeWorker();
   failImport(importError, correlationId);
+
+  return true;
+}
+
+export function failImportFromWorkerCallbackIfCurrent<TWorker>({
+  worker,
+  activeWorker,
+  correlationId,
+  detail,
+  isActiveImport,
+  disposeWorker,
+  failImport,
+}: {
+  worker: TWorker;
+  activeWorker: TWorker | null;
+  correlationId: string;
+  detail: string;
+  isActiveImport: (correlationId: string) => boolean;
+  disposeWorker?: (worker: TWorker) => void;
+  failImport: (correlationId: string, detail: string) => void;
+}) {
+  if (worker !== activeWorker || !isActiveImport(correlationId)) {
+    return false;
+  }
+
+  disposeWorker?.(worker);
+  failImport(correlationId, detail);
+
+  return true;
+}
+
+export function bindWorkerImportFailureCallbacks<TWorker extends Pick<Worker, 'onerror' | 'onmessageerror'>>({
+  worker,
+  getActiveWorker,
+  correlationId,
+  isActiveImport,
+  disposeWorker,
+  failImport,
+}: {
+  worker: TWorker;
+  getActiveWorker: () => TWorker | null;
+  correlationId: string;
+  isActiveImport: (correlationId: string) => boolean;
+  disposeWorker?: (worker: TWorker) => void;
+  failImport: (correlationId: string, detail: string) => void;
+}) {
+  worker.onerror = (event) => {
+    failImportFromWorkerCallbackIfCurrent({
+      worker,
+      activeWorker: getActiveWorker(),
+      correlationId,
+      detail: event.message || 'The import worker could not finish preparing the preview.',
+      isActiveImport,
+      ...(disposeWorker ? { disposeWorker } : {}),
+      failImport,
+    });
+    event.preventDefault();
+  };
+  worker.onmessageerror = () => {
+    failImportFromWorkerCallbackIfCurrent({
+      worker,
+      activeWorker: getActiveWorker(),
+      correlationId,
+      detail: 'The import worker returned an unreadable preview message.',
+      isActiveImport,
+      ...(disposeWorker ? { disposeWorker } : {}),
+      failImport,
+    });
+  };
+
+  return worker;
+}
+
+export function initializeImportWorker<
+  TWorker extends Pick<Worker, 'onmessage' | 'onerror' | 'onmessageerror'>
+>({
+  createWorker,
+  onMessage,
+  getActiveWorker,
+  correlationId,
+  isActiveImport,
+  disposeWorker,
+  failImport,
+}: {
+  createWorker: () => TWorker;
+  onMessage: TWorker['onmessage'];
+  getActiveWorker: () => TWorker | null;
+  correlationId: string;
+  isActiveImport: (correlationId: string) => boolean;
+  disposeWorker?: (worker: TWorker) => void;
+  failImport: (correlationId: string, detail: string) => void;
+}): TWorker | null {
+  let failedDuringInitialization = false;
+  const worker = createWorker();
+  worker.onmessage = onMessage;
+
+  bindWorkerImportFailureCallbacks({
+    worker,
+    getActiveWorker: () => getActiveWorker() ?? worker,
+    correlationId,
+    isActiveImport,
+    ...(disposeWorker ? { disposeWorker } : {}),
+    failImport: (activeCorrelationId, detail) => {
+      failedDuringInitialization = true;
+      failImport(activeCorrelationId, detail);
+    },
+  });
+
+  return failedDuringInitialization ? null : worker;
+}
+
+export function ensureImportRouteWorker<TWorker>({
+  currentWorker,
+  initializeWorker,
+  storeWorker,
+}: {
+  currentWorker: TWorker | null;
+  initializeWorker: () => TWorker | null;
+  storeWorker: (worker: TWorker) => void;
+}) {
+  if (currentWorker) {
+    return currentWorker;
+  }
+
+  const worker = initializeWorker();
+
+  if (worker) {
+    storeWorker(worker);
+  }
+
+  return worker;
+}
+
+export function postWorkerImportFromRoute({
+  correlationId,
+  sourceKind,
+  payload,
+  ensureWorker,
+  budgetMs,
+  armBudgetTimer,
+  clearBudgetTimer,
+  markBudgetExceeded,
+}: {
+  correlationId: string;
+  sourceKind: ImportSourceKind;
+  payload: WorkerImportPayload;
+  ensureWorker: (correlationId: string) => Pick<Worker, 'postMessage'> | null;
+  budgetMs: number;
+  armBudgetTimer: () => void;
+  clearBudgetTimer: () => void;
+  markBudgetExceeded: () => void;
+}) {
+  const worker = ensureWorker(correlationId);
+
+  if (!worker) {
+    return false;
+  }
+
+  const transferList = payload.binaryContent ? [payload.binaryContent] : [];
+
+  postWorkerImportMessageWithBudget({
+    worker,
+    message: {
+      schemaVersion: '1.0.0',
+      messageId: `import_preview_${correlationId}`,
+      correlationId,
+      workspaceVersion: 1,
+      type: 'import.preview.request',
+      payload: {
+        sourceKind,
+        ...payload,
+      },
+    },
+    transferList,
+    budgetMs,
+    armBudgetTimer,
+    clearBudgetTimer,
+    markBudgetExceeded,
+  });
 
   return true;
 }
@@ -273,17 +461,46 @@ export function clearActiveImportPreview({
   resetPreview();
 }
 
-async function readFileText(file: File) {
-  if (typeof File !== 'undefined' && typeof File.prototype.text === 'function') {
-    return File.prototype.text.call(file);
+export function readFileWithFileReader<TResult>(
+  file: Blob,
+  read: (reader: FileReader, file: Blob) => void,
+): Promise<TResult> {
+  if (typeof FileReader === 'undefined') {
+    return Promise.reject(new Error('Browser file reads are unavailable in this environment.'));
+  }
+
+  return new Promise<TResult>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onerror = () => {
+      reject(reader.error ?? new Error('The selected file could not be read by the browser.'));
+    };
+    reader.onabort = () => {
+      reject(new Error('The selected file read was canceled before it finished.'));
+    };
+    reader.onload = () => {
+      resolve(reader.result as TResult);
+    };
+
+    read(reader, file);
+  });
+}
+
+export async function readFileText(file: File) {
+  if (typeof FileReader !== 'undefined') {
+    return readFileWithFileReader<string>(file, (reader, currentFile) => {
+      reader.readAsText(currentFile);
+    });
   }
 
   return file.text();
 }
 
-async function readFileArrayBuffer(file: File) {
-  if (typeof File !== 'undefined' && typeof File.prototype.arrayBuffer === 'function') {
-    return File.prototype.arrayBuffer.call(file);
+export async function readFileArrayBuffer(file: File) {
+  if (typeof FileReader !== 'undefined') {
+    return readFileWithFileReader<ArrayBuffer>(file, (reader, currentFile) => {
+      reader.readAsArrayBuffer(currentFile);
+    });
   }
 
   return file.arrayBuffer();
@@ -412,11 +629,12 @@ export async function runImportBudgetedRead<T>({
 
 export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string | undefined }) {
   const storeRef = useRef(createImportPreviewStore());
-  const fileAccessRef = useRef(new BrowserLocalImportFileAccess());
   const activityTrackerRef = useRef(createImportActivityTracker());
   const workerRef = useRef<Worker | null>(null);
   const budgetTimerRef = useRef<number | null>(null);
   const budgetTimerCorrelationRef = useRef<string | null>(null);
+  const csvInputRef = useRef<HTMLInputElement | null>(null);
+  const excelInputRef = useRef<HTMLInputElement | null>(null);
   const [pasteText, setPasteText] = useState('');
   const [pasteValidationError, setPasteValidationError] = useState<string | null>(null);
 
@@ -429,6 +647,8 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string | u
   const displayedBenchmarkScenario = resolveDisplayedBenchmarkScenario(preview, timingEvent);
 
   useEffect(() => {
+    activityTrackerRef.current = createImportActivityTracker();
+
     return () => {
       activityTrackerRef.current.dispose();
 
@@ -437,14 +657,20 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string | u
       }
 
       budgetTimerCorrelationRef.current = null;
-      workerRef.current?.terminate();
-      workerRef.current = null;
+      disposeWorker();
       storeRef.current.getState().commands.reset();
     };
   }, []);
 
   function disposeWorker() {
-    workerRef.current?.terminate();
+    if (!workerRef.current) {
+      return;
+    }
+
+    workerRef.current.onmessage = null;
+    workerRef.current.onerror = null;
+    workerRef.current.onmessageerror = null;
+    workerRef.current.terminate();
     workerRef.current = null;
   }
 
@@ -550,82 +776,83 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string | u
     });
   }
 
-  function ensureWorker(): Worker {
-    if (!workerRef.current) {
-      const worker = new Worker(new URL('../../workers/import.worker.ts', import.meta.url), {
-        type: 'module',
-      });
-      worker.onmessage = (event: MessageEvent) => {
-        const progressMessage = importPreviewProgressMessageSchema.safeParse(event.data);
+  function ensureWorker(correlationId: string): Worker | null {
+    return ensureImportRouteWorker({
+      currentWorker: workerRef.current,
+      initializeWorker: () =>
+        initializeImportWorker({
+        createWorker: () =>
+          new Worker(new URL('../../workers/import.worker.ts', import.meta.url), {
+            type: 'module',
+          }),
+        onMessage: (event: MessageEvent) => {
+          const progressMessage = importPreviewProgressMessageSchema.safeParse(event.data);
 
-        if (progressMessage.success) {
-          if (!isActiveWorkerMessage(progressMessage.data.correlationId)) {
+          if (progressMessage.success) {
+            if (!isActiveWorkerMessage(progressMessage.data.correlationId)) {
+              return;
+            }
+
+            storeRef.current.getState().commands.updateProgress(progressMessage.data.payload, progressMessage.data.correlationId);
             return;
           }
 
-          storeRef.current.getState().commands.updateProgress(progressMessage.data.payload, progressMessage.data.correlationId);
-          return;
-        }
+          const successMessage = importPreviewSuccessMessageSchema.safeParse(event.data);
 
-        const successMessage = importPreviewSuccessMessageSchema.safeParse(event.data);
+          if (successMessage.success) {
+            if (!isActiveWorkerMessage(successMessage.data.correlationId)) {
+              return;
+            }
 
-        if (successMessage.success) {
-          if (!isActiveWorkerMessage(successMessage.data.correlationId)) {
+            clearBudgetTimer(successMessage.data.correlationId);
+            const benchmarkDurationMs = activityTrackerRef.current.resolveBenchmarkDuration(
+              successMessage.data.correlationId,
+              successMessage.data.payload.preview.timing.durationMs,
+            );
+            const resolvedPreview = applyResolvedImportPreviewTiming(
+              successMessage.data.payload.preview,
+              benchmarkDurationMs,
+            );
+            const benchmarkEvent = dispatchImportBenchmarkTimingEvent(resolvedPreview);
+            storeRef.current
+              .getState()
+              .commands.resolveImport(resolvedPreview, benchmarkEvent, successMessage.data.correlationId);
             return;
           }
 
-          clearBudgetTimer(successMessage.data.correlationId);
-          const benchmarkDurationMs = activityTrackerRef.current.resolveBenchmarkDuration(
-            successMessage.data.correlationId,
-            successMessage.data.payload.preview.timing.durationMs,
-          );
-          const resolvedPreview = applyResolvedImportPreviewTiming(
-            successMessage.data.payload.preview,
-            benchmarkDurationMs,
-          );
-          const benchmarkEvent = dispatchImportBenchmarkTimingEvent(resolvedPreview);
-          storeRef.current
-            .getState()
-            .commands.resolveImport(resolvedPreview, benchmarkEvent, successMessage.data.correlationId);
-          return;
-        }
+          const failureMessage = importPreviewFailureMessageSchema.safeParse(event.data);
 
-        const failureMessage = importPreviewFailureMessageSchema.safeParse(event.data);
+          if (failureMessage.success) {
+            if (!isActiveWorkerMessage(failureMessage.data.correlationId)) {
+              return;
+            }
 
-        if (failureMessage.success) {
-          if (!isActiveWorkerMessage(failureMessage.data.correlationId)) {
+            activityTrackerRef.current.clearBenchmark(failureMessage.data.correlationId);
+            clearBudgetTimer(failureMessage.data.correlationId);
+            disposeWorker();
+            storeRef.current.getState().commands.failImport(failureMessage.data.payload, failureMessage.data.correlationId);
+          }
+        },
+        getActiveWorker: () => workerRef.current,
+        correlationId,
+        isActiveImport: isActiveWorkerMessage,
+        disposeWorker: (worker) => {
+          if (workerRef.current === worker) {
+            disposeWorker();
             return;
           }
 
-          activityTrackerRef.current.clearBenchmark(failureMessage.data.correlationId);
-          clearBudgetTimer(failureMessage.data.correlationId);
-          disposeWorker();
-          storeRef.current.getState().commands.failImport(failureMessage.data.payload, failureMessage.data.correlationId);
-        }
-      };
-      worker.onerror = (event) => {
-        const correlationId = storeRef.current.getState().activeCorrelationId;
-
-        if (!correlationId) {
-          return;
-        }
-
-        failImportFromWorker(correlationId, event.message || 'The import worker could not finish preparing the preview.');
-        event.preventDefault();
-      };
-      worker.onmessageerror = () => {
-        const correlationId = storeRef.current.getState().activeCorrelationId;
-
-        if (!correlationId) {
-          return;
-        }
-
-        failImportFromWorker(correlationId, 'The import worker returned an unreadable preview message.');
-      };
-      workerRef.current = worker;
-    }
-
-    return workerRef.current!;
+          worker.onmessage = null;
+          worker.onerror = null;
+          worker.onmessageerror = null;
+          worker.terminate();
+        },
+        failImport: failImportFromWorker,
+      }),
+      storeWorker: (worker) => {
+        workerRef.current = worker;
+      },
+    });
   }
 
   function beginImport(sourceKind: ImportSourceKind) {
@@ -643,23 +870,11 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string | u
     sourceKind: ImportSourceKind,
     payload: WorkerImportPayload,
   ) {
-    const worker = ensureWorker();
-    const transferList = payload.binaryContent ? [payload.binaryContent] : [];
-
-    postWorkerImportMessageWithBudget({
-      worker,
-      message: {
-        schemaVersion: '1.0.0',
-        messageId: `import_preview_${correlationId}`,
-        correlationId,
-        workspaceVersion: 1,
-        type: 'import.preview.request',
-        payload: {
-          sourceKind,
-          ...payload,
-        },
-      },
-      transferList,
+    postWorkerImportFromRoute({
+      correlationId,
+      sourceKind,
+      payload,
+      ensureWorker,
       budgetMs: IMPORT_PREVIEW_BUDGET_MS,
       armBudgetTimer: () => {
         ensureBudgetTimer(correlationId);
@@ -677,32 +892,33 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string | u
     });
   }
 
-  async function handleFileImport(sourceKind: Extract<ImportSourceKind, 'csv-file' | 'excel-file'>) {
+  async function handleFileImport(sourceKind: Extract<ImportSourceKind, 'csv-file' | 'excel-file'>, file: File | null) {
+    if (!file) {
+      return;
+    }
+
     setPasteValidationError(null);
     const correlationId = beginImport(sourceKind);
-    let file: File | null;
-
-    try {
-      file = await fileAccessRef.current.openLocalImportFile({
-        sourceKind,
-      });
-    } catch (caughtError) {
-      failImportFromRoute(correlationId, toImportPreparationError('selection', caughtError));
-      return;
-    }
-
-    if (!file) {
-      activityTrackerRef.current.clearBenchmark(correlationId);
-      clearBudgetTimer(correlationId);
-      storeRef.current.getState().commands.cancelImport(correlationId);
-      return;
-    }
+    storeRef.current.getState().commands.updateProgress(
+      {
+        phase: 'loading',
+        message: `Selected ${file.name}. Reading it from the browser.`,
+      },
+      correlationId,
+    );
 
     if (!isActiveWorkerMessage(correlationId)) {
       return;
     }
 
     activityTrackerRef.current.markBenchmarkStart(correlationId);
+    storeRef.current.getState().commands.updateProgress(
+      {
+        phase: 'loading',
+        message: `Browser accepted ${file.name}. Opening the local file reader.`,
+      },
+      correlationId,
+    );
     let payload: WorkerImportPayload;
 
     if (sourceKind === 'excel-file') {
@@ -714,6 +930,14 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string | u
         failImportFromRoute(correlationId, toImportPreparationError('read', caughtError));
         return;
       }
+
+      storeRef.current.getState().commands.updateProgress(
+        {
+          phase: 'loading',
+          message: `Read ${file.name}. Verifying workbook metadata.`,
+        },
+        correlationId,
+      );
 
       if (!isActiveWorkerMessage(correlationId)) {
         return;
@@ -752,6 +976,14 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string | u
         return;
       }
 
+      storeRef.current.getState().commands.updateProgress(
+        {
+          phase: 'loading',
+          message: `Read ${file.name}. Preparing the preview worker payload.`,
+        },
+        correlationId,
+      );
+
       if (!isActiveWorkerMessage(correlationId)) {
         return;
       }
@@ -782,6 +1014,13 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string | u
     }
 
     try {
+      storeRef.current.getState().commands.updateProgress(
+        {
+          phase: 'loading',
+          message: `Starting the import worker for ${file.name}.`,
+        },
+        correlationId,
+      );
       postWorkerImport(correlationId, sourceKind, payload);
     } catch (caughtError) {
       failImportFromWorker(
@@ -860,6 +1099,33 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string | u
 
   return (
     <section style={{ display: 'grid', gap: '1rem' }}>
+      <input
+        ref={csvInputRef}
+        type="file"
+        accept=".csv,.tsv,text/csv,text/tab-separated-values,text/plain"
+        tabIndex={-1}
+        style={hiddenFileInputStyle}
+        onChange={async (event) => {
+          const input = event.currentTarget;
+          const file = input.files?.[0] ?? null;
+          await handleFileImport('csv-file', file);
+          input.value = '';
+        }}
+      />
+      <input
+        ref={excelInputRef}
+        type="file"
+        accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+        tabIndex={-1}
+        style={hiddenFileInputStyle}
+        onChange={async (event) => {
+          const input = event.currentTarget;
+          const file = input.files?.[0] ?? null;
+          await handleFileImport('excel-file', file);
+          input.value = '';
+        }}
+      />
+
       <header style={{ display: 'grid', gap: '0.5rem' }}>
         <h2 style={{ margin: 0 }}>Import preview workspace</h2>
         <p style={{ margin: 0, lineHeight: 1.6 }}>
@@ -885,7 +1151,13 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string | u
             Choose a local comma-, semicolon-, tab-, or pipe-delimited file through the persistence boundary.
           </p>
           <div style={{ display: 'grid', gap: '0.5rem' }}>
-            <button type="button" onClick={() => void handleFileImport('csv-file')}>
+            <button
+              type="button"
+              onClick={() => {
+                setPasteValidationError(null);
+                csvInputRef.current?.click();
+              }}
+            >
               Choose CSV file
             </button>
             <button type="button" onClick={() => handleOwnedBenchmarkImport('csv-file')}>
@@ -897,7 +1169,13 @@ export function WorkspaceImportRoute({ workspaceId }: { workspaceId?: string | u
         <article style={sectionCardStyle}>
           <h3 style={{ marginTop: 0 }}>Excel workbook</h3>
           <p style={{ lineHeight: 1.6 }}>Open a local `.xlsx` or `.xls` workbook and preview the first sheet only.</p>
-          <button type="button" onClick={() => void handleFileImport('excel-file')}>
+          <button
+            type="button"
+            onClick={() => {
+              setPasteValidationError(null);
+              excelInputRef.current?.click();
+            }}
+          >
             Choose Excel file
           </button>
         </article>

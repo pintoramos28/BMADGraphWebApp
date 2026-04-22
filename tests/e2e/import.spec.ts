@@ -66,7 +66,7 @@ test.describe('import preview workspace', () => {
     });
   });
 
-test('previews a local CSV file through the native picker path without claiming benchmark ownership', async ({ page }) => {
+test('previews a local CSV file through the hidden-input path even when the native picker exists', async ({ page }) => {
     await page.addInitScript(({ csvText }) => {
       const host = window as typeof window & {
         __nativePickerCallCount?: number;
@@ -94,14 +94,16 @@ test('previews a local CSV file through the native picker path without claiming 
     await page.goto(workspacePreviewRoute);
     await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
 
+    const chooser = page.waitForEvent('filechooser');
     await page.getByRole('button', { name: 'Choose CSV file' }).click();
+    await (await chooser).setFiles(csvFixture);
 
     await expectAc3Outcome(page);
     await expect
       .poll(() =>
         page.evaluate(() => (window as typeof window & { __nativePickerCallCount?: number }).__nativePickerCallCount ?? 0),
       )
-      .toBe(1);
+      .toBe(0);
     await expect(page.getByText('Preview ready. The committed workspace is still unchanged.')).toBeVisible();
     await expect(page.getByText('Not yet committed')).toBeVisible();
     await expect(page.getByText('Not a clean benchmark fixture')).toBeVisible();

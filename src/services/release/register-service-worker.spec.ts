@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { registerServiceWorker } from './register-service-worker';
+import { disableServiceWorker, registerServiceWorker } from './register-service-worker';
 
 describe('registerServiceWorker', () => {
   it('returns an unavailable status when service workers are not supported', async () => {
@@ -108,5 +108,83 @@ describe('registerServiceWorker', () => {
       },
       'hard-refresh',
     );
+  });
+});
+
+describe('disableServiceWorker', () => {
+  it('unregisters active service workers, clears caches, and reloads once when the page is controlled', async () => {
+    const unregister = vi.fn(async () => true);
+    const reload = vi.fn();
+    const sessionStorage = {
+      getItem: vi.fn(() => null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    } as unknown as Storage;
+    const cacheStorage = {
+      keys: vi.fn(async () => ['bmad-shell-v1']),
+      delete: vi.fn(async () => true),
+    } as unknown as CacheStorage;
+
+    const status = await disableServiceWorker({
+      navigator: {
+        serviceWorker: {
+          controller: {} as ServiceWorker,
+          getRegistrations: vi.fn(async () => [
+            {
+              unregister,
+            } as unknown as ServiceWorkerRegistration,
+          ]),
+        },
+      } as unknown as Navigator,
+      window: {
+        isSecureContext: true,
+        location: {
+          reload,
+        },
+      } as unknown as Window,
+      cacheStorage,
+      sessionStorage,
+    });
+
+    expect(unregister).toHaveBeenCalledOnce();
+    expect(cacheStorage.keys).toHaveBeenCalledOnce();
+    expect(cacheStorage.delete).toHaveBeenCalledWith('bmad-shell-v1');
+    expect(sessionStorage.setItem).toHaveBeenCalledWith('bmad:disable-service-worker:reloaded', 'true');
+    expect(reload).toHaveBeenCalledOnce();
+    expect(status).toMatchObject({
+      cacheStatus: 'not-available',
+      offlineReady: false,
+      updateAvailable: false,
+    });
+  });
+
+  it('clears the one-time reload flag after a clean dev load without an active controller', async () => {
+    const removeItem = vi.fn();
+
+    await disableServiceWorker({
+      navigator: {
+        serviceWorker: {
+          controller: null,
+          getRegistrations: vi.fn(async () => []),
+        },
+      } as unknown as Navigator,
+      window: {
+        isSecureContext: true,
+        location: {
+          reload: vi.fn(),
+        },
+      } as unknown as Window,
+      cacheStorage: {
+        keys: vi.fn(async () => []),
+        delete: vi.fn(async () => true),
+      } as unknown as CacheStorage,
+      sessionStorage: {
+        getItem: vi.fn(() => 'true'),
+        setItem: vi.fn(),
+        removeItem,
+      } as unknown as Storage,
+    });
+
+    expect(removeItem).toHaveBeenCalledWith('bmad:disable-service-worker:reloaded');
   });
 });

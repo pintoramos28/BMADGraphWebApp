@@ -21,7 +21,9 @@ describe('BrowserLocalImportFileAccess', () => {
         },
       ]),
     };
-    const access = new BrowserLocalImportFileAccess(pickerHost, undefined);
+    const access = new BrowserLocalImportFileAccess(pickerHost, undefined, undefined, {
+      preferNativePicker: true,
+    });
 
     const file = await access.openLocalImportFile({
       sourceKind: 'csv-file',
@@ -41,7 +43,9 @@ describe('BrowserLocalImportFileAccess', () => {
         },
       ]),
     };
-    const access = new BrowserLocalImportFileAccess(pickerHost, undefined);
+    const access = new BrowserLocalImportFileAccess(pickerHost, undefined, undefined, {
+      preferNativePicker: true,
+    });
 
     await access.openLocalImportFile({
       sourceKind: 'csv-file',
@@ -69,7 +73,9 @@ describe('BrowserLocalImportFileAccess', () => {
         });
       }),
     };
-    const access = new BrowserLocalImportFileAccess(pickerHost, undefined);
+    const access = new BrowserLocalImportFileAccess(pickerHost, undefined, undefined, {
+      preferNativePicker: true,
+    });
 
     const file = await access.openLocalImportFile({
       sourceKind: 'csv-file',
@@ -88,7 +94,9 @@ describe('BrowserLocalImportFileAccess', () => {
         },
       ]),
     };
-    const access = new BrowserLocalImportFileAccess(pickerHost, undefined);
+    const access = new BrowserLocalImportFileAccess(pickerHost, undefined, undefined, {
+      preferNativePicker: true,
+    });
 
     await access.openLocalImportFile({
       sourceKind: 'excel-file',
@@ -106,6 +114,73 @@ describe('BrowserLocalImportFileAccess', () => {
         ],
       }),
     );
+  });
+
+  it('prefers the hidden input fallback by default even when the native picker exists', async () => {
+    const file = new File(['sample'], 'fallback.csv', { type: 'text/csv' });
+    const listeners = new Map<string, EventListenerOrEventListenerObject>();
+    const pickerHost = {
+      showOpenFilePicker: vi.fn(async () => [
+        {
+          getFile: vi.fn(async () => file),
+        },
+      ]),
+    };
+    const input = {
+      type: '',
+      accept: '',
+      multiple: false,
+      style: {
+        display: '',
+      },
+      files: {
+        0: file,
+        length: 1,
+        item(index: number) {
+          return index === 0 ? file : null;
+        },
+      } as unknown as FileList,
+      addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
+        listeners.set(type, listener);
+      },
+      click() {
+        const listener = listeners.get('change');
+
+        if (typeof listener === 'function') {
+          listener(new Event('change'));
+          return;
+        }
+
+        listener?.handleEvent(new Event('change'));
+      },
+      remove() {},
+    };
+    const documentRef = {
+      body: {
+        appendChild() {},
+      },
+      createElement() {
+        return input;
+      },
+    };
+    const interactionHost = {
+      addEventListener() {},
+      removeEventListener() {},
+      setTimeout(callback: () => void, timeout?: number) {
+        return globalThis.setTimeout(callback, timeout);
+      },
+      clearTimeout(handle: ReturnType<typeof globalThis.setTimeout>) {
+        globalThis.clearTimeout(handle);
+      },
+    };
+    const access = new BrowserLocalImportFileAccess(pickerHost, documentRef, interactionHost);
+
+    const selected = await access.openLocalImportFile({
+      sourceKind: 'csv-file',
+    });
+
+    expect(pickerHost.showOpenFilePicker).not.toHaveBeenCalled();
+    expect(selected?.name).toBe('fallback.csv');
   });
 
   it('falls back to the hidden input when the native picker errors before selection starts', async () => {
@@ -153,7 +228,9 @@ describe('BrowserLocalImportFileAccess', () => {
         return input;
       },
     };
-    const access = new BrowserLocalImportFileAccess(pickerHost, documentRef);
+    const access = new BrowserLocalImportFileAccess(pickerHost, documentRef, undefined, {
+      preferNativePicker: true,
+    });
 
     await expect(
       access.openLocalImportFile({

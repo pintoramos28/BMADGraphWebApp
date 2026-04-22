@@ -98,6 +98,37 @@ describe('public/service-worker.js', () => {
     expect(harness.cache.put).not.toHaveBeenCalled();
   });
 
+  it('bypasses the cache for Vite dev modules and worker assets', async () => {
+    const harness = createServiceWorkerHarness();
+    const requests = [
+      {
+        method: 'GET',
+        url: 'https://shell.example/src/workers/import.worker.ts?worker_file&type=module',
+      },
+      {
+        method: 'GET',
+        url: 'https://shell.example/@vite/client',
+      },
+      {
+        method: 'GET',
+        url: 'https://shell.example/node_modules/.vite/deps/react.js?v=123',
+      },
+    ];
+
+    for (const request of requests) {
+      harness.caches.match.mockClear();
+      harness.cache.put.mockClear();
+      harness.fetch.mockClear();
+
+      const response = (await runFetch(harness.fetchHandler, request)) as Response;
+
+      expect(response.status).toBe(200);
+      expect(harness.fetch).toHaveBeenCalledOnce();
+      expect(harness.caches.match).not.toHaveBeenCalled();
+      expect(harness.cache.put).not.toHaveBeenCalled();
+    }
+  });
+
   it('still caches non-API shell assets', async () => {
     const harness = createServiceWorkerHarness();
     const request = {

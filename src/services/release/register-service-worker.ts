@@ -21,6 +21,14 @@ export interface RegisterServiceWorkerInput {
   window?: Window;
 }
 
+export interface DisableServiceWorkerInput {
+  navigator?: Navigator;
+  window?: Window;
+  cacheStorage?: CacheStorage;
+  sessionStorage?: Storage;
+  reloadFlagKey?: string;
+}
+
 export interface ServiceWorkerStatus {
   cacheStatus: 'not-available' | 'installing' | 'cached';
   offlineReady: boolean;
@@ -37,6 +45,51 @@ function createUnavailableStatus(): ServiceWorkerStatus {
     updateAvailable: false,
     scope: null,
   };
+}
+
+export async function disableServiceWorker(input: DisableServiceWorkerInput = {}): Promise<ServiceWorkerStatus> {
+  const navigatorObject = input.navigator ?? globalThis.navigator;
+  const windowObject = input.window ?? globalThis.window;
+
+  if (!navigatorObject?.serviceWorker || !windowObject?.isSecureContext) {
+    return createUnavailableStatus();
+  }
+
+  const reloadFlagKey = input.reloadFlagKey ?? 'bmad:disable-service-worker:reloaded';
+  const storage = input.sessionStorage ?? globalThis.sessionStorage;
+  const cacheStorage = input.cacheStorage ?? globalThis.caches;
+  const hadController = Boolean(navigatorObject.serviceWorker.controller);
+  const registrations =
+    typeof navigatorObject.serviceWorker.getRegistrations === 'function'
+      ? await navigatorObject.serviceWorker.getRegistrations()
+      : [];
+
+  await Promise.all(
+    registrations.map((registration) =>
+      registration.unregister().catch(() => false),
+    ),
+  );
+
+  if (cacheStorage && typeof cacheStorage.keys === 'function' && typeof cacheStorage.delete === 'function') {
+    const cacheKeys = await cacheStorage.keys().catch(() => []);
+
+    await Promise.all(cacheKeys.map((cacheKey) => cacheStorage.delete(cacheKey).catch(() => false)));
+  }
+
+  if (storage && typeof storage.removeItem === 'function' && !hadController) {
+    storage.removeItem(reloadFlagKey);
+  }
+
+  if (hadController && windowObject.location && storage && typeof storage.getItem === 'function' && typeof storage.setItem === 'function') {
+    const hasReloaded = storage.getItem(reloadFlagKey) === 'true';
+
+    if (!hasReloaded) {
+      storage.setItem(reloadFlagKey, 'true');
+      windowObject.location.reload();
+    }
+  }
+
+  return createUnavailableStatus();
 }
 
 async function resolveUpdateMetadata(input: RegisterServiceWorkerInput) {

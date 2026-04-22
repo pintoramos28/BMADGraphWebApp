@@ -9,7 +9,7 @@ import {
   type ShellEnvironmentDecision,
   type WorkspaceCompatibilityInput,
 } from './detect-environment';
-import { registerServiceWorker, type ServiceWorkerStatus } from './register-service-worker';
+import { disableServiceWorker, registerServiceWorker, type ServiceWorkerStatus } from './register-service-worker';
 
 export interface BootstrapShellInput {
   fetchImpl?: typeof fetch;
@@ -51,6 +51,10 @@ function assertPinnedSupportMatrixVersion(releaseManifest: ReleaseManifest, supp
 }
 
 export async function bootstrapShell(input: BootstrapShellInput = {}): Promise<BootstrapShellResult> {
+  const windowWithVitePreamble = (input.window ?? globalThis.window) as (Window & {
+    __vite_plugin_react_preamble_installed__?: boolean;
+  }) | undefined;
+  const isDevServer = Boolean(windowWithVitePreamble?.__vite_plugin_react_preamble_installed__);
   const releaseManifestOptions = input.fetchImpl ? { fetchImpl: input.fetchImpl } : undefined;
   const releaseManifest = await loadReleaseManifest(releaseManifestOptions);
   const supportMatrix = await loadSupportMatrix({
@@ -71,6 +75,11 @@ export async function bootstrapShell(input: BootstrapShellInput = {}): Promise<B
   const serviceWorker =
     environment.shouldRouteToUnsupported && environment.browserStatus === 'unsupported'
       ? createUnavailableServiceWorkerStatus()
+      : isDevServer
+        ? await disableServiceWorker({
+            ...(input.navigator ? { navigator: input.navigator } : {}),
+            ...(input.window ? { window: input.window } : {}),
+          }).catch(() => createUnavailableServiceWorkerStatus())
       : await registerServiceWorker({
           offlineReadyTimeoutMs: environment.offlineReadyTimeoutMs,
           updatePromptMode: environment.updatePromptMode,

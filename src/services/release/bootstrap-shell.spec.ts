@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   loadSupportMatrix: vi.fn(),
   detectBrowserEnvironment: vi.fn(),
   evaluateShellEnvironment: vi.fn(),
+  disableServiceWorker: vi.fn(),
   registerServiceWorker: vi.fn(),
 }));
 
@@ -25,12 +26,62 @@ vi.mock('./detect-environment', () => ({
 }));
 
 vi.mock('./register-service-worker', () => ({
+  disableServiceWorker: mocks.disableServiceWorker,
   registerServiceWorker: mocks.registerServiceWorker,
 }));
 
 import { bootstrapShell } from './bootstrap-shell';
 
 describe('bootstrapShell', () => {
+  it('disables the service worker on the Vite dev server instead of registering it', async () => {
+    const unavailableStatus = {
+      cacheStatus: 'not-available' as const,
+      offlineReady: false,
+      offlineReadyElapsedMs: null,
+      updateAvailable: false,
+      scope: null,
+    };
+
+    mocks.loadReleaseManifest.mockResolvedValue(releaseManifestFixture);
+    mocks.loadSupportMatrix.mockResolvedValue(supportMatrixFixture);
+    mocks.detectBrowserEnvironment.mockReturnValue({
+      family: 'chrome',
+      majorVersion: 126,
+      isDesktop: true,
+      secureContext: true,
+      userAgent: 'Mozilla/5.0 Chrome/126.0.0.0',
+    });
+    mocks.evaluateShellEnvironment.mockReturnValue({
+      lifecycle: 'ready',
+      browserStatus: 'supported',
+      workspaceStatus: 'unchecked',
+      secureContext: true,
+      supportMatrixVersion: supportMatrixFixture.version,
+      releaseNotes: releaseManifestFixture.releaseNotes,
+      updatePromptMode: 'soft-refresh',
+      cacheScope: '/',
+      offlineReadyTimeoutMs: 5000,
+      reasons: [],
+      shouldRouteToUnsupported: false,
+    });
+    mocks.disableServiceWorker.mockResolvedValue(unavailableStatus);
+
+    await expect(
+      bootstrapShell({
+        window: {
+          isSecureContext: true,
+          __vite_plugin_react_preamble_installed__: true,
+        } as Window & { __vite_plugin_react_preamble_installed__: boolean },
+        navigator: {} as Navigator,
+      }),
+    ).resolves.toMatchObject({
+      serviceWorker: unavailableStatus,
+    });
+
+    expect(mocks.disableServiceWorker).toHaveBeenCalledOnce();
+    expect(mocks.registerServiceWorker).not.toHaveBeenCalled();
+  });
+
   it('rejects a support matrix whose version does not match the manifest pin', async () => {
     mocks.loadReleaseManifest.mockResolvedValue(releaseManifestFixture);
     mocks.loadSupportMatrix.mockResolvedValue({
@@ -77,6 +128,7 @@ describe('bootstrapShell', () => {
       reasons: [],
       shouldRouteToUnsupported: false,
     });
+    mocks.disableServiceWorker.mockReset();
     mocks.registerServiceWorker.mockImplementation(async (input) => {
       input.onUpdateAvailable?.({} as ServiceWorkerRegistration, releaseManifestFixture.releaseNotes, 'soft-refresh');
       return serviceWorkerStatus;
@@ -127,6 +179,7 @@ describe('bootstrapShell', () => {
       reasons: [],
       shouldRouteToUnsupported: false,
     });
+    mocks.disableServiceWorker.mockReset();
     mocks.registerServiceWorker.mockRejectedValue(new Error('registration failed'));
 
     await expect(

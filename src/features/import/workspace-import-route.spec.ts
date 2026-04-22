@@ -4,15 +4,24 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { IMPORT_PREVIEW_BUDGET_MS } from './benchmark-timing';
+import { createImportPreviewStore } from './store';
 import {
   failImportIfActive,
+  bindWorkerImportFailureCallbacks,
+  failImportFromWorkerCallbackIfCurrent,
+  ensureImportRouteWorker,
+  initializeImportWorker,
   applyResolvedImportPreviewTiming,
   awaitImportBudgetThreshold,
   clearActiveImportPreview,
   createImportActivityTracker,
   detectOwnedImportBenchmarkScenario,
   describePartialPreviewNotice,
+  postWorkerImportFromRoute,
   postWorkerImportMessageWithBudget,
+  readFileArrayBuffer,
+  readFileText,
+  readFileWithFileReader,
   resolveDisplayedBenchmarkScenario,
   runImportBudgetedRead,
   toImportPreparationError,
@@ -34,6 +43,80 @@ afterEach(() => {
 });
 
 describe('describePartialPreviewNotice', () => {
+  it('reads text files through FileReader when the browser API is available', async () => {
+    class MockFileReader {
+      result: string | ArrayBuffer | null = null;
+      error: DOMException | null = null;
+      onabort: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onload: (() => void) | null = null;
+
+      readAsText(file: Blob) {
+        void file.text().then((value) => {
+          this.result = value;
+          this.onload?.();
+        });
+      }
+    }
+
+    vi.stubGlobal('FileReader', MockFileReader);
+
+    const file = new File([cleanCsvFixtureText], 'sample.csv', {
+      type: 'text/csv',
+    });
+
+    await expect(readFileText(file)).resolves.toContain('Sample,Reading,MeasuredAt');
+  });
+
+  it('reads binary files through FileReader when the browser API is available', async () => {
+    class MockFileReader {
+      result: string | ArrayBuffer | null = null;
+      error: DOMException | null = null;
+      onabort: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onload: (() => void) | null = null;
+
+      readAsArrayBuffer(file: Blob) {
+        void file.arrayBuffer().then((value) => {
+          this.result = value;
+          this.onload?.();
+        });
+      }
+    }
+
+    vi.stubGlobal('FileReader', MockFileReader);
+
+    const file = new File([cleanExcelFixtureBuffer], 'sample.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+
+    await expect(readFileArrayBuffer(file)).resolves.toMatchObject({
+      byteLength: cleanExcelFixtureBuffer.byteLength,
+    });
+  });
+
+  it('surfaces FileReader failures as read errors', async () => {
+    class MockFileReader {
+      result: string | ArrayBuffer | null = null;
+      error = new DOMException('mock read failed');
+      onabort: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onload: (() => void) | null = null;
+
+      readAsText() {
+        this.onerror?.();
+      }
+    }
+
+    vi.stubGlobal('FileReader', MockFileReader);
+
+    await expect(
+      readFileWithFileReader<string>(new Blob(['sample']), (reader, file) => {
+        reader.readAsText(file);
+      }),
+    ).rejects.toThrow('mock read failed');
+  });
+
   it('uses workbook-specific copy for capped Excel previews', () => {
     expect(
       describePartialPreviewNotice({
@@ -382,6 +465,340 @@ describe('failImportIfActive', () => {
     expect(clearBudgetTimer).toHaveBeenCalledWith('active-import');
     expect(disposeWorker).toHaveBeenCalledOnce();
     expect(failImport).toHaveBeenCalledWith(importError, 'active-import');
+  });
+});
+
+describe('failImportFromWorkerCallbackIfCurrent', () => {
+  it('ignores a late worker callback after a newer worker replaces the active import', () => {
+    const staleWorker = { label: 'stale-worker' };
+    const activeWorker = { label: 'active-worker' };
+    const failImport = vi.fn();
+
+    const handled = failImportFromWorkerCallbackIfCurrent({
+      worker: staleWorker,
+      activeWorker,
+      correlationId: 'stale-import',
+      detail: 'late worker error',
+      isActiveImport: () => true,
+      failImport,
+    });
+
+    expect(handled).toBe(false);
+    expect(failImport).not.toHaveBeenCalled();
+  });
+
+  it('fails the bound import only when the callback still belongs to the active worker and request', () => {
+    const worker = { label: 'active-worker' };
+    const failImport = vi.fn();
+
+    const handled = failImportFromWorkerCallbackIfCurrent({
+      worker,
+      activeWorker: worker,
+      correlationId: 'active-import',
+      detail: 'worker could not finish',
+      isActiveImport: (correlationId) => correlationId === 'active-import',
+      failImport,
+    });
+
+    expect(handled).toBe(true);
+    expect(failImport).toHaveBeenCalledWith('active-import', 'worker could not finish');
+  });
+});
+
+describe('bindWorkerImportFailureCallbacks', () => {
+  function createMockWorkerFailureTarget() {
+    return {
+      onerror: null,
+      onmessageerror: null,
+    } as unknown as Pick<Worker, 'onerror' | 'onmessageerror'>;
+  }
+
+  function createBoundImportFailureHarness() {
+    const store = createImportPreviewStore();
+    const staleWorker = createMockWorkerFailureTarget();
+    const activeWorker = createMockWorkerFailureTarget();
+    let currentWorker: Pick<Worker, 'onerror' | 'onmessageerror'> | null = staleWorker;
+
+    const failImport = (correlationId: string, detail: string) => {
+      store.getState().commands.failImport(
+        {
+          code: 'import.preview.worker-failed',
+          title: 'Preview could not be prepared',
+          detail,
+          retryable: true,
+        },
+        correlationId,
+      );
+    };
+
+    store.getState().commands.beginImport('stale-import', 'csv-file');
+    bindWorkerImportFailureCallbacks({
+      worker: staleWorker,
+      getActiveWorker: () => currentWorker,
+      correlationId: 'stale-import',
+      isActiveImport: (correlationId) => store.getState().activeCorrelationId === correlationId,
+      failImport,
+    });
+
+    store.getState().commands.beginImport('active-import', 'csv-file');
+    currentWorker = activeWorker;
+    bindWorkerImportFailureCallbacks({
+      worker: activeWorker,
+      getActiveWorker: () => currentWorker,
+      correlationId: 'active-import',
+      isActiveImport: (correlationId) => store.getState().activeCorrelationId === correlationId,
+      failImport,
+    });
+
+    return {
+      store,
+      staleWorker,
+      activeWorker,
+    };
+  }
+
+  it('keeps the active parsing import intact when a stale worker onerror fires after replacement', () => {
+    const { store, staleWorker } = createBoundImportFailureHarness();
+    const preventDefault = vi.fn();
+    const onerror = staleWorker.onerror;
+
+    onerror?.call(
+      {} as AbstractWorker,
+      {
+        message: 'stale worker error',
+        preventDefault,
+      } as unknown as ErrorEvent,
+    );
+
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(store.getState()).toMatchObject({
+      status: 'parsing',
+      activeCorrelationId: 'active-import',
+      error: null,
+    });
+  });
+
+  it('keeps the active parsing import intact when a stale worker onmessageerror fires after replacement', () => {
+    const { store, staleWorker, activeWorker } = createBoundImportFailureHarness();
+    const staleMessageError = staleWorker.onmessageerror;
+    const activeMessageError = activeWorker.onmessageerror;
+
+    staleMessageError?.call({} as Worker, {} as MessageEvent);
+
+    expect(store.getState()).toMatchObject({
+      status: 'parsing',
+      activeCorrelationId: 'active-import',
+      error: null,
+    });
+
+    activeMessageError?.call({} as Worker, {} as MessageEvent);
+
+    expect(store.getState()).toMatchObject({
+      status: 'error',
+      activeCorrelationId: null,
+      error: {
+        code: 'import.preview.worker-failed',
+        title: 'Preview could not be prepared',
+        detail: 'The import worker returned an unreadable preview message.',
+        retryable: true,
+      },
+    });
+  });
+});
+
+describe('initializeImportWorker', () => {
+  it('binds worker failure callbacks during initialization so bootstrap failures fail the active import', () => {
+    const preventDefault = vi.fn();
+    const failImport = vi.fn();
+    let onmessage: Worker['onmessage'] = null;
+    let onmessageerror: Worker['onmessageerror'] = null;
+    let onerror: Worker['onerror'] = null;
+
+    const worker = {
+      get onmessage() {
+        return onmessage;
+      },
+      set onmessage(handler) {
+        onmessage = handler;
+      },
+      get onmessageerror() {
+        return onmessageerror;
+      },
+      set onmessageerror(handler) {
+        onmessageerror = handler;
+      },
+      get onerror() {
+        return onerror;
+      },
+      set onerror(handler) {
+        onerror = handler;
+        handler?.call(
+          {} as AbstractWorker,
+          {
+            message: 'bootstrap failure',
+            preventDefault,
+          } as unknown as ErrorEvent,
+        );
+      },
+    } satisfies Pick<Worker, 'onmessage' | 'onerror' | 'onmessageerror'>;
+
+    const initializedWorker = initializeImportWorker({
+      createWorker: () => worker,
+      onMessage: vi.fn(),
+      getActiveWorker: () => null,
+      correlationId: 'bootstrap-import',
+      isActiveImport: (correlationId) => correlationId === 'bootstrap-import',
+      failImport,
+    });
+
+    expect(initializedWorker).toBeNull();
+    expect(typeof worker.onmessage).toBe('function');
+    expect(typeof worker.onmessageerror).toBe('function');
+    expect(typeof worker.onerror).toBe('function');
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(failImport).toHaveBeenCalledWith('bootstrap-import', 'bootstrap failure');
+  });
+
+  it('tears down a worker that fails before the route stores it as active', () => {
+    const preventDefault = vi.fn();
+    const failImport = vi.fn();
+    const disposeWorker = vi.fn();
+    let onmessage: Worker['onmessage'] = null;
+    let onmessageerror: Worker['onmessageerror'] = null;
+    let onerror: Worker['onerror'] = null;
+
+    const worker = {
+      get onmessage() {
+        return onmessage;
+      },
+      set onmessage(handler) {
+        onmessage = handler;
+      },
+      get onmessageerror() {
+        return onmessageerror;
+      },
+      set onmessageerror(handler) {
+        onmessageerror = handler;
+      },
+      get onerror() {
+        return onerror;
+      },
+      set onerror(handler) {
+        onerror = handler;
+        handler?.call(
+          {} as AbstractWorker,
+          {
+            message: 'bootstrap failure',
+            preventDefault,
+          } as unknown as ErrorEvent,
+        );
+      },
+      terminate: vi.fn(),
+    } satisfies Pick<Worker, 'onmessage' | 'onerror' | 'onmessageerror' | 'terminate'>;
+
+    const initializedWorker = initializeImportWorker({
+      createWorker: () => worker,
+      onMessage: vi.fn(),
+      getActiveWorker: () => null,
+      correlationId: 'bootstrap-import',
+      isActiveImport: (correlationId) => correlationId === 'bootstrap-import',
+      disposeWorker,
+      failImport,
+    });
+
+    expect(initializedWorker).toBeNull();
+    expect(disposeWorker).toHaveBeenCalledWith(worker);
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(failImport).toHaveBeenCalledWith('bootstrap-import', 'bootstrap failure');
+  });
+});
+
+describe('route worker import flow', () => {
+  it('does not retain or post to a worker that fails during synchronous bootstrap', () => {
+    const preventDefault = vi.fn();
+    const failImport = vi.fn();
+    const disposeWorker = vi.fn();
+    const armBudgetTimer = vi.fn();
+    const clearBudgetTimer = vi.fn();
+    const markBudgetExceeded = vi.fn();
+    let activeWorker: (Pick<Worker, 'postMessage' | 'onmessage' | 'onerror' | 'onmessageerror'> & {
+      terminate: ReturnType<typeof vi.fn>;
+    }) | null = null;
+    let onmessage: Worker['onmessage'] = null;
+    let onmessageerror: Worker['onmessageerror'] = null;
+    let onerror: Worker['onerror'] = null;
+
+    const worker = {
+      postMessage: vi.fn(),
+      get onmessage() {
+        return onmessage;
+      },
+      set onmessage(handler) {
+        onmessage = handler;
+      },
+      get onmessageerror() {
+        return onmessageerror;
+      },
+      set onmessageerror(handler) {
+        onmessageerror = handler;
+      },
+      get onerror() {
+        return onerror;
+      },
+      set onerror(handler) {
+        onerror = handler;
+        handler?.call(
+          {} as AbstractWorker,
+          {
+            message: 'bootstrap failure',
+            preventDefault,
+          } as unknown as ErrorEvent,
+        );
+      },
+      terminate: vi.fn(),
+    } satisfies Pick<Worker, 'postMessage' | 'onmessage' | 'onerror' | 'onmessageerror' | 'terminate'>;
+
+    const ensureWorker = (correlationId: string) =>
+      ensureImportRouteWorker({
+        currentWorker: activeWorker,
+        initializeWorker: () =>
+          initializeImportWorker({
+            createWorker: () => worker,
+            onMessage: vi.fn(),
+            getActiveWorker: () => activeWorker,
+            correlationId,
+            isActiveImport: (activeCorrelationId) => activeCorrelationId === correlationId,
+            disposeWorker,
+            failImport,
+          }),
+        storeWorker: (initializedWorker) => {
+          activeWorker = initializedWorker;
+        },
+      });
+
+    const didPost = postWorkerImportFromRoute({
+      correlationId: 'bootstrap-import',
+      sourceKind: 'csv-file',
+      payload: {
+        sourceLabel: 'Local CSV file',
+        textContent: 'Sample,Reading\nA-1,42.5',
+      },
+      ensureWorker,
+      budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+      armBudgetTimer,
+      clearBudgetTimer,
+      markBudgetExceeded,
+    });
+
+    expect(didPost).toBe(false);
+    expect(activeWorker).toBeNull();
+    expect(disposeWorker).toHaveBeenCalledWith(worker);
+    expect(failImport).toHaveBeenCalledWith('bootstrap-import', 'bootstrap failure');
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(worker.postMessage).not.toHaveBeenCalled();
+    expect(armBudgetTimer).not.toHaveBeenCalled();
+    expect(clearBudgetTimer).not.toHaveBeenCalled();
+    expect(markBudgetExceeded).not.toHaveBeenCalled();
   });
 });
 

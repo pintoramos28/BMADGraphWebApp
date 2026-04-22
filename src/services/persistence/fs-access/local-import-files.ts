@@ -44,6 +44,10 @@ export interface OpenLocalImportFileOptions {
   sourceKind: Extract<ImportSourceKind, 'csv-file' | 'excel-file'>;
 }
 
+export interface BrowserLocalImportFileAccessOptions {
+  preferNativePicker?: boolean;
+}
+
 export const HIDDEN_INPUT_CANCEL_POLL_MS = 50;
 export const HIDDEN_INPUT_CANCEL_GRACE_MS = 500;
 export const HIDDEN_INPUT_PICKER_STALE_TIMEOUT_MS = 60_000;
@@ -66,21 +70,24 @@ export class BrowserLocalImportFileAccess {
   readonly #pickerHost: FilePickerHost;
   readonly #document: DocumentLike | undefined;
   readonly #interactionHost: InteractionHost;
+  readonly #preferNativePicker: boolean;
 
   constructor(
     pickerHost: FilePickerHost = globalThis as typeof globalThis & FilePickerHost,
     documentRef: DocumentLike | undefined = globalThis.document as DocumentLike | undefined,
     interactionHost: InteractionHost = globalThis as typeof globalThis & InteractionHost,
+    options: BrowserLocalImportFileAccessOptions = {},
   ) {
     this.#pickerHost = pickerHost;
     this.#document = documentRef;
     this.#interactionHost = interactionHost;
+    this.#preferNativePicker = options.preferNativePicker ?? false;
   }
 
   async openLocalImportFile(options: OpenLocalImportFileOptions) {
     let nativePickerError: unknown = null;
 
-    if (this.#pickerHost.showOpenFilePicker) {
+    if (this.#preferNativePicker && this.#pickerHost.showOpenFilePicker) {
       try {
         const handles = await this.#pickerHost.showOpenFilePicker({
           excludeAcceptAllOption: false,

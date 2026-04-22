@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-import { parseImportPreview } from '../features/import';
+import { parseImportPreview } from '../features/import/parse-import-preview';
 import {
   importPreviewFailureMessageSchema,
   importPreviewProgressMessageSchema,

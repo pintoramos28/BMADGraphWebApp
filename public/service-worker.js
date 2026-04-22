@@ -3,11 +3,16 @@
 const CACHE_NAME = 'bmad-shell-v1';
 const PRECACHE_URLS = ['/', '/manifest.webmanifest', '/offline/shell-fallback.html'];
 const API_PATH_PREFIX = '/api/';
+const VITE_DEV_PATH_PREFIXES = ['/src/', '/@vite/', '/node_modules/.vite/'];
 
 function shouldBypassCache(request) {
   const url = new URL(request.url);
 
-  return url.pathname.startsWith(API_PATH_PREFIX);
+  return (
+    url.pathname.startsWith(API_PATH_PREFIX) ||
+    VITE_DEV_PATH_PREFIXES.some((prefix) => url.pathname.startsWith(prefix)) ||
+    url.searchParams.has('worker_file')
+  );
 }
 
 self.addEventListener('install', (event) => {
