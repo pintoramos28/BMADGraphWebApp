@@ -4,10 +4,12 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { IMPORT_PREVIEW_BUDGET_MS } from './benchmark-timing';
+import type { ImportPreviewDataset } from './preview-model';
 import { createImportPreviewStore } from './store';
 import {
   failImportIfActive,
   bindWorkerImportFailureCallbacks,
+  commitConfirmedImportToKernel,
   failImportFromWorkerCallbackIfCurrent,
   ensureImportRouteWorker,
   initializeImportWorker,
@@ -15,6 +17,8 @@ import {
   awaitImportBudgetThreshold,
   clearActiveImportPreview,
   createImportActivityTracker,
+  createReplayableSourceRequest,
+  createWorkerPayloadFromReplayableSourceRequest,
   detectOwnedImportBenchmarkScenario,
   describePartialPreviewNotice,
   postWorkerImportFromRoute,
@@ -26,6 +30,7 @@ import {
   runImportBudgetedRead,
   toImportPreparationError,
 } from './workspace-import-route';
+import { createWorkspaceKernelStore, createImportWorkspaceSnapshot } from '../../stores/workspace-kernel';
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const cleanCsvFixtureText = fs.readFileSync(
@@ -34,6 +39,14 @@ const cleanCsvFixtureText = fs.readFileSync(
 );
 const cleanExcelFixtureBuffer = fs.readFileSync(
   path.join(repoRoot, '_bmad-output', 'benchmarks', 'benchmark_set_clean', 'excel', 'import.clean.excel-preview.xlsx'),
+);
+const dirtyDelimiterFixtureText = fs.readFileSync(
+  path.join(repoRoot, '_bmad-output', 'benchmarks', 'benchmark_set_dirty', 'csv', 'import.dirty.delimiter-repair.csv'),
+  'utf8',
+);
+const dirtyTypeFixtureText = fs.readFileSync(
+  path.join(repoRoot, '_bmad-output', 'benchmarks', 'benchmark_set_dirty', 'csv', 'import.dirty.type-repair.csv'),
+  'utf8',
 );
 
 afterEach(() => {
@@ -349,14 +362,14 @@ describe('detectOwnedImportBenchmarkScenario', () => {
     ).resolves.toBe('import.clean.excel-preview');
   });
 
-  it('leaves CSV and pasted table imports untagged during standard detection even when they match BMAD fixture content', async () => {
+  it('tags only the owned clean CSV fixture through standard text import detection', async () => {
     await expect(
       detectOwnedImportBenchmarkScenario({
         sourceKind: 'csv-file',
         fileName: 'import.clean.csv-preview.csv',
         textContent: cleanCsvFixtureText,
       }),
-    ).resolves.toBeNull();
+    ).resolves.toBe('import.clean.csv-preview');
     await expect(
       detectOwnedImportBenchmarkScenario({
         sourceKind: 'pasted-table',
@@ -365,10 +378,34 @@ describe('detectOwnedImportBenchmarkScenario', () => {
     ).resolves.toBeNull();
   });
 
-  it('leaves arbitrary imports untagged even when filenames mimic owned fixtures', async () => {
+  it('tags the owned dirty CSV fixtures through the standard import path', async () => {
+    await expect(
+      detectOwnedImportBenchmarkScenario({
+        sourceKind: 'csv-file',
+        fileName: 'import.dirty.delimiter-repair.csv',
+        textContent: dirtyDelimiterFixtureText,
+      }),
+    ).resolves.toBe('import.dirty.delimiter-repair');
+    await expect(
+      detectOwnedImportBenchmarkScenario({
+        sourceKind: 'csv-file',
+        fileName: 'import.dirty.type-repair.csv',
+        textContent: dirtyTypeFixtureText,
+      }),
+    ).resolves.toBe('import.dirty.type-repair');
+  });
+
+  it('leaves arbitrary imports untagged when the owned fixture proof is incomplete', async () => {
     const mismatchedExcelFixtureBuffer = cleanExcelFixtureBuffer.subarray();
     mismatchedExcelFixtureBuffer[0] = mismatchedExcelFixtureBuffer[0] === 0 ? 1 : 0;
 
+    await expect(
+      detectOwnedImportBenchmarkScenario({
+        sourceKind: 'csv-file',
+        fileName: 'renamed-clean-fixture.csv',
+        textContent: cleanCsvFixtureText,
+      }),
+    ).resolves.toBeNull();
     await expect(
       detectOwnedImportBenchmarkScenario({
         sourceKind: 'csv-file',
@@ -822,6 +859,54 @@ describe('createImportActivityTracker', () => {
   });
 });
 
+describe('createWorkerPayloadFromReplayableSourceRequest', () => {
+  it('re-reads local Excel files for repair reruns instead of depending on a retained transferred buffer', async () => {
+    const localFile = new File([cleanExcelFixtureBuffer], 'repair.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    const initialTransferredBuffer = cleanExcelFixtureBuffer.buffer.slice(
+      cleanExcelFixtureBuffer.byteOffset,
+      cleanExcelFixtureBuffer.byteOffset + cleanExcelFixtureBuffer.byteLength,
+    );
+    const readBinaryFile = vi
+      .fn<((file: File) => Promise<ArrayBuffer>)>()
+      .mockResolvedValue(cleanExcelFixtureBuffer.buffer.slice(
+        cleanExcelFixtureBuffer.byteOffset,
+        cleanExcelFixtureBuffer.byteOffset + cleanExcelFixtureBuffer.byteLength,
+      ));
+    const replayableRequest = createReplayableSourceRequest({
+      sourceKind: 'excel-file',
+      payload: {
+        sourceLabel: 'Local Excel workbook',
+        fileName: 'repair.xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        binaryContent: initialTransferredBuffer,
+      },
+      localFile,
+    });
+
+    const repairedPayload = await createWorkerPayloadFromReplayableSourceRequest(
+      replayableRequest,
+      {
+        delimiter: null,
+        headerSelection: 'first-row-header',
+        columnTypeOverrides: {},
+        missingValuePolicy: null,
+        additionalColumnsAcknowledgement: null,
+      },
+      {
+        readBinaryFile,
+      },
+    );
+
+    expect(readBinaryFile).toHaveBeenCalledOnce();
+    expect(readBinaryFile).toHaveBeenCalledWith(localFile);
+    expect(repairedPayload.binaryContent).toBeDefined();
+    expect(repairedPayload.binaryContent).not.toBe(initialTransferredBuffer);
+    expect(repairedPayload.binaryContent?.byteLength).toBe(cleanExcelFixtureBuffer.byteLength);
+  });
+});
+
 describe('applyResolvedImportPreviewTiming', () => {
   it('writes end-to-end readiness timing back into the resolved preview payload', () => {
     const resolvedPreview = applyResolvedImportPreviewTiming(
@@ -842,6 +927,13 @@ describe('applyResolvedImportPreviewTiming', () => {
         sampleRows: [],
         assumptions: [],
         uncertainties: [],
+        issues: [],
+        repairSelections: {
+          delimiter: null,
+          headerSelection: null,
+          columnTypeOverrides: {},
+          missingValuePolicy: null,
+        },
         timing: {
           durationMs: 900,
           budgetMs: IMPORT_PREVIEW_BUDGET_MS,
@@ -877,6 +969,13 @@ describe('resolveDisplayedBenchmarkScenario', () => {
           sampleRows: [],
           assumptions: [],
           uncertainties: [],
+          issues: [],
+          repairSelections: {
+            delimiter: null,
+            headerSelection: null,
+            columnTypeOverrides: {},
+            missingValuePolicy: null,
+          },
           timing: {
             durationMs: 420,
             budgetMs: IMPORT_PREVIEW_BUDGET_MS,
@@ -961,6 +1060,13 @@ describe('resolveDisplayedBenchmarkScenario', () => {
           ],
           assumptions: [],
           uncertainties: [],
+          issues: [],
+          repairSelections: {
+            delimiter: null,
+            headerSelection: null,
+            columnTypeOverrides: {},
+            missingValuePolicy: null,
+          },
           timing: {
             durationMs: 420,
             budgetMs: IMPORT_PREVIEW_BUDGET_MS,
@@ -1057,5 +1163,587 @@ describe('postWorkerImportMessageWithBudget', () => {
     expect(armBudgetTimer.mock.invocationCallOrder[0]!).toBeLessThan(postMessage.mock.invocationCallOrder[0]!);
     expect(clearBudgetTimer).not.toHaveBeenCalled();
     expect(markBudgetExceeded).toHaveBeenCalledOnce();
+  });
+});
+
+describe('commitConfirmedImportToKernel', () => {
+  it('rolls back the kernel mutation when persistence fails', async () => {
+    vi.stubGlobal('indexedDB', {});
+
+    const kernelStore = createWorkspaceKernelStore({
+      snapshot: createImportWorkspaceSnapshot('workspace_demo_confirm'),
+      ledger: [],
+    });
+    const initialSnapshot = kernelStore.getState().selectors.persistedWorkspace();
+    const initialLedger = structuredClone(kernelStore.getState().ledger);
+    const preview: ImportPreviewDataset = {
+      previewId: 'preview_confirm',
+      source: {
+        sourceKind: 'csv-file',
+        sourceLabel: 'Local CSV file',
+        fileName: 'repair.csv',
+        mimeType: 'text/csv',
+        sheetName: null,
+        benchmarkScenario: null,
+      },
+      rowCount: 2,
+      isPartialPreview: true,
+      columnCount: 2,
+      columns: [
+        {
+          columnId: 'column_sample',
+          sourceName: 'Sample',
+          sampleValues: ['A-1', 'A-2'],
+          inferredType: 'text',
+          confidence: 'high',
+          nonEmptyCount: 2,
+          nullCount: 0,
+        },
+        {
+          columnId: 'column_reading',
+          sourceName: 'Reading',
+          sampleValues: ['42.5', '44.1'],
+          inferredType: 'numeric',
+          confidence: 'high',
+          nonEmptyCount: 2,
+          nullCount: 0,
+        },
+      ],
+      sampleRows: [
+        {
+          rowId: 'row_1',
+          cells: [
+            { columnId: 'column_sample', value: 'A-1' },
+            { columnId: 'column_reading', value: '42.5' },
+          ],
+        },
+        {
+          rowId: 'row_2',
+          cells: [
+            { columnId: 'column_sample', value: 'A-2' },
+            { columnId: 'column_reading', value: '44.1' },
+          ],
+        },
+      ],
+      assumptions: [],
+      uncertainties: [],
+      issues: [],
+      repairSelections: {
+        delimiter: null,
+        headerSelection: 'first-row-header',
+        columnTypeOverrides: {},
+        missingValuePolicy: 'mark-empty',
+      },
+      confirmedDataset: {
+        rowCount: 2,
+        columnCount: 2,
+        fingerprint: 'import:confirmed-dataset-for-rollback',
+        columns: [
+          {
+            columnId: 'column_sample',
+            sourceName: 'Sample',
+            dataType: 'string',
+          },
+          {
+            columnId: 'column_reading',
+            sourceName: 'Reading',
+            dataType: 'number',
+          },
+        ],
+        rows: [
+          {
+            column_sample: 'A-1',
+            column_reading: '42.5',
+          },
+          {
+            column_sample: 'A-2',
+            column_reading: '44.1',
+          },
+        ],
+      },
+      timing: {
+        durationMs: 320,
+        budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+        exceededBudget: false,
+      },
+    };
+
+    await expect(
+      commitConfirmedImportToKernel({
+        kernelStore,
+        preview,
+        confirmationToken: 'confirm_token',
+        saveWorkspace: async () => {
+          throw new Error('indexeddb write failed');
+        },
+      }),
+    ).rejects.toThrow('indexeddb write failed');
+
+    expect(kernelStore.getState().selectors.persistedWorkspace()).toEqual(initialSnapshot);
+    expect(kernelStore.getState().ledger).toEqual(initialLedger);
+  });
+
+  it('rolls back only the failed confirmed import when later kernel mutations land before persistence fails', async () => {
+    vi.stubGlobal('indexedDB', {});
+
+    const kernelStore = createWorkspaceKernelStore({
+      snapshot: createImportWorkspaceSnapshot('workspace_demo_confirm_concurrent_rollback'),
+      ledger: [],
+    });
+    const preview: ImportPreviewDataset = {
+      previewId: 'preview_confirm_concurrent_rollback',
+      source: {
+        sourceKind: 'csv-file',
+        sourceLabel: 'Local CSV file',
+        fileName: 'repair.csv',
+        mimeType: 'text/csv',
+        sheetName: null,
+        benchmarkScenario: null,
+      },
+      rowCount: 2,
+      isPartialPreview: true,
+      columnCount: 2,
+      columns: [
+        {
+          columnId: 'column_sample',
+          sourceName: 'Sample',
+          sampleValues: ['A-1', 'A-2'],
+          inferredType: 'text',
+          confidence: 'high',
+          nonEmptyCount: 2,
+          nullCount: 0,
+        },
+        {
+          columnId: 'column_reading',
+          sourceName: 'Reading',
+          sampleValues: ['42.5', '44.1'],
+          inferredType: 'numeric',
+          confidence: 'high',
+          nonEmptyCount: 2,
+          nullCount: 0,
+        },
+      ],
+      sampleRows: [
+        {
+          rowId: 'row_1',
+          cells: [
+            { columnId: 'column_sample', value: 'A-1' },
+            { columnId: 'column_reading', value: '42.5' },
+          ],
+        },
+        {
+          rowId: 'row_2',
+          cells: [
+            { columnId: 'column_sample', value: 'A-2' },
+            { columnId: 'column_reading', value: '44.1' },
+          ],
+        },
+      ],
+      assumptions: [],
+      uncertainties: [],
+      issues: [],
+      repairSelections: {
+        delimiter: null,
+        headerSelection: 'first-row-header',
+        columnTypeOverrides: {},
+        missingValuePolicy: 'mark-empty',
+      },
+      confirmedDataset: {
+        rowCount: 2,
+        columnCount: 2,
+        fingerprint: 'import:confirmed-dataset-for-concurrent-rollback',
+        columns: [
+          {
+            columnId: 'column_sample',
+            sourceName: 'Sample',
+            dataType: 'string',
+          },
+          {
+            columnId: 'column_reading',
+            sourceName: 'Reading',
+            dataType: 'number',
+          },
+        ],
+        rows: [
+          {
+            column_sample: 'A-1',
+            column_reading: '42.5',
+          },
+          {
+            column_sample: 'A-2',
+            column_reading: '44.1',
+          },
+        ],
+      },
+      timing: {
+        durationMs: 320,
+        budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+        exceededBudget: false,
+      },
+    };
+
+    await expect(
+      commitConfirmedImportToKernel({
+        kernelStore,
+        preview,
+        confirmationToken: 'confirm_token_concurrent_rollback',
+        saveWorkspace: async (store) => {
+          store.getState().commands.updateTelemetrySnapshot(
+            {
+              status: 'idle',
+              offlineQueueDepth: 0,
+              lastGraphRenderMs: 321,
+            },
+            {
+              actorId: 'test',
+              correlationId: 'telemetry_update_after_confirm',
+              occurredAt: '2026-04-23T12:05:00.000Z',
+            },
+          );
+          throw new Error('indexeddb write failed');
+        },
+      }),
+    ).rejects.toThrow('indexeddb write failed');
+
+    expect(
+      kernelStore.getState().snapshot.datasets.some((dataset) => dataset.datasetId === 'dataset_import_confirm_token_concurrent_rollback'),
+    ).toBe(false);
+    expect(kernelStore.getState().snapshot.telemetrySnapshot.lastGraphRenderMs).toBe(321);
+    expect(kernelStore.getState().ledger.at(-1)).toEqual(
+      expect.objectContaining({
+        type: 'import.confirmation-rolled-back',
+      }),
+    );
+  });
+
+  it('keeps the confirmed import in the kernel when persistence succeeds', async () => {
+    vi.stubGlobal('indexedDB', {});
+
+    const kernelStore = createWorkspaceKernelStore({
+      snapshot: createImportWorkspaceSnapshot('workspace_demo_confirm_success'),
+      ledger: [],
+    });
+    const preview: ImportPreviewDataset = {
+      previewId: 'preview_confirm_success',
+      source: {
+        sourceKind: 'csv-file',
+        sourceLabel: 'Local CSV file',
+        fileName: 'repair.csv',
+        mimeType: 'text/csv',
+        sheetName: null,
+        benchmarkScenario: null,
+      },
+      rowCount: 2,
+      isPartialPreview: false,
+      columnCount: 2,
+      columns: [
+        {
+          columnId: 'column_sample',
+          sourceName: 'Sample',
+          sampleValues: ['A-1', 'A-2'],
+          inferredType: 'text',
+          confidence: 'high',
+          nonEmptyCount: 2,
+          nullCount: 0,
+        },
+        {
+          columnId: 'column_reading',
+          sourceName: 'Reading',
+          sampleValues: ['42.5', '44.1'],
+          inferredType: 'numeric',
+          confidence: 'high',
+          nonEmptyCount: 2,
+          nullCount: 0,
+        },
+      ],
+      sampleRows: [
+        {
+          rowId: 'row_1',
+          cells: [
+            { columnId: 'column_sample', value: 'A-1' },
+            { columnId: 'column_reading', value: '42.5' },
+          ],
+        },
+      ],
+      assumptions: [],
+      uncertainties: [],
+      issues: [],
+      repairSelections: {
+        delimiter: null,
+        headerSelection: 'first-row-header',
+        columnTypeOverrides: {},
+        missingValuePolicy: 'mark-empty',
+      },
+      confirmedDataset: {
+        rowCount: 2,
+        columnCount: 2,
+        fingerprint: 'import:confirmed-dataset',
+        columns: [
+          {
+            columnId: 'column_sample',
+            sourceName: 'Sample',
+            dataType: 'string',
+          },
+          {
+            columnId: 'column_reading',
+            sourceName: 'Reading',
+            dataType: 'number',
+          },
+        ],
+        rows: [
+          {
+            column_sample: 'A-1',
+            column_reading: '42.5',
+          },
+          {
+            column_sample: 'A-2',
+            column_reading: '44.1',
+          },
+        ],
+      },
+      timing: {
+        durationMs: 320,
+        budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+        exceededBudget: false,
+      },
+    };
+    const sourceFileHandle = {
+      name: 'repair.csv',
+      async getFile() {
+        return new File(['Sample,Reading\nA-1,42.5'], 'repair.csv', {
+          type: 'text/csv',
+        });
+      },
+      async createWritable() {
+        return {
+          async write() {},
+          async close() {},
+        };
+      },
+    };
+
+    await expect(
+      commitConfirmedImportToKernel({
+        kernelStore,
+        preview,
+        confirmationToken: 'confirm_token_success',
+        sourceFileHandle,
+        saveWorkspace: async (store, datasetFileHandles) => {
+          if (datasetFileHandles) {
+            store.getState().commands.replaceDatasetFileHandles(datasetFileHandles);
+          }
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(kernelStore.getState().snapshot.datasets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          datasetId: 'dataset_import_confirm_token_success',
+          rows: [
+            {
+              column_sample: 'A-1',
+              column_reading: '42.5',
+            },
+            {
+              column_sample: 'A-2',
+              column_reading: '44.1',
+            },
+          ],
+          sourceFile: {
+            fileName: 'repair.csv',
+            fileHandleToken: 'dataset.dataset_import_confirm_token_success.source-file',
+          },
+        }),
+      ]),
+    );
+    expect(kernelStore.getState().selectors.datasetFileHandles()).toEqual([
+      expect.objectContaining({
+        datasetId: 'dataset_import_confirm_token_success',
+        fileName: 'repair.csv',
+        fileHandleToken: 'dataset.dataset_import_confirm_token_success.source-file',
+        handle: sourceFileHandle,
+      }),
+    ]);
+  });
+
+  it('fails closed when the preview is missing confirmed dataset metadata', async () => {
+    vi.stubGlobal('indexedDB', {});
+
+    const kernelStore = createWorkspaceKernelStore({
+      snapshot: createImportWorkspaceSnapshot('workspace_demo_confirm_missing_confirmed_dataset'),
+      ledger: [],
+    });
+    const initialSnapshot = kernelStore.getState().selectors.persistedWorkspace();
+    const initialLedger = structuredClone(kernelStore.getState().ledger);
+    const preview: ImportPreviewDataset = {
+      previewId: 'preview_confirm_missing_confirmed_dataset',
+      source: {
+        sourceKind: 'csv-file',
+        sourceLabel: 'Local CSV file',
+        fileName: 'repair.csv',
+        mimeType: 'text/csv',
+        sheetName: null,
+        benchmarkScenario: null,
+      },
+      rowCount: 1,
+      isPartialPreview: true,
+      columnCount: 2,
+      columns: [
+        {
+          columnId: 'column_sample',
+          sourceName: 'Sample',
+          sampleValues: ['A-1'],
+          inferredType: 'text',
+          confidence: 'high',
+          nonEmptyCount: 1,
+          nullCount: 0,
+        },
+        {
+          columnId: 'column_reading',
+          sourceName: 'Reading',
+          sampleValues: ['42.5'],
+          inferredType: 'numeric',
+          confidence: 'high',
+          nonEmptyCount: 1,
+          nullCount: 0,
+        },
+      ],
+      sampleRows: [
+        {
+          rowId: 'row_1',
+          cells: [
+            { columnId: 'column_sample', value: 'A-1' },
+            { columnId: 'column_reading', value: '42.5' },
+          ],
+        },
+      ],
+      assumptions: [],
+      uncertainties: [],
+      issues: [],
+      repairSelections: {
+        delimiter: null,
+        headerSelection: 'first-row-header',
+        columnTypeOverrides: {},
+        missingValuePolicy: 'mark-empty',
+      },
+      timing: {
+        durationMs: 320,
+        budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+        exceededBudget: false,
+      },
+    };
+
+    await expect(
+      commitConfirmedImportToKernel({
+        kernelStore,
+        preview,
+        confirmationToken: 'confirm_missing_confirmed_dataset',
+      }),
+    ).rejects.toThrow('Confirmed import dataset metadata is required before committing the import.');
+
+    expect(kernelStore.getState().selectors.persistedWorkspace()).toEqual(initialSnapshot);
+    expect(kernelStore.getState().ledger).toEqual(initialLedger);
+  });
+
+  it('rejects confirmation when durable persistence is unavailable', async () => {
+    const kernelStore = createWorkspaceKernelStore({
+      snapshot: createImportWorkspaceSnapshot('workspace_demo_confirm_requires_persistence'),
+      ledger: [],
+    });
+    const initialSnapshot = kernelStore.getState().selectors.persistedWorkspace();
+    const initialLedger = structuredClone(kernelStore.getState().ledger);
+    const preview: ImportPreviewDataset = {
+      previewId: 'preview_confirm_requires_persistence',
+      source: {
+        sourceKind: 'csv-file',
+        sourceLabel: 'Local CSV file',
+        fileName: 'repair.csv',
+        mimeType: 'text/csv',
+        sheetName: null,
+        benchmarkScenario: null,
+      },
+      rowCount: 1,
+      isPartialPreview: false,
+      columnCount: 2,
+      columns: [
+        {
+          columnId: 'column_sample',
+          sourceName: 'Sample',
+          sampleValues: ['A-1'],
+          inferredType: 'text',
+          confidence: 'high',
+          nonEmptyCount: 1,
+          nullCount: 0,
+        },
+        {
+          columnId: 'column_reading',
+          sourceName: 'Reading',
+          sampleValues: ['42.5'],
+          inferredType: 'numeric',
+          confidence: 'high',
+          nonEmptyCount: 1,
+          nullCount: 0,
+        },
+      ],
+      sampleRows: [
+        {
+          rowId: 'row_1',
+          cells: [
+            { columnId: 'column_sample', value: 'A-1' },
+            { columnId: 'column_reading', value: '42.5' },
+          ],
+        },
+      ],
+      assumptions: [],
+      uncertainties: [],
+      issues: [],
+      repairSelections: {
+        delimiter: null,
+        headerSelection: 'first-row-header',
+        columnTypeOverrides: {},
+        missingValuePolicy: 'mark-empty',
+      },
+      confirmedDataset: {
+        rowCount: 1,
+        columnCount: 2,
+        fingerprint: 'import:confirmed-dataset',
+        columns: [
+          {
+            columnId: 'column_sample',
+            sourceName: 'Sample',
+            dataType: 'string',
+          },
+          {
+            columnId: 'column_reading',
+            sourceName: 'Reading',
+            dataType: 'number',
+          },
+        ],
+        rows: [
+          {
+            column_sample: 'A-1',
+            column_reading: '42.5',
+          },
+        ],
+      },
+      timing: {
+        durationMs: 320,
+        budgetMs: IMPORT_PREVIEW_BUDGET_MS,
+        exceededBudget: false,
+      },
+    };
+
+    await expect(
+      commitConfirmedImportToKernel({
+        kernelStore,
+        preview,
+        confirmationToken: 'confirm_requires_persistence',
+        persistenceAvailable: false,
+      }),
+    ).rejects.toThrow('Confirmed imports require persistent browser storage.');
+
+    expect(kernelStore.getState().selectors.persistedWorkspace()).toEqual(initialSnapshot);
+    expect(kernelStore.getState().ledger).toEqual(initialLedger);
   });
 });

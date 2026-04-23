@@ -15,6 +15,12 @@ const compatibilityEnvelope: WorkspaceCompatibilityEnvelope = {
   migrationPolicy: 'migrate-on-open',
 };
 
+function createSourceFile(name: string, contents: string, lastModified: number) {
+  return new File([contents], name, {
+    lastModified,
+  });
+}
+
 describe('workspace reopen integration', () => {
   it('round-trips a saved workspace and hydrates WorkspaceKernel without collapsing graph identity', async () => {
     const repository = createWorkspaceRepository(new InMemoryWorkspaceStorage());
@@ -244,9 +250,7 @@ describe('workspace reopen integration', () => {
     const handle = {
       name: 'battery-cycles.csv',
       async getFile() {
-        return {
-          name: 'battery-cycles.csv',
-        } as File;
+        return createSourceFile('battery-cycles.csv', 'battery-cycles', 1713398400000);
       },
       async createWritable() {
         return {
@@ -317,9 +321,7 @@ describe('workspace reopen integration', () => {
     const handle = {
       name: 'battery-cycles.csv',
       async getFile() {
-        return {
-          name: 'battery-cycles.csv',
-        } as File;
+        return createSourceFile('battery-cycles.csv', 'battery-cycles', 1713398400000);
       },
       async createWritable() {
         return {
@@ -423,9 +425,7 @@ describe('workspace reopen integration', () => {
     const originalHandle = {
       name: 'battery-cycles.csv',
       async getFile() {
-        return {
-          name: 'battery-cycles.csv',
-        } as File;
+        return createSourceFile('battery-cycles.csv', 'battery-cycles', 1713398400000);
       },
       async createWritable() {
         return {
@@ -437,9 +437,7 @@ describe('workspace reopen integration', () => {
     const relinkedHandle = {
       name: 'battery-cycles-relinked.csv',
       async getFile() {
-        return {
-          name: 'battery-cycles-relinked.csv',
-        } as File;
+        return createSourceFile('battery-cycles-relinked.csv', 'battery-cycles-relinked', 1713398460000);
       },
       async createWritable() {
         return {
@@ -567,9 +565,7 @@ describe('workspace reopen integration', () => {
     const originalHandle = {
       name: 'battery-cycles.csv',
       async getFile() {
-        return {
-          name: 'battery-cycles.csv',
-        } as File;
+        return createSourceFile('battery-cycles.csv', 'battery-cycles', 1713398400000);
       },
       async createWritable() {
         return {
@@ -581,9 +577,7 @@ describe('workspace reopen integration', () => {
     const relinkedHandle = {
       name: 'battery-cycles-relinked.csv',
       async getFile() {
-        return {
-          name: 'battery-cycles-relinked.csv',
-        } as File;
+        return createSourceFile('battery-cycles-relinked.csv', 'battery-cycles-relinked', 1713398460000);
       },
       async createWritable() {
         return {
@@ -721,9 +715,7 @@ describe('workspace reopen integration', () => {
     const relinkedHandle = {
       name: 'battery-cycles-relinked.csv',
       async getFile() {
-        return {
-          name: 'battery-cycles-relinked.csv',
-        } as File;
+        return createSourceFile('battery-cycles-relinked.csv', 'battery-cycles-relinked', 1713398460000);
       },
       async createWritable() {
         return {
@@ -1240,9 +1232,7 @@ describe('workspace reopen integration', () => {
     const mismatchedHandle = {
       name: 'different-source.csv',
       async getFile() {
-        return {
-          name: 'different-source.csv',
-        } as File;
+        return createSourceFile('different-source.csv', 'different-source', 1713398520000);
       },
       async createWritable() {
         return {

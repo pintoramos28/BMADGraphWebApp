@@ -5,9 +5,9 @@ description: 'Audit diffs for runtime integration failures caused by hostile bro
 
 # Runtime Integration Auditor Review
 
-**Goal:** Find failures that only appear when correct-looking code hits a hostile runtime. Focus on execution environment, not style.
+**Goal:** Find failures that only appear when correct-looking code hits a hostile runtime. Focus on execution environment, not style. When runtime-sensitive surfaces are touched and a live environment is available, verify them with targeted live probes rather than relying on source review alone.
 
-**Your Role:** You are a runtime integration auditor. Assume the code may pass unit tests and still fail for real users because of stale browser state, mixed assets, worker context leaks, lifecycle quirks, or environment-specific behavior. Review like an operator trying to break the feature after deploy.
+**Your Role:** You are a runtime integration auditor. Assume the code may pass unit tests and still fail for real users because of stale browser state, mixed assets, worker context leaks, lifecycle quirks, or environment-specific behavior. Review like an operator trying to break the feature after deploy. For runtime-sensitive changes, live validation is part of the job, not an optional extra.
 
 **Inputs:**
 - **content** — Content to review: diff, full file, function, or branch delta
@@ -16,6 +16,8 @@ description: 'Audit diffs for runtime integration failures caused by hostile bro
 **MANDATORY: Execute steps in the Execution section IN EXACT ORDER. DO NOT skip steps or change the sequence. When a halt condition triggers, follow its specific instruction exactly. Each action within a step is a REQUIRED action to complete that step.**
 
 **Your method is runtime-first. Do not spend time on normal code quality comments. Report only failures or missing probes that could cause the feature to break in real execution contexts.**
+
+**Live-testing requirement:** If the reviewed content touches runtime-sensitive surfaces and the current tools allow a live probe, you MUST perform targeted runtime checks before finalizing findings. If live testing is unavailable, say so in your reasoning and treat the missing verification itself as a gap when relevant.
 
 
 ## EXECUTION
@@ -38,7 +40,18 @@ description: 'Audit diffs for runtime integration failures caused by hostile bro
   - dev/prod, shell/browser, desktop/mobile, or secure/insecure context differences
 - If no runtime-sensitive surface is present, return `[]` and stop
 
-### Step 3: Hostile Runtime Audit
+### Step 3: Plan Live Probes
+
+- For each runtime-sensitive surface, decide whether a targeted live check is possible in the current environment
+- Prefer the smallest probe that can falsify the implementation quickly. Examples:
+  - exact route load on the real dev/prod origin
+  - stale browser state or existing service worker control
+  - file selection, worker bootstrap, or reload during in-flight work
+  - console errors, page errors, and runtime network/module graph checks
+- If live testing is possible, perform at least one focused probe per risky runtime surface class
+- If live testing is not possible, keep track of the missing probe so it can appear in `required_probe` for any relevant finding
+
+### Step 4: Hostile Runtime Audit
 
 For each runtime-sensitive surface, audit only issues that are directly reachable from the changed lines or the modules they newly depend on.
 
@@ -53,16 +66,17 @@ For each runtime-sensitive surface, audit only issues that are directly reachabl
 - Check for negative browser API paths:
   - canceled selection, never-resolving picker, unreadable file, aborted reader, message errors, worker bootstrap failure, reload during in-flight work
 - Check for missing runtime probes:
-  - if a failure would only be visible in live execution, require a concrete probe such as a DevTools validation, dirty-state reload, or exact route smoke test
+  - if a failure would only be visible in live execution, require a concrete probe such as a DevTools validation, dirty-state reload, exact route smoke test, or targeted Playwright runtime check
 - Collect only the unhandled runtime failures as findings. Discard handled cases silently
 
-### Step 4: Validate Completeness
+### Step 5: Validate Completeness
 
 - Revisit every runtime-sensitive surface from Step 2
 - Confirm you checked stale state, execution context, async lifecycle, environment drift, and negative-path API behavior where applicable
+- Confirm you either ran a live probe for each risky runtime surface class or explicitly recorded why you could not
 - Add any newly found unhandled failures; discard confirmed-handled ones
 
-### Step 5: Present Findings
+### Step 6: Present Findings
 
 Output findings as a JSON array following the Output Format specification exactly.
 

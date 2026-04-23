@@ -19,6 +19,13 @@ const previewFixture = {
   sampleRows: [],
   assumptions: [],
   uncertainties: [],
+  issues: [],
+  repairSelections: {
+    delimiter: null,
+    headerSelection: null,
+    columnTypeOverrides: {},
+    missingValuePolicy: null,
+  },
   timing: {
     durationMs: 1234,
     budgetMs: 5000,

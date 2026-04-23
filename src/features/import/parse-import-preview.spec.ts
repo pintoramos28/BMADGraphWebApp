@@ -1,4 +1,4 @@
-import Papa from 'papaparse';
+import Papa, { type ParseResult, type ParseStepResult, type Parser } from 'papaparse';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as XLSX from 'xlsx';
 
@@ -22,6 +22,7 @@ describe('parseImportPreview', () => {
 
     expect(preview.source.fileName).toBe('clean.csv');
     expect(preview.rowCount).toBe(2);
+    expect(preview.confirmedDataset).toBeUndefined();
     expect(preview.columns).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -84,6 +85,243 @@ describe('parseImportPreview', () => {
 
     expect(preview.rowCount).toBe(IMPORT_PREVIEW_ROW_LIMIT);
     expect(preview.isPartialPreview).toBe(true);
+  });
+
+  it('keeps confirmed-import metadata aligned to the preview semantics when the preview is partial', async () => {
+    const bodyRows = Array.from({ length: IMPORT_PREVIEW_ROW_LIMIT + 25 }, (_, index) =>
+      index === IMPORT_PREVIEW_ROW_LIMIT + 24
+        ? `A-${index + 1},${index + 1},late-notes`
+        : `A-${index + 1},${index + 1}`,
+    );
+    const preview = await parseImportPreview({
+      sourceKind: 'csv-file',
+      sourceLabel: 'Local CSV file',
+      fileName: 'large.csv',
+      mimeType: 'text/csv',
+      textContent: ['Sample,Reading', ...bodyRows].join('\n'),
+      materializeConfirmedDataset: true,
+    });
+
+    expect(preview.rowCount).toBe(IMPORT_PREVIEW_ROW_LIMIT);
+    expect(preview.isPartialPreview).toBe(true);
+    expect(preview.confirmedDataset).toMatchObject({
+      rowCount: IMPORT_PREVIEW_ROW_LIMIT + 25,
+      columnCount: 3,
+    });
+    expect(preview.confirmedDataset?.fingerprint).not.toBe(`preview:${preview.previewId}`);
+    expect(preview.confirmedDataset?.rows).toHaveLength(IMPORT_PREVIEW_ROW_LIMIT + 25);
+  });
+
+  it('aborts CSV preview sampling once the preview boundary is established before collecting the full confirmed dataset', async () => {
+    const csvRows = ['Sample,Reading'];
+
+    for (let index = 0; index < IMPORT_PREVIEW_ROW_LIMIT + 25; index += 1) {
+      csvRows.push(`A-${index + 1},${index + 1}`);
+    }
+
+    const csvText = csvRows.join('\n');
+    let parseCallCount = 0;
+    let firstPassStepCount = 0;
+
+    vi.doMock('papaparse', async () => {
+      const actual = await vi.importActual<typeof import('papaparse')>('papaparse');
+
+      return {
+        ...actual,
+        default: {
+          ...actual.default,
+          parse: vi.fn(
+            (
+              input: string,
+              config: {
+                step?: (result: ParseStepResult<string[]>, parser: Parser) => void;
+                complete?: (result: ParseResult<string[]>) => void;
+              },
+            ) => {
+            parseCallCount += 1;
+            let aborted = false;
+            const parser = {
+              abort() {
+                aborted = true;
+              },
+            };
+            const rows = input.split('\n').map((line) => line.split(','));
+
+            for (const row of rows) {
+              if (aborted) {
+                break;
+              }
+
+              if (parseCallCount === 1) {
+                firstPassStepCount += 1;
+
+                if (firstPassStepCount > IMPORT_PREVIEW_ROW_LIMIT + 2) {
+                  throw new Error('preview parsing read past the preview boundary');
+                }
+              }
+
+              config.step?.(
+                {
+                  data: row,
+                  errors: [],
+                  meta: {
+                    delimiter: ',',
+                  },
+                },
+                parser,
+              );
+            }
+
+            config.complete?.({
+              data: [],
+              errors: [],
+              meta: {
+                delimiter: ',',
+              },
+            });
+            },
+          ),
+        },
+      };
+    });
+
+    const { parseImportPreview: parseMockedImportPreview } = await import('./parse-import-preview');
+
+    const preview = await parseMockedImportPreview({
+      sourceKind: 'csv-file',
+      sourceLabel: 'Local CSV file',
+      fileName: 'large.csv',
+      mimeType: 'text/csv',
+      textContent: csvText,
+      materializeConfirmedDataset: true,
+    });
+
+    expect(parseCallCount).toBe(2);
+    expect(firstPassStepCount).toBe(IMPORT_PREVIEW_ROW_LIMIT + 2);
+    expect(preview.rowCount).toBe(IMPORT_PREVIEW_ROW_LIMIT);
+    expect(preview.confirmedDataset?.rowCount).toBe(IMPORT_PREVIEW_ROW_LIMIT + 25);
+  });
+
+  it('keeps Excel preview rendering bounded while carrying the full confirmed dataset rows', async () => {
+    const workbook = XLSX.utils.book_new();
+    const bodyRows = Array.from({ length: IMPORT_PREVIEW_ROW_LIMIT + 25 }, (_, index) => [
+      `A-${index + 1}`,
+      `${index + 1}`,
+    ]);
+    const sheet = XLSX.utils.aoa_to_sheet([['Sample', 'Reading'], ...bodyRows]);
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Readings');
+
+    const preview = await parseImportPreview({
+      sourceKind: 'excel-file',
+      sourceLabel: 'Local Excel workbook',
+      fileName: 'large-confirmed.xlsx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      binaryContent: XLSX.write(workbook, {
+        bookType: 'xlsx',
+        type: 'array',
+      }) as ArrayBuffer,
+      materializeConfirmedDataset: true,
+    });
+
+    expect(preview.rowCount).toBe(IMPORT_PREVIEW_ROW_LIMIT);
+    expect(preview.isPartialPreview).toBe(true);
+    expect(preview.confirmedDataset?.rowCount).toBe(IMPORT_PREVIEW_ROW_LIMIT + 25);
+    expect(preview.confirmedDataset?.rows).toHaveLength(IMPORT_PREVIEW_ROW_LIMIT + 25);
+  });
+
+  it('establishes the workbook preview boundary before reading late rows for the confirmed dataset', async () => {
+    const denseSheet = [] as Array<Array<XLSX.CellObject | undefined> | undefined>;
+    const createTrackedRow = (rowIndex: number, cells: Array<XLSX.CellObject | undefined>) =>
+      new Proxy(cells, {
+        get(target, property, receiver) {
+          if (typeof property === 'string' && /^\d+$/.test(property) && Reflect.has(target, property)) {
+            if (rowIndex === 0 && leftHeaderRow) {
+              establishedPreviewBoundary = true;
+            }
+
+            if (rowIndex !== 0) {
+              leftHeaderRow = true;
+            }
+
+            if (rowIndex >= IMPORT_PREVIEW_ROW_LIMIT + 2 && !establishedPreviewBoundary) {
+              throw new Error('late workbook rows were read before the preview boundary was established');
+            }
+          }
+
+          return Reflect.get(target, property, receiver);
+        },
+      });
+
+    let leftHeaderRow = false;
+    let establishedPreviewBoundary = false;
+    denseSheet[0] = createTrackedRow(0, [
+      { t: 's', v: 'Sample', w: 'Sample' },
+      { t: 's', v: 'Reading', w: 'Reading' },
+    ]);
+
+    for (let index = 0; index < IMPORT_PREVIEW_ROW_LIMIT + 25; index += 1) {
+      denseSheet[index + 1] = createTrackedRow(index + 1, [
+        { t: 's', v: `A-${index + 1}`, w: `A-${index + 1}` },
+        { t: 'n', v: index + 1, w: `${index + 1}` },
+      ]);
+    }
+
+    Object.assign(denseSheet, {
+      '!ref': `A1:B${IMPORT_PREVIEW_ROW_LIMIT + 26}`,
+    });
+
+    vi.doMock('xlsx', async () => {
+      const actual = await vi.importActual<typeof import('xlsx')>('xlsx');
+
+      return {
+        ...actual,
+        read: vi.fn(() => ({
+          SheetNames: ['Tracked'],
+          Sheets: {
+            Tracked: denseSheet as typeof denseSheet & XLSX.WorkSheet,
+          },
+        })),
+      };
+    });
+
+    const { parseImportPreview: parseMockedImportPreview } = await import('./parse-import-preview');
+
+    const preview = await parseMockedImportPreview({
+      sourceKind: 'excel-file',
+      sourceLabel: 'Local Excel workbook',
+      fileName: 'tracked.xlsx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      binaryContent: new ArrayBuffer(8),
+      materializeConfirmedDataset: true,
+    });
+
+    expect(establishedPreviewBoundary).toBe(true);
+    expect(preview.rowCount).toBe(IMPORT_PREVIEW_ROW_LIMIT);
+    expect(preview.confirmedDataset?.rowCount).toBe(IMPORT_PREVIEW_ROW_LIMIT + 25);
+  });
+
+  it('defers confirmed dataset materialization until an explicit confirm-time parse requests it', async () => {
+    const bodyRows = Array.from({ length: IMPORT_PREVIEW_ROW_LIMIT + 25 }, (_, index) => `A-${index + 1},${index + 1}`);
+    const input = {
+      sourceKind: 'csv-file' as const,
+      sourceLabel: 'Local CSV file',
+      fileName: 'large.csv',
+      mimeType: 'text/csv',
+      textContent: ['Sample,Reading', ...bodyRows].join('\n'),
+    };
+
+    const previewOnly = await parseImportPreview(input);
+    const materialized = await parseImportPreview({
+      ...input,
+      materializeConfirmedDataset: true,
+    });
+
+    expect(previewOnly.confirmedDataset).toBeUndefined();
+    expect(materialized.confirmedDataset).toMatchObject({
+      rowCount: IMPORT_PREVIEW_ROW_LIMIT + 25,
+      columnCount: 2,
+    });
+    expect(materialized.previewId).toBe(previewOnly.previewId);
   });
 
   it('detects partial Excel previews from populated rows even when the workbook is sparse', async () => {
@@ -350,6 +588,159 @@ describe('parseImportPreview', () => {
     });
 
     expect(preview.source.benchmarkScenario).toBeNull();
+  });
+
+  it('requires explicit delimiter confirmation when CSV auto-detection sees conflicting delimiter signals', async () => {
+    const preview = await parseImportPreview({
+      sourceKind: 'csv-file',
+      sourceLabel: 'Local CSV file',
+      fileName: 'ambiguous-delimiter.csv',
+      mimeType: 'text/csv',
+      textContent: ['Sample;Reading', 'A-1;42.5', 'Sample,Reading', 'A-2,41.0'].join('\n'),
+    });
+
+    expect(preview.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          issueId: 'issue_import_delimiter_confirmation',
+          severity: 'blocking',
+        }),
+      ]),
+    );
+    expect(preview.assumptions.find((assumption) => assumption.category === 'delimiter')?.confidence).toBe('medium');
+  });
+
+  it('keeps CSV delimiter ambiguity blocked even when auto-detection collapses the parse to one column', async () => {
+    vi.doMock('papaparse', async () => {
+      const actual = await vi.importActual<typeof import('papaparse')>('papaparse');
+
+      return {
+        ...actual,
+        default: {
+          ...actual.default,
+          parse: vi.fn(
+            (
+              _input: string,
+              config: {
+                step?: (result: ParseStepResult<string[]>, parser: Parser) => void;
+                complete?: (result: ParseResult<string[]>) => void;
+              },
+            ) => {
+              const parser = {
+                abort() {},
+              };
+              const rows = [['Sample;Reading'], ['A-1;42.5'], ['Sample,Reading'], ['A-2,41.0']];
+
+              for (const row of rows) {
+                config.step?.(
+                  {
+                    data: row,
+                    errors: [],
+                    meta: {
+                      delimiter: ',',
+                    },
+                  },
+                  parser,
+                );
+              }
+
+              config.complete?.({
+                data: [],
+                errors: [],
+                meta: {
+                  delimiter: ',',
+                },
+              });
+            },
+          ),
+        },
+      };
+    });
+
+    const { parseImportPreview: parseMockedImportPreview } = await import('./parse-import-preview');
+    const preview = await parseMockedImportPreview({
+      sourceKind: 'csv-file',
+      sourceLabel: 'Local CSV file',
+      fileName: 'ambiguous-one-column.csv',
+      mimeType: 'text/csv',
+      textContent: ['Sample;Reading', 'A-1;42.5', 'Sample,Reading', 'A-2,41.0'].join('\n'),
+    });
+
+    expect(preview.columnCount).toBe(1);
+    expect(preview.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          issueId: 'issue_import_delimiter_confirmation',
+          severity: 'blocking',
+        }),
+      ]),
+    );
+  });
+
+  it('keeps pasted-table delimiter ambiguity behind the repair gate', async () => {
+    vi.doMock('papaparse', async () => {
+      const actual = await vi.importActual<typeof import('papaparse')>('papaparse');
+
+      return {
+        ...actual,
+        default: {
+          ...actual.default,
+          parse: vi.fn(
+            (
+              _input: string,
+              config: {
+                step?: (result: ParseStepResult<string[]>, parser: Parser) => void;
+                complete?: (result: ParseResult<string[]>) => void;
+              },
+            ) => {
+              const parser = {
+                abort() {},
+              };
+              const rows = [['Sample;Reading'], ['A-1;42.5'], ['Sample,Reading'], ['A-2,41.0']];
+
+              for (const row of rows) {
+                config.step?.(
+                  {
+                    data: row,
+                    errors: [],
+                    meta: {
+                      delimiter: ',',
+                    },
+                  },
+                  parser,
+                );
+              }
+
+              config.complete?.({
+                data: [],
+                errors: [],
+                meta: {
+                  delimiter: ',',
+                },
+              });
+            },
+          ),
+        },
+      };
+    });
+
+    const { parseImportPreview: parseMockedImportPreview } = await import('./parse-import-preview');
+    const preview = await parseMockedImportPreview({
+      sourceKind: 'pasted-table',
+      sourceLabel: 'Pasted table',
+      mimeType: 'text/plain',
+      textContent: ['Sample;Reading', 'A-1;42.5', 'Sample,Reading', 'A-2,41.0'].join('\n'),
+    });
+
+    expect(preview.columnCount).toBe(1);
+    expect(preview.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          issueId: 'issue_import_delimiter_confirmation',
+          severity: 'blocking',
+        }),
+      ]),
+    );
   });
 
   it.each([

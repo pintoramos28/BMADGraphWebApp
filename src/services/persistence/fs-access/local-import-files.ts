@@ -1,8 +1,7 @@
 import type { ImportSourceKind } from '../../../features/import';
+import type { WorkspaceFileHandle } from './portable-workspace-files';
 
-interface FilePickerHandle {
-  getFile(): Promise<File>;
-}
+type FilePickerHandle = WorkspaceFileHandle;
 
 interface FilePickerHost {
   showOpenFilePicker?: (options?: Record<string, unknown>) => Promise<FilePickerHandle[]>;
@@ -48,6 +47,11 @@ export interface BrowserLocalImportFileAccessOptions {
   preferNativePicker?: boolean;
 }
 
+export interface LocalImportSelection {
+  file: File;
+  handle?: WorkspaceFileHandle;
+}
+
 export const HIDDEN_INPUT_CANCEL_POLL_MS = 50;
 export const HIDDEN_INPUT_CANCEL_GRACE_MS = 500;
 export const HIDDEN_INPUT_PICKER_STALE_TIMEOUT_MS = 60_000;
@@ -84,7 +88,7 @@ export class BrowserLocalImportFileAccess {
     this.#preferNativePicker = options.preferNativePicker ?? false;
   }
 
-  async openLocalImportFile(options: OpenLocalImportFileOptions) {
+  async openLocalImportSource(options: OpenLocalImportFileOptions): Promise<LocalImportSelection | null> {
     let nativePickerError: unknown = null;
 
     if (this.#preferNativePicker && this.#pickerHost.showOpenFilePicker) {
@@ -111,7 +115,18 @@ export class BrowserLocalImportFileAccess {
           ],
         });
 
-        return handles[0]?.getFile() ?? null;
+        const handle = handles[0];
+
+        if (!handle) {
+          return null;
+        }
+
+        const file = await handle.getFile();
+
+        return {
+          file,
+          handle,
+        };
       } catch (error) {
         if (isFilePickerCancellationError(error)) {
           return null;
@@ -132,7 +147,7 @@ export class BrowserLocalImportFileAccess {
       throw new Error('File selection is unavailable in this environment.');
     }
 
-    return new Promise<File | null>((resolve, reject) => {
+    return new Promise<LocalImportSelection | null>((resolve, reject) => {
       const input = documentRef.createElement('input');
       input.type = 'file';
       input.accept = resolveLocalImportAccept(options.sourceKind);
@@ -193,7 +208,7 @@ export class BrowserLocalImportFileAccess {
         clearStalePickerTimeout();
         this.#interactionHost.removeEventListener?.('focus', handleFocusReturn);
         input.remove();
-        resolve(file);
+        resolve(file ? { file } : null);
       };
 
       const fail = (error: unknown) => {
@@ -252,5 +267,11 @@ export class BrowserLocalImportFileAccess {
         fail(error);
       }
     });
+  }
+
+  async openLocalImportFile(options: OpenLocalImportFileOptions) {
+    const selection = await this.openLocalImportSource(options);
+
+    return selection?.file ?? null;
   }
 }

@@ -3,10 +3,12 @@ import { createStore } from 'zustand/vanilla';
 import { validateLedgerOrdering, initializeWorkspaceVersion } from './events';
 import {
   applyWorkerEnvelopeReducer,
+  confirmImportReducer,
   promoteReferenceGraphReducer,
   queueWorkerRequestReducer,
   replaceDatasetFileHandlesReducer,
   replaceIssuesReducer,
+  rollbackConfirmedImportReducer,
   replaceSnapshotReducer,
   updateTelemetrySnapshotReducer,
 } from './reducers';
@@ -74,6 +76,12 @@ export function createWorkspaceKernelStore(options: WorkspaceKernelStoreOptions)
       },
       promoteReferenceGraph(input) {
         set((state) => promoteReferenceGraphReducer(toKernelData(state), input));
+      },
+      confirmImport(input) {
+        set((state) => confirmImportReducer(toKernelData(state), input));
+      },
+      rollbackConfirmedImport(input) {
+        set((state) => rollbackConfirmedImportReducer(toKernelData(state), input));
       },
       replaceIssues(issues, meta) {
         set((state) => replaceIssuesReducer(toKernelData(state), issues, meta));

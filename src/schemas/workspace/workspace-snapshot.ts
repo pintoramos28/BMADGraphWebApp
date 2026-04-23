@@ -28,6 +28,8 @@ export const datasetSourceFileSchema = strictObject({
   fileHandleToken: identifierSchema,
 });
 
+export const datasetRowSchema = z.record(identifierSchema, z.string());
+
 export const datasetSchema = strictObject({
   datasetId: identifierSchema,
   displayName: nonEmptyStringSchema,
@@ -36,6 +38,7 @@ export const datasetSchema = strictObject({
   rowCount: nonNegativeIntegerSchema,
   columnCount: nonNegativeIntegerSchema,
   columns: z.array(datasetColumnSchema),
+  rows: z.array(datasetRowSchema).optional(),
   sourceFile: datasetSourceFileSchema.optional(),
 });
 

@@ -584,6 +584,198 @@ describe('WorkspaceKernel', () => {
     ).toThrow(/workspace versions/i);
   });
 
+  it('commits a confirmed import through the kernel with a placeholder reference graph', () => {
+    const store = createWorkspaceKernelStore({
+      snapshot: structuredClone(workspaceSnapshotFixture),
+      ledger: [],
+    });
+
+    store.getState().commands.confirmImport({
+      previewId: 'preview_csv',
+      graphId: 'graph_import_confirm_001',
+      source: {
+        sourceKind: 'csv-file',
+        sourceLabel: 'Local CSV file',
+        fileName: 'dirty.csv',
+        benchmarkScenario: 'import.dirty.type-repair',
+      },
+      repairSelections: {
+        delimiter: ',',
+        headerSelection: 'first-row-header',
+        columnTypeOverrides: {
+          col_2: 'numeric',
+        },
+        missingValuePolicy: 'mark-empty',
+      },
+      dataset: {
+        datasetId: 'dataset_import_confirm_001',
+        displayName: 'dirty.csv',
+        sourceKind: 'csv-file',
+        fingerprint: 'preview:preview_csv',
+        rowCount: 3,
+        columnCount: 2,
+        columns: [
+          {
+            columnId: 'col_1',
+            sourceName: 'Sample',
+            dataType: 'string',
+            semanticRole: 'unassigned',
+            unit: null,
+            status: 'confirmed',
+          },
+          {
+            columnId: 'col_2',
+            sourceName: 'Reading',
+            dataType: 'number',
+            semanticRole: 'unassigned',
+            unit: null,
+            status: 'confirmed',
+          },
+        ],
+      },
+      issues: [
+        {
+          ...issueRecordFixture,
+          severity: 'warning',
+        },
+      ],
+      actorId: 'workspace-import-route',
+      correlationId: 'confirm_preview_csv',
+      occurredAt: '2026-04-22T14:00:00Z',
+    });
+
+    expect(store.getState().snapshot.datasets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          datasetId: 'ds_main',
+          displayName: 'battery-cycles.csv',
+        }),
+        expect.objectContaining({
+          datasetId: 'dataset_import_confirm_001',
+          displayName: 'dirty.csv',
+        }),
+      ]),
+    );
+    expect(store.getState().snapshot.transformPipeline).toEqual(workspaceSnapshotFixture.transformPipeline);
+    expect(store.getState().snapshot.formulaColumns).toEqual(workspaceSnapshotFixture.formulaColumns);
+    expect(store.getState().snapshot.evidence).toEqual(workspaceSnapshotFixture.evidence);
+    expect(store.getState().snapshot.graphDefinitions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          graphId: 'graph_capacity_fade',
+          datasetId: 'ds_main',
+          status: 'candidate',
+        }),
+        expect.objectContaining({
+          graphId: 'graph_import_confirm_001',
+          datasetId: 'dataset_import_confirm_001',
+          status: 'reference',
+        }),
+      ]),
+    );
+    expect(store.getState().snapshot.referenceGraphId).toBe('graph_import_confirm_001');
+    expect(store.getState().snapshot.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          issueId: `${issueRecordFixture.issueId}:dataset_import_confirm_001`,
+          source: expect.objectContaining({
+            entityType: 'dataset',
+            entityId: 'dataset_import_confirm_001',
+          }),
+          contextRef: expect.objectContaining({
+            routeKey: 'workspaceDetail',
+            workspaceId: workspaceSnapshotFixture.workspaceId,
+            graphId: 'graph_import_confirm_001',
+            panel: 'readiness',
+          }),
+          repairActions: [],
+        }),
+      ]),
+    );
+    expect(store.getState().ledger.at(-1)).toMatchObject({
+      type: 'import.confirmed',
+      correlationId: 'confirm_preview_csv',
+      payload: {
+        datasetId: 'dataset_import_confirm_001',
+        previewId: 'preview_csv',
+        source: {
+          sourceKind: 'csv-file',
+          sourceLabel: 'Local CSV file',
+          fileName: 'dirty.csv',
+          benchmarkScenario: 'import.dirty.type-repair',
+        },
+        repairSelections: {
+          delimiter: ',',
+          headerSelection: 'first-row-header',
+          columnTypeOverrides: {
+            col_2: 'numeric',
+          },
+          missingValuePolicy: 'mark-empty',
+        },
+      },
+    });
+  });
+
+  it('rejects confirmed imports that still carry blocking issues', () => {
+    const store = createWorkspaceKernelStore({
+      snapshot: structuredClone(workspaceSnapshotFixture),
+      ledger: [],
+    });
+
+    expect(() =>
+      store.getState().commands.confirmImport({
+        previewId: 'preview_csv',
+        graphId: 'graph_import_blocked',
+        source: {
+          sourceKind: 'csv-file',
+          sourceLabel: 'Local CSV file',
+          fileName: 'blocked.csv',
+          benchmarkScenario: 'import.dirty.type-repair',
+        },
+        repairSelections: {
+          delimiter: ',',
+          headerSelection: 'first-row-header',
+          columnTypeOverrides: {},
+          missingValuePolicy: null,
+          additionalColumnsAcknowledgement: null,
+        },
+        dataset: {
+          datasetId: 'dataset_import_blocked',
+          displayName: 'blocked.csv',
+          sourceKind: 'csv-file',
+          fingerprint: 'preview:preview_csv',
+          rowCount: 1,
+          columnCount: 1,
+          columns: [
+            {
+              columnId: 'col_1',
+              sourceName: 'Sample',
+              dataType: 'string',
+              semanticRole: 'unassigned',
+              unit: null,
+              status: 'confirmed',
+            },
+          ],
+          rows: [
+            {
+              col_1: 'A-1',
+            },
+          ],
+        },
+        issues: [
+          {
+            ...issueRecordFixture,
+            severity: 'blocking',
+            status: 'open',
+          },
+        ],
+        actorId: 'workspace-import-route',
+        correlationId: 'confirm_preview_blocked',
+        occurredAt: '2026-04-22T14:05:00Z',
+      }),
+    ).toThrow(/blocking issues remain unresolved/i);
+  });
+
   it('keeps persisted workspace data out of ViewState', () => {
     const kernelStore = createWorkspaceKernelStore({
       snapshot: workspaceSnapshotFixture,

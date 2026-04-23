@@ -1,10 +1,15 @@
 import Papa, { type ParseResult, type ParseStepResult, type Parser } from 'papaparse';
 import * as XLSX from 'xlsx';
 
-import type { ImportBenchmarkScenario, ImportSourceKind } from './preview-model';
+import {
+  createDefaultImportRepairSelections,
+  type ImportBenchmarkScenario,
+  type ImportSourceKind,
+} from './preview-model';
 import { buildImportPreviewDataset, type TabularPreviewInput } from './normalize-preview';
 
 export const IMPORT_PREVIEW_ROW_LIMIT = 200;
+const IMPORT_PREVIEW_SAMPLE_ROW_LIMIT = IMPORT_PREVIEW_ROW_LIMIT + 2;
 
 export interface ImportPreviewParseInput {
   sourceKind: ImportSourceKind;
@@ -14,6 +19,8 @@ export interface ImportPreviewParseInput {
   benchmarkScenario?: ImportBenchmarkScenario | null | undefined;
   textContent?: string | null | undefined;
   binaryContent?: ArrayBuffer | null | undefined;
+  repairSelections?: ReturnType<typeof createDefaultImportRepairSelections> | undefined;
+  materializeConfirmedDataset?: boolean | undefined;
 }
 
 const DELIMITER_CANDIDATES = [',', '\t', ';', '|'] as const;
@@ -36,6 +43,10 @@ function looksNumeric(value: string) {
 
 function looksDate(value: string) {
   if (value.length === 0 || looksNumeric(value)) {
+    return false;
+  }
+
+  if (!/\d.*[-/:\s].*\d|[A-Za-z]{3,}\s+\d{1,2}/.test(value)) {
     return false;
   }
 
@@ -244,9 +255,13 @@ function detectDelimitedPreviewDelimiter(textContent: string) {
   const strongestCompetingCandidate = delimiterCandidates.find(
     (candidate) => candidate.delimiter !== strongestCandidate?.delimiter && candidate.modeCount > 0,
   );
+  const candidatesWithSignal = delimiterCandidates.filter((candidate) => candidate.modeCount > 0);
 
   if (!strongestCandidate) {
-    return '';
+    return {
+      delimiter: '',
+      requiresDelimiterConfirmation: candidatesWithSignal.length > 1,
+    };
   }
 
   if (
@@ -255,7 +270,10 @@ function detectDelimitedPreviewDelimiter(textContent: string) {
     strongestCompetingCandidate.modeCount === strongestCandidate.modeCount &&
     strongestCompetingCandidate.linesWithDelimiter === strongestCandidate.linesWithDelimiter
   ) {
-    return '';
+    return {
+      delimiter: '',
+      requiresDelimiterConfirmation: true,
+    };
   }
 
   if (
@@ -264,63 +282,119 @@ function detectDelimitedPreviewDelimiter(textContent: string) {
     strongestCandidate.linesWithDelimiter === DELIMITER_OVERRIDE_MIN_REPEATED_LINE_COUNT &&
     strongestCandidate.dominantDelimiterCount === 1
   ) {
-    return '';
-  }
-
-  return strongestCandidate.delimiter;
-}
-
-function parseDelimitedRows(textContent: string) {
-  const rows: string[][] = [];
-  const previewTargetRowCount = IMPORT_PREVIEW_ROW_LIMIT + 2;
-  let parsedDelimiter: string | null = null;
-  let parseError: string | null = null;
-
-  Papa.parse<string[]>(textContent, {
-    delimiter: detectDelimitedPreviewDelimiter(textContent),
-    preview: 0,
-    skipEmptyLines: 'greedy',
-    step: (result: ParseStepResult<unknown>, parser: Parser) => {
-      const fatalError = getFatalDelimitedParseError(result.errors);
-
-      if (fatalError) {
-        parseError = fatalError.message ?? 'The tabular text could not be parsed.';
-        parser.abort();
-        return;
-      }
-
-      parsedDelimiter = result.meta.delimiter || parsedDelimiter;
-      const normalizedRow = normalizeDelimitedRow(
-        Array.isArray(result.data) ? (result.data as Array<string | null | undefined>) : [],
-      );
-
-      if (!hasPreviewableValues(normalizedRow)) {
-        return;
-      }
-
-      rows.push(normalizedRow);
-
-      if (rows.length >= previewTargetRowCount) {
-        parser.abort();
-      }
-    },
-    complete: (result: ParseResult<unknown>) => {
-      parsedDelimiter = result.meta.delimiter || parsedDelimiter;
-      const fatalError = getFatalDelimitedParseError(result.errors);
-
-      if (!parseError && fatalError) {
-        parseError = fatalError.message ?? 'The tabular text could not be parsed.';
-      }
-    },
-  });
-
-  if (parseError) {
-    throw new Error(parseError);
+    return {
+      delimiter: '',
+      requiresDelimiterConfirmation: true,
+    };
   }
 
   return {
-    delimiter: parsedDelimiter,
-    rows,
+    delimiter: strongestCandidate.delimiter,
+    requiresDelimiterConfirmation: false,
+  };
+}
+
+function parseDelimitedRows(
+  textContent: string,
+  options: {
+    delimiterOverride?: ReturnType<typeof createDefaultImportRepairSelections>['delimiter'];
+  } = {},
+) {
+  const detectedDelimiter = options.delimiterOverride
+    ? {
+        delimiter: options.delimiterOverride,
+        requiresDelimiterConfirmation: false,
+      }
+    : detectDelimitedPreviewDelimiter(textContent);
+  const configuredDelimiter = detectedDelimiter.delimiter;
+  const collectRows = (stopAfterPreviewBoundary: boolean) => {
+    const previewRows: string[][] = [];
+    const confirmedRows: string[][] = [];
+    let parsedDelimiter: string | null = null;
+    let parseError: string | null = null;
+    let totalPreviewableRowCount = 0;
+    let reachedPreviewBoundary = false;
+
+    Papa.parse<string[]>(textContent, {
+      delimiter: configuredDelimiter,
+      preview: 0,
+      skipEmptyLines: 'greedy',
+      step: (result: ParseStepResult<unknown>, parser: Parser) => {
+        const fatalError = getFatalDelimitedParseError(result.errors);
+
+        if (fatalError) {
+          parseError = fatalError.message ?? 'The tabular text could not be parsed.';
+          parser.abort();
+          return;
+        }
+
+        parsedDelimiter = result.meta.delimiter || parsedDelimiter;
+        const normalizedRow = normalizeDelimitedRow(
+          Array.isArray(result.data) ? (result.data as Array<string | null | undefined>) : [],
+        );
+
+        if (!hasPreviewableValues(normalizedRow)) {
+          return;
+        }
+
+        totalPreviewableRowCount += 1;
+
+        if (!stopAfterPreviewBoundary) {
+          confirmedRows.push(normalizedRow);
+        }
+
+        if (previewRows.length < IMPORT_PREVIEW_SAMPLE_ROW_LIMIT) {
+          previewRows.push(normalizedRow);
+        }
+
+        if (stopAfterPreviewBoundary && previewRows.length >= IMPORT_PREVIEW_SAMPLE_ROW_LIMIT) {
+          reachedPreviewBoundary = true;
+          parser.abort();
+        }
+      },
+      complete: (result: ParseResult<unknown>) => {
+        parsedDelimiter = result.meta.delimiter || parsedDelimiter;
+        const fatalError = getFatalDelimitedParseError(result.errors);
+
+        if (!parseError && fatalError) {
+          parseError = fatalError.message ?? 'The tabular text could not be parsed.';
+        }
+      },
+    });
+
+    if (parseError) {
+      throw new Error(parseError);
+    }
+
+    return {
+      delimiter: parsedDelimiter,
+      previewRows,
+      confirmedRows: stopAfterPreviewBoundary ? previewRows : confirmedRows,
+      totalPreviewableRowCount,
+      reachedPreviewBoundary,
+    };
+  };
+
+  const sampledRows = collectRows(true);
+
+  if (!sampledRows.reachedPreviewBoundary) {
+    return {
+      delimiter: sampledRows.delimiter,
+      previewRows: sampledRows.previewRows,
+      confirmedRows: sampledRows.confirmedRows,
+      totalPreviewableRowCount: sampledRows.totalPreviewableRowCount,
+      requiresDelimiterConfirmation: detectedDelimiter.requiresDelimiterConfirmation,
+    };
+  }
+
+  const confirmedRows = collectRows(false);
+
+  return {
+    delimiter: confirmedRows.delimiter ?? sampledRows.delimiter,
+    previewRows: sampledRows.previewRows,
+    confirmedRows: confirmedRows.confirmedRows,
+    totalPreviewableRowCount: confirmedRows.totalPreviewableRowCount,
+    requiresDelimiterConfirmation: detectedDelimiter.requiresDelimiterConfirmation,
   };
 }
 
@@ -329,6 +403,11 @@ type DenseWorksheet = Array<Array<XLSX.CellObject | undefined> | undefined> & XL
 interface PopulatedWorksheetRow {
   rowIndex: number;
   columnIndexes: number[];
+}
+
+interface PreviewableWorksheetRow {
+  worksheetRow: PopulatedWorksheetRow;
+  rowValues: string[];
 }
 
 function toSortedNumericKeys(value: object) {
@@ -417,6 +496,48 @@ function materializeWorksheetRows(
   return worksheetRows.map(({ rowIndex }) => previewColumnIndexes.map((columnIndex) => readCellValue(rowIndex, columnIndex)));
 }
 
+function readWorksheetRowValues(
+  worksheetRow: PopulatedWorksheetRow,
+  readCellValue: (rowIndex: number, columnIndex: number) => string,
+) {
+  return worksheetRow.columnIndexes.map((columnIndex) => readCellValue(worksheetRow.rowIndex, columnIndex));
+}
+
+function collectPreviewableWorksheetRows(
+  worksheetRows: PopulatedWorksheetRow[],
+  readCellValue: (rowIndex: number, columnIndex: number) => string,
+  options: {
+    rowLimit?: number;
+  } = {},
+) {
+  const previewableRows: PreviewableWorksheetRow[] = [];
+  const previewRowLimit = options.rowLimit ?? Number.POSITIVE_INFINITY;
+  let reachedPreviewBoundary = false;
+
+  for (const worksheetRow of worksheetRows) {
+    const rowValues = readWorksheetRowValues(worksheetRow, readCellValue);
+
+    if (!hasPreviewableValues(rowValues)) {
+      continue;
+    }
+
+    previewableRows.push({
+      worksheetRow,
+      rowValues,
+    });
+
+    if (previewableRows.length >= previewRowLimit) {
+      reachedPreviewBoundary = true;
+      break;
+    }
+  }
+
+  return {
+    previewableRows,
+    reachedPreviewBoundary,
+  };
+}
+
 function parseWorkbookRows(binaryContent: ArrayBuffer) {
   const workbook = XLSX.read(binaryContent, {
     type: 'array',
@@ -435,7 +556,6 @@ function parseWorkbookRows(binaryContent: ArrayBuffer) {
     throw new Error('The workbook sheet could not be opened.');
   }
 
-  const previewTargetRowCount = IMPORT_PREVIEW_ROW_LIMIT + 2;
   const populatedWorksheetRows = listPopulatedWorksheetRows(sheet);
 
   const readCellValue = (rowIndex: number, columnIndex: number) => {
@@ -456,26 +576,21 @@ function parseWorkbookRows(binaryContent: ArrayBuffer) {
     throw new Error('The first worksheet did not contain any previewable rows.');
   }
 
-  const previewableWorksheetRows: PopulatedWorksheetRow[] = [];
+  const sampledPreviewableRows = collectPreviewableWorksheetRows(populatedWorksheetRows, readCellValue, {
+    rowLimit: IMPORT_PREVIEW_SAMPLE_ROW_LIMIT,
+  });
+  const sampledPreviewableWorksheetRows = sampledPreviewableRows.previewableRows;
 
-  for (const worksheetRow of populatedWorksheetRows) {
-    const rowValues = worksheetRow.columnIndexes.map((columnIndex) => readCellValue(worksheetRow.rowIndex, columnIndex));
-
-    if (!hasPreviewableValues(rowValues)) {
-      continue;
-    }
-
-    previewableWorksheetRows.push(worksheetRow);
-
-    if (previewableWorksheetRows.length >= previewTargetRowCount) {
-      break;
-    }
+  if (sampledPreviewableWorksheetRows.length === 0) {
+    throw new Error('The first worksheet did not contain any previewable rows.');
   }
 
-  let visiblePreviewRowCount = Math.min(previewableWorksheetRows.length, IMPORT_PREVIEW_ROW_LIMIT + 1);
+  let visiblePreviewRowCount = Math.min(sampledPreviewableWorksheetRows.length, IMPORT_PREVIEW_ROW_LIMIT + 1);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const candidateVisibleRows = previewableWorksheetRows.slice(0, visiblePreviewRowCount);
+    const candidateVisibleRows = sampledPreviewableWorksheetRows
+      .slice(0, visiblePreviewRowCount)
+      .map((entry) => entry.worksheetRow);
     const candidateColumnIndexes = collectWorksheetPreviewColumnIndexes(candidateVisibleRows);
     const headerProbeRows = materializeWorksheetRows(
       candidateVisibleRows.slice(0, 2),
@@ -483,7 +598,7 @@ function parseWorkbookRows(binaryContent: ArrayBuffer) {
       readCellValue,
     ).map((row) => row.map((value) => normalizePreviewCell(value)));
     const resolvedVisiblePreviewRowCount = Math.min(
-      previewableWorksheetRows.length,
+      sampledPreviewableWorksheetRows.length,
       detectHeader(headerProbeRows) ? IMPORT_PREVIEW_ROW_LIMIT + 1 : IMPORT_PREVIEW_ROW_LIMIT,
     );
 
@@ -494,27 +609,45 @@ function parseWorkbookRows(binaryContent: ArrayBuffer) {
     visiblePreviewRowCount = resolvedVisiblePreviewRowCount;
   }
 
-  const visibleWorksheetRows = previewableWorksheetRows.slice(0, visiblePreviewRowCount);
+  const visibleWorksheetRows = sampledPreviewableWorksheetRows
+    .slice(0, visiblePreviewRowCount)
+    .map((entry) => entry.worksheetRow);
   const previewColumnIndexes = collectWorksheetPreviewColumnIndexes(visibleWorksheetRows);
-  const workbookRows = materializeWorksheetRows(
-    previewableWorksheetRows.slice(0, visiblePreviewRowCount + 1),
+  const previewRows = materializeWorksheetRows(
+    sampledPreviewableWorksheetRows
+      .slice(0, visiblePreviewRowCount + 1)
+      .map((entry) => entry.worksheetRow),
     previewColumnIndexes,
     readCellValue,
   );
+  const allPreviewableWorksheetRows = sampledPreviewableRows.reachedPreviewBoundary
+    ? collectPreviewableWorksheetRows(populatedWorksheetRows, readCellValue).previewableRows
+    : sampledPreviewableWorksheetRows;
+  const confirmedColumnIndexes = collectWorksheetPreviewColumnIndexes(
+    allPreviewableWorksheetRows.map((entry) => entry.worksheetRow),
+  );
+  const confirmedRows = materializeWorksheetRows(
+    allPreviewableWorksheetRows.map((entry) => entry.worksheetRow),
+    confirmedColumnIndexes,
+    readCellValue,
+  );
 
-  if (workbookRows.length === 0) {
+  if (previewRows.length === 0) {
     throw new Error('The first worksheet did not contain any previewable rows.');
   }
 
   return {
-    hasAdditionalPreviewableRows: previewableWorksheetRows.length > visiblePreviewRowCount,
-    rows: workbookRows,
+    hasAdditionalPreviewableRows: allPreviewableWorksheetRows.length > visiblePreviewRowCount,
+    previewRows,
+    confirmedRows,
+    totalPreviewableRowCount: allPreviewableWorksheetRows.length,
     sheetName: firstSheetName,
   };
 }
 
 export async function parseImportPreview(input: ImportPreviewParseInput) {
   const startedAt = performance.now();
+  const repairSelections = input.repairSelections ?? createDefaultImportRepairSelections();
   let normalizedInput: Omit<TabularPreviewInput, 'durationMs'>;
 
   if (input.sourceKind === 'excel-file') {
@@ -528,10 +661,15 @@ export async function parseImportPreview(input: ImportPreviewParseInput) {
       benchmarkScenario: input.benchmarkScenario ?? null,
       rowLimit: IMPORT_PREVIEW_ROW_LIMIT,
       rowOverflow: workbook.hasAdditionalPreviewableRows,
-      rows: workbook.rows,
+      fullPreviewableRowCount: workbook.totalPreviewableRowCount,
+      rows: workbook.previewRows,
+      fullRows: workbook.confirmedRows,
+      repairSelections,
     };
   } else {
-    const delimited = parseDelimitedRows(assertText(input));
+    const delimited = parseDelimitedRows(assertText(input), {
+      delimiterOverride: repairSelections.delimiter,
+    });
     normalizedInput = {
       sourceKind: input.sourceKind,
       sourceLabel: input.sourceLabel,
@@ -539,8 +677,13 @@ export async function parseImportPreview(input: ImportPreviewParseInput) {
       mimeType: input.mimeType ?? null,
       benchmarkScenario: input.benchmarkScenario ?? null,
       delimiter: delimited.delimiter,
+      delimiterRequiresConfirmation: delimited.requiresDelimiterConfirmation,
       rowLimit: IMPORT_PREVIEW_ROW_LIMIT,
-      rows: delimited.rows,
+      rowOverflow: delimited.totalPreviewableRowCount > delimited.previewRows.length,
+      fullPreviewableRowCount: delimited.totalPreviewableRowCount,
+      rows: delimited.previewRows,
+      fullRows: delimited.confirmedRows,
+      repairSelections,
     };
   }
 
@@ -548,6 +691,7 @@ export async function parseImportPreview(input: ImportPreviewParseInput) {
 
   return buildImportPreviewDataset({
     ...normalizedInput,
+    includeConfirmedDataset: input.materializeConfirmedDataset === true,
     durationMs,
   });
 }

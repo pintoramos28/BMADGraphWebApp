@@ -22,6 +22,8 @@ export interface PersistedDatasetFileHandle {
   datasetId: string;
   fileName: string;
   fileHandleToken: string;
+  fileSize?: number | undefined;
+  fileLastModified?: number | undefined;
   handle: WorkspaceFileHandle;
 }
 
@@ -66,6 +68,8 @@ const persistedDatasetFileHandleSchema = strictObject({
   datasetId: identifierSchema,
   fileName: nonEmptyStringSchema,
   fileHandleToken: identifierSchema,
+  fileSize: z.number().int().nonnegative().optional(),
+  fileLastModified: z.number().int().nonnegative().optional(),
   handle: z.custom<WorkspaceFileHandle>((value) => {
     if (!value || typeof value !== 'object') {
       return false;
@@ -78,6 +82,32 @@ const persistedDatasetFileHandleSchema = strictObject({
       && typeof candidate.createWritable === 'function';
   }, 'Expected a WorkspaceFileHandle-compatible object.'),
 });
+
+async function preparePersistedDatasetFileHandleForSave(entry: PersistedDatasetFileHandle) {
+  const parsed = persistedDatasetFileHandleSchema.safeParse(entry);
+
+  if (!parsed.success) {
+    return null;
+  }
+
+  let file: File;
+
+  try {
+    file = await parsed.data.handle.getFile();
+  } catch {
+    return null;
+  }
+
+  if (file.name !== parsed.data.fileName || parsed.data.handle.name !== parsed.data.fileName) {
+    return null;
+  }
+
+  return persistedDatasetFileHandleSchema.parse({
+    ...parsed.data,
+    fileSize: file.size,
+    fileLastModified: file.lastModified,
+  });
+}
 
 function sortBySavedAtDescending<T extends { savedAt: string }>(values: T[]) {
   return [...values].sort((left, right) => {
@@ -195,6 +225,13 @@ export function createWorkspaceRepository(storage: WorkspacePersistenceStorage):
       const snapshot = workspaceSnapshotSchema.parse(input.snapshot);
       const ledger = input.ledger.map((entry) => workspaceLedgerEntrySchema.parse(entry));
       const savedAt = isoDateTimeSchema.parse(input.savedAt);
+      const datasetFileHandles = input.datasetFileHandles
+        ? (
+            await Promise.all(
+              input.datasetFileHandles.map((entry) => preparePersistedDatasetFileHandleForSave(entry)),
+            )
+          ).filter((entry): entry is PersistedDatasetFileHandle => entry !== null)
+        : undefined;
 
       validateLedgerOrdering(ledger);
 
@@ -203,9 +240,9 @@ export function createWorkspaceRepository(storage: WorkspacePersistenceStorage):
         savedAt,
         snapshot: structuredClone(snapshot),
         ledger: structuredClone(ledger),
-        ...(input.datasetFileHandles
+        ...(datasetFileHandles
           ? {
-              datasetFileHandles: input.datasetFileHandles.map((entry) =>
+              datasetFileHandles: datasetFileHandles.map((entry) =>
                 persistedDatasetFileHandleSchema.parse(entry),
               ),
             }

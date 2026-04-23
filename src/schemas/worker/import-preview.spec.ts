@@ -21,6 +21,12 @@ describe('import preview worker schemas', () => {
         fileName: 'clean.csv',
         mimeType: 'text/csv',
         textContent: 'a,b\\n1,2',
+        repairSelections: {
+          delimiter: null,
+          headerSelection: null,
+          columnTypeOverrides: {},
+          missingValuePolicy: null,
+        },
       },
     };
     const progress = {
@@ -99,6 +105,13 @@ describe('import preview worker schemas', () => {
             },
           ],
           uncertainties: [],
+          issues: [],
+          repairSelections: {
+            delimiter: null,
+            headerSelection: null,
+            columnTypeOverrides: {},
+            missingValuePolicy: null,
+          },
           timing: {
             durationMs: 12,
             budgetMs: 5000,

@@ -1,19 +1,27 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { ShellEnvironmentDecision } from '../../services/release';
+import { workspaceLedgerFixture } from '../../test/fixtures/workspace/workspace-ledger.fixture';
 import { releaseManifestFixture } from '../../test/fixtures/api/release-manifest.fixture';
 import { supportMatrixFixture } from '../../test/fixtures/api/support-matrix.fixture';
+import { workspaceSnapshotFixture } from '../../test/fixtures/workspace/workspace-snapshot.fixture';
 import { createShellStatusStore } from '../../stores/shell-status';
 import {
   createShellRouteObjects,
+  resetWorkspaceKernelStoresForTest,
   resolveOfflineReadyMetric,
   resolveShellRouteAccess,
   resolveShellRouteRedirect,
+  resolveWorkspaceKernelStore,
   resolveShellStatusMessage,
   resolveShellSupportMetric,
 } from './shell-routes';
 
 describe('shell routes', () => {
+  beforeEach(() => {
+    resetWorkspaceKernelStoresForTest();
+  });
+
   it('redirects unsupported environments to the unsupported route', () => {
     expect(resolveShellRouteRedirect(true, '/workspace/demo-workspace')).toBe(true);
     expect(resolveShellRouteRedirect(true, '/unsupported')).toBe(false);
@@ -156,5 +164,43 @@ describe('shell routes', () => {
       offlineReady: true,
       updateAvailable: false,
     });
+  });
+
+  it('reuses canonical workspace kernel stores for the same workspace across route mounts', async () => {
+    const firstStore = await resolveWorkspaceKernelStore('workspace_demo');
+    const secondStore = await resolveWorkspaceKernelStore('workspace_demo');
+    const otherWorkspaceStore = await resolveWorkspaceKernelStore('workspace_other');
+
+    expect(secondStore).toBe(firstStore);
+    expect(otherWorkspaceStore).not.toBe(firstStore);
+  });
+
+  it('hydrates a cached workspace kernel store from persisted canonical state when a saved workspace exists', async () => {
+    const hydratedStore = await resolveWorkspaceKernelStore('workspace_demo', {
+      loadWorkspaceRecord: async () => ({
+        workspaceId: workspaceSnapshotFixture.workspaceId,
+        savedAt: '2026-04-22T14:30:00.000Z',
+        snapshot: {
+          ...structuredClone(workspaceSnapshotFixture),
+          workspaceId: 'workspace_demo',
+        },
+        ledger: structuredClone(workspaceLedgerFixture),
+      }),
+    });
+
+    expect(hydratedStore.getState().snapshot.workspaceId).toBe('workspace_demo');
+    expect(hydratedStore.getState().snapshot.datasets).toEqual(workspaceSnapshotFixture.datasets);
+    expect(hydratedStore.getState().ledger).toEqual(workspaceLedgerFixture);
+  });
+
+  it('falls back to a clean bootstrap store when persisted workspace loading rejects', async () => {
+    const store = await resolveWorkspaceKernelStore('workspace_demo_load_failure', {
+      loadWorkspaceRecord: async () => {
+        throw new Error('indexeddb open failed');
+      },
+    });
+
+    expect(store.getState().snapshot.workspaceId).toBe('workspace_demo_load_failure');
+    expect(store.getState().ledger).toEqual([]);
   });
 });

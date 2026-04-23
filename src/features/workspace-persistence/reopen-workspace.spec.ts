@@ -390,6 +390,65 @@ describe('reopenPersistedWorkspaceRecord', () => {
     );
   });
 
+  it('treats persisted file handles as incompatible when the handle object name does not match the dataset source file', () => {
+    const rawRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:32:27Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [
+          {
+            ...structuredClone(workspaceSnapshotFixture.datasets[0]),
+            sourceFile: {
+              fileName: 'battery-cycles.csv',
+              fileHandleToken: 'dataset.ds_main.source-file',
+            },
+          },
+        ],
+      },
+      datasetFileHandles: [
+        {
+          datasetId: 'ds_main',
+          fileName: 'battery-cycles.csv',
+          fileHandleToken: 'dataset.ds_main.source-file',
+          handle: {
+            name: 'different-source.csv',
+            async getFile() {
+              return {
+                name: 'different-source.csv',
+              } as File;
+            },
+            async createWritable() {
+              return {
+                async write() {},
+                async close() {},
+              };
+            },
+          },
+        },
+      ],
+      ledger: structuredClone(workspaceLedgerFixture),
+    } as PersistedWorkspaceRecord;
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:32:28Z',
+      nowMs: () => 6175,
+    });
+
+    expect(reopened.localizedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.dataset.missing-file-handle',
+          source: expect.objectContaining({
+            entityType: 'dataset',
+            entityId: 'ds_main',
+          }),
+        }),
+      ]),
+    );
+  });
+
   it('sanitizes invalid localized entity ids before creating reopen issue records', () => {
     const rawRecord: PersistedWorkspaceRecord = {
       workspaceId: workspaceSnapshotFixture.workspaceId,

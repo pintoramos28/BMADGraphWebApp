@@ -1,13 +1,16 @@
 import { workspaceSnapshotSchema } from '../../schemas/workspace';
 import type { PersistedDatasetFileHandle } from '../../services/persistence';
+import { IMPORT_BOOTSTRAP_DATASET_ID, IMPORT_BOOTSTRAP_GRAPH_ID } from './bootstrap';
 import { synchronizeDatasetSourceFileMetadata } from './dataset-file-handle-metadata';
 import { createDefaultMutationMeta, createLedgerEntry, initializeWorkspaceVersion, validateLedgerOrdering } from './events';
 import type {
   ApplyWorkerEnvelopeResult,
+  ConfirmImportInput,
   KernelMutationMeta,
   PromoteReferenceGraphInput,
   QueueWorkerRequestInput,
   ReplaceSnapshotInput,
+  RollbackConfirmedImportInput,
   WorkerEnvelopeContext,
   WorkspaceKernelData,
   WorkspaceSnapshotPatch,
@@ -216,6 +219,209 @@ export function replaceIssuesReducer(data: WorkspaceKernelData, issues: IssueRec
       ...(meta ? { meta } : {}),
       payload: {
         total: issues.length,
+      },
+      includeTrustImpact: true,
+    },
+  );
+}
+
+export function confirmImportReducer(data: WorkspaceKernelData, input: ConfirmImportInput) {
+  if (input.issues.some((issue) => issue.status !== 'resolved' && issue.severity === 'blocking')) {
+    throw new Error('Cannot confirm an import while blocking issues remain unresolved.');
+  }
+
+  const graphId = input.graphId;
+  const canonicalIssues = input.issues.map((issue) => {
+    const canonicalIssueId = `${issue.issueId}:${input.dataset.datasetId}`;
+
+    return {
+      ...issue,
+      issueId: canonicalIssueId,
+      source: {
+        ...issue.source,
+        entityType: 'dataset',
+        entityId: input.dataset.datasetId,
+      },
+      contextRef: {
+        routeKey: 'workspaceDetail',
+        workspaceId: data.snapshot.workspaceId,
+        graphId,
+        panel: 'readiness',
+      },
+      repairActions: [],
+    } satisfies IssueRecord;
+  });
+  const graphIssueIds = canonicalIssues.filter((issue) => issue.status !== 'resolved').map((issue) => issue.issueId);
+  const nextIssuesById = new Map<string, IssueRecord>(
+    data.snapshot.issues.map((issue) => [issue.issueId, issue] as const),
+  );
+
+  canonicalIssues.forEach((issue) => {
+    nextIssuesById.set(issue.issueId, issue);
+  });
+
+  const nextIssues = Array.from(nextIssuesById.values());
+  const nextDatasets = [
+    ...data.snapshot.datasets.filter(
+      (dataset) => dataset.datasetId !== IMPORT_BOOTSTRAP_DATASET_ID && dataset.datasetId !== input.dataset.datasetId,
+    ),
+    input.dataset,
+  ];
+  const nextGraphDefinitions = [
+    ...data.snapshot.graphDefinitions
+      .filter((graph) => graph.graphId !== IMPORT_BOOTSTRAP_GRAPH_ID && graph.graphId !== graphId)
+      .map((graph) => {
+        if (graph.graphId === data.snapshot.referenceGraphId && graph.status === 'reference') {
+          return {
+            ...graph,
+            status: 'candidate',
+          } satisfies typeof graph;
+        }
+
+        return graph;
+      }),
+    {
+      graphId,
+      title: `Imported ${input.dataset.displayName}`,
+      status: 'reference',
+      datasetId: input.dataset.datasetId,
+      roleAssignments: {
+        x: [],
+        y: [],
+        color: [],
+        size: [],
+        facetRow: [],
+        facetColumn: [],
+      },
+      marks: ['point'],
+      overlays: [],
+      presentation: {},
+      issueIds: graphIssueIds,
+      evidenceIds: [],
+    } satisfies WorkspaceSnapshot['graphDefinitions'][number],
+  ];
+  const nextSnapshot = {
+    ...data.snapshot,
+    datasets: nextDatasets,
+    graphDefinitions: nextGraphDefinitions,
+    activeGraphId: graphId,
+    referenceGraphId: graphId,
+    issues: nextIssues,
+    readiness: {
+      ...data.snapshot.readiness,
+      provenanceCompleteness: 'none' as const,
+    },
+    exportSummary: {
+      ...data.snapshot.exportSummary,
+      includedReferenceGraphId: graphId,
+    },
+  } satisfies WorkspaceSnapshot;
+
+  return commitSnapshotMutation(
+    data,
+    {
+      ...nextSnapshot,
+      readiness: reconcileReadinessState(nextSnapshot, nextIssues),
+    },
+    {
+      type: 'import.confirmed',
+      meta: input,
+      entityRefs: {
+        workspaceId: data.snapshot.workspaceId,
+        datasetId: input.dataset.datasetId,
+        graphId,
+      },
+      payload: {
+        datasetId: input.dataset.datasetId,
+        previewId: input.previewId,
+        source: input.source,
+        repairSelections: input.repairSelections,
+        rowCount: input.dataset.rowCount,
+        columnCount: input.dataset.columnCount,
+      },
+      includeTrustImpact: true,
+    },
+  );
+}
+
+export function rollbackConfirmedImportReducer(data: WorkspaceKernelData, input: RollbackConfirmedImportInput) {
+  const issueIdsToRemove = new Set(input.issueIds);
+  let nextDatasets = data.snapshot.datasets.filter((dataset) => dataset.datasetId !== input.datasetId);
+
+  if (nextDatasets.length === 0) {
+    nextDatasets = input.fallbackDatasets;
+  }
+
+  let nextGraphDefinitions = data.snapshot.graphDefinitions.filter((graph) => graph.graphId !== input.graphId);
+
+  if (nextGraphDefinitions.length === 0) {
+    nextGraphDefinitions = input.fallbackGraphDefinitions;
+  }
+
+  const referenceGraphStillExists = nextGraphDefinitions.some((graph) => graph.graphId === data.snapshot.referenceGraphId);
+  const fallbackReferenceGraphId = nextGraphDefinitions.some((graph) => graph.graphId === input.previousReferenceGraphId)
+    ? input.previousReferenceGraphId
+    : (nextGraphDefinitions[0]?.graphId ?? input.previousReferenceGraphId);
+  const nextReferenceGraphId = referenceGraphStillExists ? data.snapshot.referenceGraphId : fallbackReferenceGraphId;
+  nextGraphDefinitions = nextGraphDefinitions.map((graph) => {
+    if (graph.graphId === nextReferenceGraphId) {
+      return {
+        ...graph,
+        status: 'reference',
+      } satisfies typeof graph;
+    }
+
+    if (graph.status === 'reference') {
+      return {
+        ...graph,
+        status: 'candidate',
+      } satisfies typeof graph;
+    }
+
+    return graph;
+  });
+
+  const activeGraphStillExists = nextGraphDefinitions.some((graph) => graph.graphId === data.snapshot.activeGraphId);
+  const fallbackActiveGraphId = nextGraphDefinitions.some((graph) => graph.graphId === input.previousActiveGraphId)
+    ? input.previousActiveGraphId
+    : nextReferenceGraphId;
+  const nextActiveGraphId = activeGraphStillExists ? data.snapshot.activeGraphId : fallbackActiveGraphId;
+  const nextIssues = data.snapshot.issues.filter((issue) => !issueIdsToRemove.has(issue.issueId));
+  const nextSnapshot = {
+    ...data.snapshot,
+    datasets: nextDatasets,
+    graphDefinitions: nextGraphDefinitions,
+    activeGraphId: nextActiveGraphId,
+    referenceGraphId: nextReferenceGraphId,
+    issues: nextIssues,
+    readiness: {
+      ...data.snapshot.readiness,
+      provenanceCompleteness: 'none' as const,
+    },
+    exportSummary: {
+      ...data.snapshot.exportSummary,
+      includedReferenceGraphId: nextReferenceGraphId,
+    },
+  } satisfies WorkspaceSnapshot;
+
+  return commitSnapshotMutation(
+    data,
+    {
+      ...nextSnapshot,
+      readiness: reconcileReadinessState(nextSnapshot, nextIssues),
+    },
+    {
+      type: 'import.confirmation-rolled-back',
+      meta: input,
+      entityRefs: {
+        workspaceId: data.snapshot.workspaceId,
+        datasetId: input.datasetId,
+        graphId: input.graphId,
+      },
+      payload: {
+        datasetId: input.datasetId,
+        graphId: input.graphId,
+        issueCount: input.issueIds.length,
       },
       includeTrustImpact: true,
     },

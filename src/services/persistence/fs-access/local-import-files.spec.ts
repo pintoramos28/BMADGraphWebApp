@@ -12,12 +12,45 @@ afterEach(() => {
 });
 
 describe('BrowserLocalImportFileAccess', () => {
+  it('returns the native picker handle alongside the selected file when available', async () => {
+    const handle = {
+      name: 'clean.csv',
+      getFile: vi.fn(async () => new File(['sample'], 'clean.csv', { type: 'text/csv' })),
+      createWritable: vi.fn(async () => ({
+        async write() {},
+        async close() {},
+      })),
+    };
+    const pickerHost = {
+      showOpenFilePicker: vi.fn(async () => [handle]),
+    };
+    const access = new BrowserLocalImportFileAccess(pickerHost, undefined, undefined, {
+      preferNativePicker: true,
+    });
+
+    const selection = await access.openLocalImportSource({
+      sourceKind: 'csv-file',
+    });
+
+    expect(selection).toEqual({
+      file: expect.objectContaining({ name: 'clean.csv' }),
+      handle,
+    });
+  });
+
   it('uses the browser file picker when available', async () => {
     const getFile = vi.fn(async () => new File(['sample'], 'clean.csv', { type: 'text/csv' }));
     const pickerHost = {
       showOpenFilePicker: vi.fn(async () => [
         {
+          name: 'clean.csv',
           getFile,
+          async createWritable() {
+            return {
+              async write() {},
+              async close() {},
+            };
+          },
         },
       ]),
     };
@@ -39,7 +72,14 @@ describe('BrowserLocalImportFileAccess', () => {
     const pickerHost = {
       showOpenFilePicker: vi.fn(async () => [
         {
+          name: 'clean.tsv',
           getFile,
+          async createWritable() {
+            return {
+              async write() {},
+              async close() {},
+            };
+          },
         },
       ]),
     };
@@ -90,7 +130,14 @@ describe('BrowserLocalImportFileAccess', () => {
     const pickerHost = {
       showOpenFilePicker: vi.fn(async () => [
         {
+          name: 'legacy.xls',
           getFile,
+          async createWritable() {
+            return {
+              async write() {},
+              async close() {},
+            };
+          },
         },
       ]),
     };
@@ -122,7 +169,14 @@ describe('BrowserLocalImportFileAccess', () => {
     const pickerHost = {
       showOpenFilePicker: vi.fn(async () => [
         {
+          name: 'fallback.csv',
           getFile: vi.fn(async () => file),
+          async createWritable() {
+            return {
+              async write() {},
+              async close() {},
+            };
+          },
         },
       ]),
     };

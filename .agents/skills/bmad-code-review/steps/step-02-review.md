@@ -10,6 +10,7 @@ failed_layers: '' # set at runtime: comma-separated list of layers that failed o
 - The Blind Hunter subagent receives NO project context — diff only.
 - The Edge Case Hunter subagent receives diff and project read access.
 - The Runtime Integration Auditor subagent receives diff and project read access. When available, it also receives the spec and context docs.
+- The Runtime Integration Auditor MUST perform targeted live validation when the diff touches runtime-sensitive surfaces and the current environment allows it. If live validation cannot be performed, it must say that explicitly and treat the missing probe as part of the review risk.
 - The Acceptance Auditor subagent receives diff, spec, and context docs.
 
 ## INSTRUCTIONS
@@ -22,7 +23,7 @@ failed_layers: '' # set at runtime: comma-separated list of layers that failed o
 
    - **Edge Case Hunter** — receives `{diff_output}` and read access to the project. Invoke via the `bmad-review-edge-case-hunter` skill.
 
-   - **Runtime Integration Auditor** — receives `{diff_output}`, read access to the project, and if available the content of `{spec_file}` plus any loaded context docs. Invoke via the `bmad-review-runtime-integration-auditor` skill.
+   - **Runtime Integration Auditor** — receives `{diff_output}`, read access to the project, and if available the content of `{spec_file}` plus any loaded context docs. Invoke via the `bmad-review-runtime-integration-auditor` skill. Its job includes targeted live probes for runtime-sensitive changes, not just source inspection.
 
    - **Acceptance Auditor** (only if `{review_mode}` = `"full"`) — receives `{diff_output}`, the content of the file at `{spec_file}`, and any loaded context docs. Its prompt:
      > You are an Acceptance Auditor. Review this diff against the spec and context docs. Check for: violations of acceptance criteria, deviations from spec intent, missing implementation of specified behavior, contradictions between spec constraints and actual code. Output findings as a Markdown list. Each finding: one-line title, which AC/constraint it violates, and evidence from the diff.

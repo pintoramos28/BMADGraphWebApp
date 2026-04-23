@@ -3,6 +3,12 @@ import { z } from 'zod';
 import { compareSemver, matchesVersionRange } from '../../lib/semver';
 import { validateGraphComposition } from './graph-catalog';
 import {
+  isCompatibleDatasetFileHandle,
+  parsePersistedDatasetFileHandles,
+  retainDatasetFileHandlesForSnapshot,
+  sanitizePersistedDatasetFileHandlesForHydration,
+} from './persisted-dataset-file-handles';
+import {
   datasetSchema,
   evidenceSchema,
   exportSummarySchema,
@@ -30,7 +36,6 @@ import {
   versionRangeSchema,
 } from '../../schemas/validation';
 import type {
-  PersistedDatasetFileHandle,
   PersistedWorkspaceRecord,
   WorkspaceRepository,
 } from '../../services/persistence';
@@ -135,34 +140,6 @@ export function collectAvailableFormulaDependencyIds(input: {
   return availableDependencyIds;
 }
 
-interface PersistedDatasetFileHandleEnvelope {
-  datasetId: string;
-  fileName: string;
-  fileHandleToken: string;
-  handle: {
-    name: string;
-    getFile: () => Promise<File>;
-    createWritable: () => Promise<unknown>;
-  };
-}
-
-const persistedDatasetFileHandleSchema = strictObject({
-  datasetId: identifierSchema,
-  fileName: nonEmptyStringSchema,
-  fileHandleToken: identifierSchema,
-  handle: z.custom<PersistedDatasetFileHandleEnvelope['handle']>((value) => {
-    if (!value || typeof value !== 'object') {
-      return false;
-    }
-
-    const candidate = value as Partial<PersistedDatasetFileHandleEnvelope['handle']>;
-
-    return typeof candidate.name === 'string'
-      && typeof candidate.getFile === 'function'
-      && typeof candidate.createWritable === 'function';
-  }, 'Expected a WorkspaceFileHandle-compatible object.'),
-});
-
 const reopenIssueIdPattern = /^workspace\.reopen\.(\d+)$/;
 const persistentReopenIssueKinds = new Set([
   'workspace.reopen.transform.missing-dataset',
@@ -259,37 +236,6 @@ function parseCollection<T>(
   });
 
   return accepted;
-}
-
-function parsePersistedDatasetFileHandles(values: unknown[]) {
-  return parseCollection(
-    values,
-    persistedDatasetFileHandleSchema,
-    () => {},
-  ) as PersistedDatasetFileHandle[];
-}
-
-function isCompatibleDatasetFileHandle(
-  dataset: Pick<WorkspaceSnapshot['datasets'][number], 'datasetId' | 'sourceFile'>,
-  entry: Pick<PersistedDatasetFileHandle, 'datasetId' | 'fileName' | 'fileHandleToken'>,
-) {
-  return dataset.sourceFile !== undefined
-    && dataset.sourceFile.fileHandleToken === entry.fileHandleToken
-    && dataset.datasetId === entry.datasetId
-    && dataset.sourceFile.fileName === entry.fileName;
-}
-
-function retainDatasetFileHandlesForSnapshot(
-  snapshot: WorkspaceSnapshot,
-  datasetFileHandles: PersistedDatasetFileHandle[],
-) {
-  return datasetFileHandles
-    .filter((entry) =>
-      snapshot.datasets.some((dataset) => isCompatibleDatasetFileHandle(dataset, entry)),
-    )
-    .map((entry) => ({
-      ...entry,
-    }));
 }
 
 function fallbackEntityId(entityType: string, index: number) {
@@ -1469,7 +1415,7 @@ export async function reopenWorkspaceKernel(input: {
       ledger: report.ledger,
       datasetFileHandles: retainDatasetFileHandlesForSnapshot(
         report.snapshot,
-        parsePersistedDatasetFileHandles(record.datasetFileHandles ?? []),
+        await sanitizePersistedDatasetFileHandlesForHydration(record.datasetFileHandles ?? []),
       ),
     }),
     report,

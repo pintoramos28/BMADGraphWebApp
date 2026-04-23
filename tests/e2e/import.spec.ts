@@ -25,17 +25,58 @@ const excelFixture = path.join(
   'excel',
   'import.clean.excel-preview.xlsx',
 );
+const delimiterRepairFixture = path.join(
+  repoRoot,
+  '_bmad-output',
+  'benchmarks',
+  'benchmark_set_dirty',
+  'csv',
+  'import.dirty.delimiter-repair.csv',
+);
+const headerRepairFixture = path.join(
+  repoRoot,
+  '_bmad-output',
+  'benchmarks',
+  'benchmark_set_dirty',
+  'csv',
+  'import.dirty.header-repair.csv',
+);
+const typeRepairFixture = path.join(
+  repoRoot,
+  '_bmad-output',
+  'benchmarks',
+  'benchmark_set_dirty',
+  'csv',
+  'import.dirty.type-repair.csv',
+);
+const missingValueRepairFixture = path.join(
+  repoRoot,
+  '_bmad-output',
+  'benchmarks',
+  'benchmark_set_dirty',
+  'csv',
+  'import.dirty.missing-value-repair.csv',
+);
 const cleanCsvFixtureText = fs.readFileSync(csvFixture, 'utf8');
+const typeRepairFixtureText = fs.readFileSync(typeRepairFixture, 'utf8');
 const ac3SlackMs = 2_000;
+const previewReadyMessage = 'Preview ready. Repair any blocking issues, then confirm or reject the import.';
+const previewConfirmedMessage = 'Preview confirmed. The canonical workspace now reflects this imported dataset.';
 
 async function expectAc3Outcome(page: Page) {
-  const readyMessage = page.getByText('Preview ready. The committed workspace is still unchanged.');
+  const readyMessage = page.getByText(previewReadyMessage);
   const budgetMessage = page.getByText('This preview crossed the 5s target, so the in-progress state stays visible until parsing finishes.');
 
   await Promise.any([
     readyMessage.waitFor({ state: 'visible', timeout: IMPORT_PREVIEW_BUDGET_MS }),
     budgetMessage.waitFor({ state: 'visible', timeout: IMPORT_PREVIEW_BUDGET_MS + ac3SlackMs }),
   ]);
+}
+
+async function chooseCsvFixture(page: Page, fixturePath: string) {
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Choose CSV file' }).click();
+  await (await chooser).setFiles(fixturePath);
 }
 
 async function disableNativeFilePicker(page: Page) {
@@ -45,6 +86,32 @@ async function disableNativeFilePicker(page: Page) {
       value: undefined,
     });
   });
+}
+
+async function mockNativeCsvPicker(page: Page, input: { fileName: string; textContent: string }) {
+  await page.addInitScript(({ fileName, textContent }) => {
+    const host = window as typeof window & {
+      __nativePickerCallCount?: number;
+    };
+    host.__nativePickerCallCount = 0;
+
+    Object.defineProperty(window, 'showOpenFilePicker', {
+      configurable: true,
+      value: async () => {
+        host.__nativePickerCallCount = (host.__nativePickerCallCount ?? 0) + 1;
+
+        return [
+          {
+            async getFile() {
+              return new File([textContent], fileName, {
+                type: 'text/csv',
+              });
+            },
+          },
+        ];
+      },
+    });
+  }, input);
 }
 
 test.describe('import preview workspace', () => {
@@ -66,64 +133,63 @@ test.describe('import preview workspace', () => {
     });
   });
 
-test('previews a local CSV file through the hidden-input path even when the native picker exists', async ({ page }) => {
-    await page.addInitScript(({ csvText }) => {
-      const host = window as typeof window & {
-        __nativePickerCallCount?: number;
-      };
-      host.__nativePickerCallCount = 0;
-
-      Object.defineProperty(window, 'showOpenFilePicker', {
-        configurable: true,
-        value: async () => {
-          host.__nativePickerCallCount = (host.__nativePickerCallCount ?? 0) + 1;
-
-          return [
-            {
-              async getFile() {
-                return new File([csvText], 'import.clean.csv-preview.csv', {
-                  type: 'text/csv',
-                });
-              },
-            },
-          ];
-        },
-      });
-    }, { csvText: cleanCsvFixtureText });
+test('previews a local CSV file through the persistence wrapper native-picker path when available', async ({ page }) => {
+    await mockNativeCsvPicker(page, {
+      fileName: 'import.clean.csv-preview.csv',
+      textContent: cleanCsvFixtureText,
+    });
 
     await page.goto(workspacePreviewRoute);
     await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
 
-    const chooser = page.waitForEvent('filechooser');
     await page.getByRole('button', { name: 'Choose CSV file' }).click();
-    await (await chooser).setFiles(csvFixture);
 
     await expectAc3Outcome(page);
     await expect
       .poll(() =>
         page.evaluate(() => (window as typeof window & { __nativePickerCallCount?: number }).__nativePickerCallCount ?? 0),
       )
-      .toBe(0);
-    await expect(page.getByText('Preview ready. The committed workspace is still unchanged.')).toBeVisible();
-    await expect(page.getByText('Not yet committed')).toBeVisible();
-    await expect(page.getByText('Not a clean benchmark fixture')).toBeVisible();
+      .toBe(1);
+    await expect(page.getByText(previewReadyMessage)).toBeVisible();
+    await expect(page.getByText('Confirm or reject this import')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Confirm Import' })).toBeEnabled();
+    await expect(page.getByText('import.clean.csv-preview', { exact: true })).toBeVisible();
   });
 
-  test('previews a local CSV file without claiming benchmark ownership', async ({ page }) => {
+  test('repairs a dirty CSV import through the native-picker path', async ({ page }) => {
+    await mockNativeCsvPicker(page, {
+      fileName: 'import.dirty.type-repair.csv',
+      textContent: typeRepairFixtureText,
+    });
+    await page.goto(workspacePreviewRoute);
+    await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Choose CSV file' }).click();
+
+    await expectAc3Outcome(page);
+    await expect(page.getByText('Confirm the data type for Reading')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Confirm Import' })).toBeDisabled();
+
+    await page.getByLabel('Confirmed type for Reading').selectOption({ label: 'Text' });
+
+    await expectAc3Outcome(page);
+    await expect(page.getByRole('button', { name: 'Confirm Import' })).toBeEnabled();
+    await expect(page.getByText('import.dirty.type-repair', { exact: true })).toBeVisible();
+  });
+
+  test('previews the owned clean CSV fixture through the supported fallback file flow', async ({ page }) => {
     await disableNativeFilePicker(page);
     await page.goto(workspacePreviewRoute);
     await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
 
-    const chooser = page.waitForEvent('filechooser');
-    await page.getByRole('button', { name: 'Choose CSV file' }).click();
-    await (await chooser).setFiles(csvFixture);
+    await chooseCsvFixture(page, csvFixture);
 
     await expectAc3Outcome(page);
-    await expect(page.getByText('Preview ready. The committed workspace is still unchanged.')).toBeVisible();
-    await expect(page.getByText('Not yet committed')).toBeVisible();
+    await expect(page.getByText(previewReadyMessage)).toBeVisible();
+    await expect(page.getByText('Confirm or reject this import')).toBeVisible();
     await expect(page.getByText('Delimiter handling')).toBeVisible();
     await expect(page.getByText('Comma (,)')).toBeVisible();
-    await expect(page.getByText('Not a clean benchmark fixture')).toBeVisible();
+    await expect(page.getByText('import.clean.csv-preview', { exact: true })).toBeVisible();
   });
 
   test('previews the BMAD clean CSV benchmark fixture without a test-only hint path', async ({ page }) => {
@@ -133,9 +199,9 @@ test('previews a local CSV file through the hidden-input path even when the nati
     await page.getByRole('button', { name: 'Preview BMAD clean CSV benchmark' }).click();
 
     await expectAc3Outcome(page);
-    await expect(page.getByText('Preview ready. The committed workspace is still unchanged.')).toBeVisible();
+    await expect(page.getByText(previewReadyMessage)).toBeVisible();
     await expect(page.getByText('import.clean.csv-preview', { exact: true })).toBeVisible();
-    await expect(page.getByText('Not yet committed')).toBeVisible();
+    await expect(page.getByText('Confirm or reject this import')).toBeVisible();
   });
 
   test('shows a visible in-progress state when preview readiness crosses the AC3 budget', async ({ page }) => {
@@ -227,6 +293,13 @@ test('previews a local CSV file through the hidden-input path even when the nati
               },
             ],
             uncertainties: [],
+            issues: [],
+            repairSelections: {
+              delimiter: null,
+              headerSelection: null,
+              columnTypeOverrides: {},
+              missingValuePolicy: null,
+            },
             timing: {
               durationMs: budgetMs + 2_500,
               budgetMs,
@@ -298,7 +371,7 @@ test('previews a local CSV file through the hidden-input path even when the nati
     await expect(
       page.getByText('This preview crossed the 5s target, so the in-progress state stays visible until parsing finishes.'),
     ).toBeVisible({ timeout: 7_000 });
-    await expect(page.getByText('Preview ready. The committed workspace is still unchanged.')).toBeVisible();
+    await expect(page.getByText(previewReadyMessage)).toBeVisible();
   });
 
   test('previews a local Excel workbook and shows workbook-specific source details', async ({ page }) => {
@@ -311,7 +384,7 @@ test('previews a local CSV file through the hidden-input path even when the nati
     await (await chooser).setFiles(excelFixture);
 
     await expectAc3Outcome(page);
-    await expect(page.getByText('Preview ready. The committed workspace is still unchanged.')).toBeVisible();
+    await expect(page.getByText(previewReadyMessage)).toBeVisible();
     await expect(page.getByText('Workbook cells do not rely on a delimiter')).toBeVisible();
     await expect(page.getByText('import.clean.excel-preview', { exact: true })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: 'MeasuredAt' })).toBeVisible();
@@ -324,7 +397,7 @@ test('previews a local CSV file through the hidden-input path even when the nati
     await page.getByRole('button', { name: 'Preview BMAD clean pasted benchmark' }).click();
 
     await expectAc3Outcome(page);
-    await expect(page.getByText('Preview ready. The committed workspace is still unchanged.')).toBeVisible();
+    await expect(page.getByText(previewReadyMessage)).toBeVisible();
     await expect(page.getByText('import.clean.paste-preview', { exact: true })).toBeVisible();
     await expect(page.getByText('No column-level uncertainty was detected in the preview sample.')).toBeVisible();
     await expect(page.getByRole('columnheader', { name: 'MeasuredAt' })).toBeVisible();
@@ -340,8 +413,30 @@ test('previews a local CSV file through the hidden-input path even when the nati
     await page.getByRole('button', { name: 'Preview pasted table' }).click();
 
     await expectAc3Outcome(page);
-    await expect(page.getByText('Preview ready. The committed workspace is still unchanged.')).toBeVisible();
+    await expect(page.getByText(previewReadyMessage)).toBeVisible();
     await expect(page.getByText('Not a clean benchmark fixture')).toBeVisible();
+  });
+
+  test('supports dirty repair through pasted non-benchmark intake', async ({ page }) => {
+    await page.goto(workspacePreviewRoute);
+    await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
+
+    await page
+      .getByLabel('Paste tabular data')
+      .fill('Sample\tReading\nA-1\t42.5\nA-2\t\nA-3\t44.1');
+    await page.getByRole('button', { name: 'Preview pasted table' }).click();
+
+    await expectAc3Outcome(page);
+    await expect(page.getByText('Choose how missing or malformed values should be handled')).toBeVisible();
+    await expect(page.getByText('Not a clean benchmark fixture')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Confirm Import' })).toBeDisabled();
+
+    await page
+      .getByLabel('Missing-value handling')
+      .selectOption({ label: 'Keep rows and mark missing or malformed cells as empty' });
+
+    await expectAc3Outcome(page);
+    await expect(page.getByRole('button', { name: 'Confirm Import' })).toBeEnabled();
   });
 
   test('keeps empty pasted-table validation local to the paste form', async ({ page }) => {
@@ -349,17 +444,15 @@ test('previews a local CSV file through the hidden-input path even when the nati
     await page.goto(workspacePreviewRoute);
     await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
 
-    const chooser = page.waitForEvent('filechooser');
-    await page.getByRole('button', { name: 'Choose CSV file' }).click();
-    await (await chooser).setFiles(csvFixture);
+    await chooseCsvFixture(page, csvFixture);
 
-    await expect(page.getByText('Not yet committed')).toBeVisible();
+    await expect(page.getByText('Confirm or reject this import')).toBeVisible();
 
     await page.getByLabel('Paste tabular data').fill('');
     await page.getByRole('button', { name: 'Preview pasted table' }).click();
 
     await expect(page.getByText('Paste some tabular data first')).toBeVisible();
-    await expect(page.getByText('Not yet committed')).toBeVisible();
+    await expect(page.getByText('Confirm or reject this import')).toBeVisible();
   });
 
   test('surfaces uncertainty summaries for mixed pasted tables', async ({ page }) => {
@@ -371,8 +464,167 @@ test('previews a local CSV file through the hidden-input path even when the nati
     );
     await page.getByRole('button', { name: 'Preview pasted table' }).click();
 
-    await expect(page.getByText('Preview ready. The committed workspace is still unchanged.')).toBeVisible();
+    await expect(page.getByText(previewReadyMessage)).toBeVisible();
+    await expect(page.getByText('Not a clean benchmark fixture')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Uncertainty' })).toBeVisible();
-    await expect(page.getByText(/mixes numeric\/date-looking values with text/i)).toBeVisible();
+    await expect(page.getByText(/mixes multiple value patterns and must be confirmed before import/i)).toBeVisible();
+  });
+
+  test('requires delimiter confirmation before a dirty delimiter repair import can be confirmed', async ({ page }) => {
+    await disableNativeFilePicker(page);
+    await page.goto(workspacePreviewRoute);
+    await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
+
+    await chooseCsvFixture(page, delimiterRepairFixture);
+
+    await expectAc3Outcome(page);
+    await expect(page.getByText('Confirm the delimiter before import')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Confirm Import' })).toBeDisabled();
+
+    await page.getByLabel('Delimiter choice').selectOption({ label: 'Semicolon (;)' });
+
+    await expectAc3Outcome(page);
+    await expect(page.getByRole('button', { name: 'Confirm Import' })).toBeEnabled();
+
+    await page.getByRole('button', { name: 'Confirm Import' }).click();
+
+    await expect(page.getByText(previewConfirmedMessage)).toBeVisible();
+    await expect(page.getByText('Canonical workspace updated')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Confirm Import' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Reject Import' })).toHaveCount(0);
+  });
+
+  test('requires first-row confirmation before a dirty header repair import can be confirmed', async ({ page }) => {
+    await disableNativeFilePicker(page);
+    await page.goto(workspacePreviewRoute);
+    await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
+
+    await chooseCsvFixture(page, headerRepairFixture);
+
+    await expectAc3Outcome(page);
+    await expect(page.getByText('Confirm how the first row should be interpreted')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Confirm Import' })).toBeDisabled();
+
+    await page.getByLabel('First-row handling').selectOption({ label: 'Treat the first row as headers' });
+
+    await expectAc3Outcome(page);
+    await expect(page.getByRole('button', { name: 'Confirm Import' })).toBeEnabled();
+
+    await page.getByRole('button', { name: 'Confirm Import' }).click();
+
+    await expect(page.getByText(previewConfirmedMessage)).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: 'Value' }).first()).toBeVisible();
+  });
+
+  test('requires explicit column type confirmation before a dirty type repair import can be confirmed', async ({ page }) => {
+    await disableNativeFilePicker(page);
+    await page.goto(workspacePreviewRoute);
+    await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
+
+    await chooseCsvFixture(page, typeRepairFixture);
+
+    await expectAc3Outcome(page);
+    await expect(page.getByText('Confirm the data type for Reading')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Confirm Import' })).toBeDisabled();
+
+    await page.getByLabel('Confirmed type for Reading').selectOption({ label: 'Text' });
+
+    await expectAc3Outcome(page);
+    await expect(page.getByRole('button', { name: 'Confirm Import' })).toBeEnabled();
+
+    await page.getByRole('button', { name: 'Confirm Import' }).click();
+
+    await expect(page.getByText(previewConfirmedMessage)).toBeVisible();
+    await expect(page.getByText('Canonical workspace updated')).toBeVisible();
+  });
+
+  test('requires a missing-value policy before a dirty missing-value repair import can be confirmed', async ({ page }) => {
+    await disableNativeFilePicker(page);
+    await page.goto(workspacePreviewRoute);
+    await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
+
+    await chooseCsvFixture(page, missingValueRepairFixture);
+
+    await expectAc3Outcome(page);
+    await expect(page.getByText('Choose how missing or malformed values should be handled')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Confirm Import' })).toBeDisabled();
+
+    await page
+      .getByLabel('Missing-value handling')
+      .selectOption({ label: 'Exclude rows with missing or malformed values' });
+
+    await expectAc3Outcome(page);
+    await expect(page.getByRole('button', { name: 'Confirm Import' })).toBeEnabled();
+    await expect(page.getByText('Missing-value handling is configured')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Confirm Import' }).click();
+
+    await expect(page.getByText(previewConfirmedMessage)).toBeVisible();
+    await expect(page.getByText(/Showing the first 2 preview rows and 2 columns, prepared in/i)).toBeVisible();
+    await expect(page.getByText(/This delimited import is showing the first 2 rows only/i)).toBeVisible();
+  });
+
+  test('rejecting a preview leaves the canonical workspace unchanged', async ({ page }) => {
+    await disableNativeFilePicker(page);
+    await page.goto(workspacePreviewRoute);
+    await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
+
+    await chooseCsvFixture(page, csvFixture);
+
+    await expectAc3Outcome(page);
+    await expect(page.locator('article').filter({ hasText: 'Canonical datasets' })).toContainText('0');
+
+    await page.getByRole('button', { name: 'Reject Import' }).click();
+
+    await expect(page.getByText(previewReadyMessage)).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Reject Import' })).toHaveCount(0);
+
+    await chooseCsvFixture(page, csvFixture);
+
+    await expectAc3Outcome(page);
+    await expect(page.locator('article').filter({ hasText: 'Canonical datasets' })).toContainText('0');
+  });
+
+  test('confirmed imports persist after in-app navigation away from and back to the workspace route', async ({ page }) => {
+    await disableNativeFilePicker(page);
+    await page.goto(workspacePreviewRoute);
+    await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
+
+    await chooseCsvFixture(page, csvFixture);
+
+    await expectAc3Outcome(page);
+    await page.getByRole('button', { name: 'Confirm Import' }).click();
+
+    await expect(page.getByText(previewConfirmedMessage)).toBeVisible();
+    await expect(page.locator('article').filter({ hasText: 'Canonical datasets' })).toContainText('1');
+
+    await page.getByRole('link', { name: 'Home' }).click();
+    await expect(page.getByRole('heading', { name: 'Shell readiness' })).toBeVisible();
+
+    await page.goBack();
+    await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
+    await chooseCsvFixture(page, csvFixture);
+    await expectAc3Outcome(page);
+    await expect(page.locator('article').filter({ hasText: 'Canonical datasets' })).toContainText('1');
+  });
+
+  test('confirmed imports reopen through the persisted preview workspace route after a hard reload', async ({ page }) => {
+    await disableNativeFilePicker(page);
+    await page.goto(workspacePreviewRoute);
+    await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
+
+    await chooseCsvFixture(page, csvFixture);
+
+    await expectAc3Outcome(page);
+    await page.getByRole('button', { name: 'Confirm Import' }).click();
+
+    await expect(page.getByText(previewConfirmedMessage)).toBeVisible();
+
+    await page.goto('/workspace/workspace_import_preview');
+    await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
+
+    await chooseCsvFixture(page, csvFixture);
+    await expectAc3Outcome(page);
+    await expect(page.locator('article').filter({ hasText: 'Canonical datasets' })).toContainText('1');
   });
 });

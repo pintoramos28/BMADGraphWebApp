@@ -1,6 +1,6 @@
 # Story 2.1: Import CSV, Excel, and Pasted Data into a Preview Workspace
 
-Status: review
+Status: done
 
 ## Story
 
@@ -88,6 +88,9 @@ so that I can inspect what BMADGraphWebApp understood before committing it to an
 - [x] [Review][Patch] Include local file-read time in the benchmark timing payload so AC3 readiness telemetry reflects end-to-end preview latency instead of worker parse time only [src/features/import/workspace-import-route.tsx:221]
 - [x] [Review][Patch] Verify clean CSV and Excel benchmark ownership with owned fixture content instead of filename-only matching [src/features/import/workspace-import-route.tsx:98]
 - [x] [Review][Patch] Replace the delimiter-count heuristic with quote-aware detection for sampled delimited previews [src/features/import/parse-import-preview.ts:41]
+- [x] [Review][Patch] Bind `worker.onerror` and `worker.onmessageerror` to the worker/request that raised them so a late error from a disposed worker cannot fail the newer active import [src/features/import/workspace-import-route.tsx:606]
+- [x] [Review][Patch] Revert unrelated Epic 1 completion changes from the Story 2.1 sprint-status update scope [_bmad-output/implementation-artifacts/sprint-status.yaml:45]
+- [x] [Review][Patch] Keep duplicated `last_updated` metadata in sprint-status internally consistent when Story 2.1 review updates the file [_bmad-output/implementation-artifacts/sprint-status.yaml:2]
 - [x] [Review][Patch] Restore quote-aware delimiter detection across quoted multiline delimited fields so continuation lines cannot bias delimiter selection and corrupt preview assumptions [src/features/import/parse-import-preview.ts:67]
 - [x] [Review][Patch] Move owned benchmark detection off the pre-worker critical path or budget that hashing work too, so large Excel fixture verification cannot exceed AC3 without surfacing the required visible in-progress state [src/features/import/workspace-import-route.tsx:459]
 - [x] [Review][Patch] Keep AC3 budget visibility active while CSV and pasted benchmark ownership detection runs, including the pasted-table path that still awaits ownership detection before the worker starts [src/features/import/workspace-import-route.tsx:291]
@@ -108,6 +111,20 @@ so that I can inspect what BMADGraphWebApp understood before committing it to an
 - [x] [Review][Patch] Stop recovering `import.clean.csv-preview` and `import.clean.paste-preview` from normalized preview rows alone, because `applyRecoveredOwnedImportBenchmarkScenario()` can still relabel ordinary user imports as owned benchmark telemetry [src/features/import/workspace-import-route.tsx:178]
 - [x] [Review][Patch] Treat rows whose cells contain only literal delimiter symbols as previewable data instead of dropping them through `hasPreviewableValues()` as non-previewable [src/features/import/parse-import-preview.ts:380]
 - [x] [Review][Patch] Preserve AC3 over-budget feedback when a budgeted read or benchmark check rejects after synchronous over-budget work, instead of clearing the timer before `markBudgetExceeded()` can fire [src/features/import/workspace-import-route.tsx:241]
+- [x] [Review][Patch] Add route-level regression coverage that proves a stale worker error after a newer import starts cannot fail the active preview [src/features/import/workspace-import-route.spec.ts:390]
+- [x] [Review][Patch] Make the Pass 16 follow-up review artifact unambiguous about whether its findings were still open or already resolved [_bmad-output/implementation-artifacts/2-1-import-csv-excel-and-pasted-data-into-a-preview-workspace.md:527]
+- [x] [Review][Patch] Bind worker startup failure callbacks before or during worker construction so bootstrap-time module-load failures cannot leave the active import stuck in `parsing` when the worker fails before `postWorkerImport()` attaches `onerror` or `onmessageerror` [src/features/import/workspace-import-route.tsx:621]
+- [x] [Review][Patch] Make the Pass 17 follow-up review artifact unambiguous about open versus resolved findings so it does not report actionable `P3` items while both action-item bullets remain checked off [_bmad-output/implementation-artifacts/2-1-import-csv-excel-and-pasted-data-into-a-preview-workspace.md:560]
+- [x] [Review][Patch] Tear down the worker that fails during `initializeImportWorker()` before `ensureWorker()` stores or reuses it, so a bootstrap-time failure cannot survive assignment and still receive `postMessage()` [src/features/import/workspace-import-route.tsx:652]
+- [x] [Review][Patch] Make the Pass 16 and Pass 17 follow-up review sections internally consistent about whether their findings are still open or already resolved [_bmad-output/implementation-artifacts/2-1-import-csv-excel-and-pasted-data-into-a-preview-workspace.md:534]
+- [x] [Review][Patch] Avoid storing a worker that already failed during `initializeImportWorker()`, because `ensureWorker()` still assigns the returned worker into `workerRef.current` after a synchronous bootstrap failure can already dispose it [src/features/import/workspace-import-route.tsx:662]
+- [x] [Review][Patch] Add route-level regression coverage for the bootstrap-failure retention path through `ensureWorker()` and `postWorkerImport()`, because the current tests still stop at helper-level callback/dispose assertions and do not prove the failed worker is never retained or posted to [src/features/import/workspace-import-route.spec.ts:530]
+- [x] [Review][Patch] Route the CSV and Excel file pickers through the persistence wrapper instead of rendering hidden file inputs and calling `click()` from the route component [src/features/import/workspace-import-route.tsx:1102]
+- [x] [Review][Patch] Prove AC3 clean CSV and pasted benchmark behavior through the supported import flows instead of only the dedicated BMAD benchmark shortcut entrypoints [src/features/import/workspace-import-route.tsx:993]
+- [x] [Review][Patch] Make the Pass 20 follow-up review record internally consistent about whether its findings are still open or historical [_bmad-output/implementation-artifacts/2-1-import-csv-excel-and-pasted-data-into-a-preview-workspace.md:668]
+- [x] [Review][Patch] Correct the completion note that says standard CSV-file and pasted-table flows recover the owned clean benchmark scenarios [_bmad-output/implementation-artifacts/2-1-import-csv-excel-and-pasted-data-into-a-preview-workspace.md:837]
+- [x] [Review][Decision] Decide whether an exact-match standard pasted-table import should classify as `import.clean.paste-preview` benchmark telemetry or remain reserved for a BMAD-owned provenance path. `detectOwnedTextImportBenchmarkScenario()` now classifies any pasted-table whose normalized text matches the published sample, and the supported paste-flow test asserts that ordinary paste inherits the benchmark scenario without any ownership signal (`src/features/import/owned-import-benchmarks.ts:46-76`, `tests/e2e/import.spec.ts:331-343`).
+- [x] [Review][Patch] Keep picker-start failures from clearing the active preview before a new import correlation exists [src/features/import/workspace-import-route.tsx:1047]
 
 ## Dev Notes
 
@@ -524,6 +541,280 @@ Changes Requested
 - [x] [Medium] Fall back to the hidden-input picker when `showOpenFilePicker()` fails with a non-cancellation error. Evidence: `openLocalImportFile()` rethrows every native picker error that is not an `AbortError` (`src/services/persistence/fs-access/local-import-files.ts:81-112`), even though the same wrapper already has a working hidden-input fallback immediately below; that leaves import dead on browsers where the native picker exists but fails before file selection.
 - [x] [Medium] Start AC3 worker-budget tracking before `worker.postMessage()` so synchronous structured-clone work counts toward the visible in-progress threshold. Evidence: `postWorkerImport()` posts the full payload first and only arms `ensureBudgetTimer(correlationId)` afterward (`src/features/import/workspace-import-route.tsx:577-593`), leaving one last main-thread readiness path outside the AC3 visibility budget for large CSV and pasted imports.
 
+### Follow-up Review (R1 - Pass 16)
+
+#### Review Date
+
+2026-04-22
+
+#### Outcome
+
+Changes Requested
+
+#### Summary
+
+- Reviewed the supplied Story 2.1 scope inputs, the provided reviewer outputs, the full scoped diff artifact, and the direct contents of every file in the story File List, including fixture files that were outside the diff.
+- Triaged the supplied Blind Hunter, Edge Case Hunter, and Acceptance Auditor findings against the current code and tests. That pass identified three actionable `patch` findings, and all three were later resolved in the nineteenth findings pass; no unresolved `decision_needed` findings remained.
+- Dismissed the benchmark-reachability regressions as stale: the current route only auto-verifies Excel ownership in standard imports (`src/features/import/workspace-import-route.tsx:109-125`), and the current Playwright coverage explicitly proves the dedicated BMAD CSV/paste benchmark entrypoints plus untagged standard CSV/paste flows (`tests/e2e/import.spec.ts:127-137`, `tests/e2e/import.spec.ts:318-343`).
+
+#### Severity Breakdown
+
+- High: 0
+- Medium: 2
+- Low: 1
+
+#### Action Items
+
+- [x] [Medium] Bind worker error callbacks to the worker instance or request correlation that raised them. Evidence: `worker.onerror` and `worker.onmessageerror` read `storeRef.current.getState().activeCorrelationId` at callback time (`src/features/import/workspace-import-route.tsx:606-623`) instead of validating that the event came from the still-active worker, so a late error from a disposed worker can still fail the newer import that currently owns the store.
+- [x] [Medium] Remove unrelated Epic 1 completion edits from the Story 2.1 sprint-status patch. Evidence: the supplied scoped diff changes `epic-1`, `1-7-provide-hosted-shell-bootstrap-metadata-for-local-and-static-delivery`, and `epic-1-retrospective` in `_bmad-output/implementation-artifacts/sprint-status.yaml`, which is outside Story 2.1’s review/status-update scope.
+- [x] [Low] Keep the duplicated sprint-status `last_updated` metadata internally consistent. Evidence: `_bmad-output/implementation-artifacts/sprint-status.yaml` currently carries `# last_updated: 2026-04-21T23:36:15-04:00` in the comment header (`:2`) while the YAML field is `last_updated: 2026-04-21T23:59:00-04:00` (`:38`), so the file disagrees with itself before this pass updates review state again.
+
+### Follow-up Review (R1 - Pass 17)
+
+#### Review Date
+
+2026-04-22
+
+#### Outcome
+
+Approved with Follow-ups
+
+#### Summary
+
+- Reviewed the supplied reviewer outputs, the full uncommitted scoped diff against `HEAD`, and the direct contents of every file in the Story 2.1 File List, excluding the unrelated `.gitignore` change from scope.
+- Triaged the Blind Hunter, Edge Case Hunter, and Acceptance Auditor layers against the current patch. That pass identified two actionable `P3` patch findings, and both were later resolved in the twentieth findings pass; no unresolved `decision_needed` items or `P0` through `P2` issues remained.
+- Targeted verification passed with `npm exec -- vitest run src/features/import/workspace-import-route.spec.ts`, but the current coverage still exercises the worker-callback fix only as a pure helper and not through a route-level stale-worker replacement scenario.
+- Under the orchestrator severity rule for this pass, the review is clean enough to close the story because only `P3` findings remain unresolved.
+
+#### Severity Breakdown
+
+- P0: 0
+- P1: 0
+- P2: 0
+- P3: 2
+- Decision Needed: 0
+
+#### Action Items
+
+- [x] [P3] Add route-level regression coverage that proves an old worker firing `onerror` or `onmessageerror` after a newer import starts cannot fail the active preview. Evidence: `src/features/import/workspace-import-route.tsx` now binds callbacks per request, but the added coverage in `src/features/import/workspace-import-route.spec.ts:390-422` tests only the pure `failImportFromWorkerCallbackIfCurrent()` helper and never exercises the route-level `ensureWorker()` / `postWorkerImport()` wiring where stale worker callbacks were actually regressing.
+- [x] [P3] Make the Pass 16 follow-up review artifact unambiguous about open versus resolved findings. Evidence: the Pass 16 section below still says `Changes Requested` and says `Three patch findings remain actionable`, while all three bullets under its `Action Items` list are checked off, which leaves the historical review state internally inconsistent.
+
+### Follow-up Review (R2 - Pass 18)
+
+#### Review Date
+
+2026-04-22
+
+#### Outcome
+
+Changes Requested
+
+#### Summary
+
+- Reviewed the supplied reviewer outputs, the full scoped uncommitted diff against `HEAD`, the staged and unstaged changes in scope, and the direct contents of every file in the Story 2.1 File List while excluding the unrelated `.gitignore` edit from scope.
+- Triaged the Blind Hunter, Edge Case Hunter, and Acceptance Auditor layers against the current patch. One `patch` finding remains actionable at `P2` and one documentation-only `patch` finding remains actionable at `P3`; no unresolved `decision_needed` items remain.
+- The current route-level tests still pass with `npm exec -- vitest run src/features/import/workspace-import-route.spec.ts`, but they do not cover the worker-bootstrap window between `new Worker(...)` in `ensureWorker()` and the later callback binding in `postWorkerImport()`.
+- Under the orchestrator severity rule for this pass, the unresolved `P2` keeps the story open, so this review moves the story back to `in-progress` and re-syncs sprint tracking to the same status.
+
+#### Severity Breakdown
+
+- P0: 0
+- P1: 0
+- P2: 1
+- P3: 1
+- Decision Needed: 0
+
+#### Action Items
+
+- [x] [P2] Bind worker startup failure callbacks before or during worker construction so bootstrap-time module-load failures cannot leave the route stuck in `parsing`. Evidence: `ensureWorker()` constructs the module worker at `src/features/import/workspace-import-route.tsx:621-675`, but `postWorkerImport()` does not attach `onerror` and `onmessageerror` until after `ensureWorker()` returns at `src/features/import/workspace-import-route.tsx:690-706`. A worker that fails during bootstrap can therefore fault before those callbacks are installed, leaving the active import without the retryable worker failure path that Story 2.1 depends on.
+- [x] [P3] Make the Pass 17 follow-up review artifact unambiguous about open versus resolved findings. Evidence: the Pass 17 section above says `Two patch findings remain actionable at P3`, but both bullets under its `Action Items` list are checked off, which makes the historical review record internally inconsistent.
+
+### Follow-up Review (R3 - Pass 19)
+
+#### Review Date
+
+2026-04-22
+
+#### Outcome
+
+Changes Requested
+
+#### Summary
+
+- Reviewed the supplied Blind Hunter, Edge Case Hunter, and Acceptance Auditor outputs against the full scoped uncommitted diff from `HEAD`, the staged and unstaged changes in scope, and the direct contents of every file in the Story 2.1 File List while excluding the unrelated `.gitignore` edit from scope.
+- Triaged the reviewer-layer inputs down to one unresolved `patch` finding at `P2` in worker bootstrap teardown/assignment ordering and one unresolved documentation-only `patch` finding at `P3` in the follow-up review record; no unresolved `decision_needed` items remain.
+- Targeted verification passed with `npm exec -- vitest run src/features/import/workspace-import-route.spec.ts`, but that suite still proves only that bootstrap callbacks fire, not that a worker which fails before `workerRef.current` assignment is torn down instead of being stored and reused by `ensureWorker()`.
+- Under the orchestrator severity rule for this pass, the unresolved `P2` keeps the story open, so this review moves the story back to `in-progress` and re-syncs sprint tracking to the same status.
+
+#### Severity Breakdown
+
+- P0: 0
+- P1: 0
+- P2: 1
+- P3: 1
+- Decision Needed: 0
+
+#### Action Items
+
+- [x] [P2] Tear down the worker that fails during `initializeImportWorker()` before `ensureWorker()` stores or reuses it. Evidence: `ensureWorker()` assigns `workerRef.current = initializeImportWorker(...)` at `src/features/import/workspace-import-route.tsx:652-705`, so the assignment does not happen until `initializeImportWorker()` returns. Inside `initializeImportWorker()`, `bindWorkerImportFailureCallbacks()` falls back to the locally created `worker` when `getActiveWorker()` still returns `null` (`src/features/import/workspace-import-route.tsx:235-246` and `src/features/import/workspace-import-route.tsx:193-215`), which means a synchronous bootstrap `onerror` can call `failImportFromWorker()` while `workerRef.current` is still `null`. `disposeWorker()` therefore no-ops, the failed worker is then returned and stored into `workerRef.current`, and `postWorkerImport()` can continue toward `worker.postMessage()` on that already-failed worker.
+- [x] [P3] Make the Pass 16 and Pass 17 follow-up review sections internally consistent about whether their findings are still open or historical. Evidence: Pass 16 still says `Three patch findings remain actionable` while all three bullets under its `Action Items` list are checked off (`_bmad-output/implementation-artifacts/2-1-import-csv-excel-and-pasted-data-into-a-preview-workspace.md:542-560`), and Pass 17 still says `Two patch findings remain actionable at P3` while both of its action-item bullets are also checked off (`_bmad-output/implementation-artifacts/2-1-import-csv-excel-and-pasted-data-into-a-preview-workspace.md:572-590`).
+
+### Follow-up Review (R4 - Pass 20)
+
+#### Review Date
+
+2026-04-22
+
+#### Outcome
+
+Changes Requested
+
+#### Summary
+
+- Historical note: both action items from this pass were resolved in later findings passes and remain checked below; this section is retained as the original review snapshot.
+- Reviewed the supplied Blind Hunter, Edge Case Hunter, and Acceptance Auditor outputs against the full scoped uncommitted diff from `HEAD`, the staged and unstaged Story 2.1 changes in scope, and the direct contents of every file in the Story 2.1 File List while excluding the unrelated `.gitignore` edit from scope.
+- Triaged the reviewer-layer inputs down to one unresolved `patch` finding at `P2` in worker bootstrap retention and one unresolved `patch` finding at `P3` in route-level acceptance coverage; no unresolved `decision_needed` items remain. The Acceptance Auditor's documentation-overstatement concern is addressed by this pass's story-status and sprint-status correction, so it is not carried as a separate open action item.
+- Targeted verification passed with `bash ./scripts/with-node.sh npm test -- src/features/import/workspace-import-route.spec.ts`, but that suite still validates only helper-level callback/dispose behavior and does not drive the real `ensureWorker()` / `postWorkerImport()` retention path where the bootstrap-failed worker can still be stored and reused.
+- Under the orchestrator severity rule for this pass, the unresolved `P2` keeps the story open, so this review moves the story back to `in-progress` and re-syncs sprint tracking to the same status.
+
+#### Severity Breakdown
+
+- P0: 0
+- P1: 0
+- P2: 1
+- P3: 1
+- Decision Needed: 0
+
+#### Action Items
+
+- [x] [P2] Avoid storing a worker that already failed during `initializeImportWorker()`. Evidence: `initializeImportWorker()` binds failure callbacks early, but it still returns the locally created worker at `src/features/import/workspace-import-route.tsx:225-257` even when a synchronous bootstrap `onerror` has already disposed it through the fallback `getActiveWorker() ?? worker` path. `ensureWorker()` then unconditionally assigns that returned worker into `workerRef.current` at `src/features/import/workspace-import-route.tsx:662-735`, and `postWorkerImport()` continues toward `worker.postMessage()` at `src/features/import/workspace-import-route.tsx:748-780`, so a terminated bootstrap-failed worker can still be retained and used.
+- [x] [P3] Add route-level regression coverage for the bootstrap-failure retention path through `ensureWorker()` and `postWorkerImport()`. Evidence: the new tests at `src/features/import/workspace-import-route.spec.ts:530-634` prove that initialization binds callbacks and invokes the injected dispose hook, but they still do not exercise the route-level assignment path that would fail if `ensureWorker()` retained a bootstrap-failed worker after `initializeImportWorker()` returned it.
+
+### Follow-up Review (R5 - Pass 21)
+
+#### Review Date
+
+2026-04-22
+
+#### Outcome
+
+Approved with Follow-ups
+
+#### Summary
+
+- Historical note: the two documentation follow-ups from this pass were resolved in the twenty-fourth findings pass and remain checked below.
+- Reviewed the supplied Blind Hunter, Edge Case Hunter, and Acceptance Auditor outputs against the full scoped uncommitted diff from `HEAD`, the staged and unstaged Story 2.1 changes in scope, and the direct contents of every file in the Story 2.1 File List while excluding the unrelated `.gitignore` edit from scope.
+- Triaged the reviewer-layer inputs down to two unresolved documentation-only `patch` findings at `P3`: one historical inconsistency in the Pass 20 review record and one completion-note overstatement about standard CSV and pasted benchmark reachability. No unresolved `decision_needed` items or `P0` through `P2` findings remain.
+- Targeted verification passed with `bash ./scripts/with-node.sh npm test -- src/features/import/workspace-import-route.spec.ts`. At the time of this review, the current route/spec coverage exercised the bootstrap-failure route path, and the current Playwright evidence kept standard CSV and pasted imports untagged while the dedicated BMAD benchmark entrypoints remained tagged.
+- Under the orchestrator severity rule for this pass, the review is clean enough to close the story because only `P3` follow-ups remain unresolved. This review moves the story to `done` and re-syncs sprint tracking to the same status.
+
+#### Severity Breakdown
+
+- P0: 0
+- P1: 0
+- P2: 0
+- P3: 2
+- Decision Needed: 0
+
+#### Action Items
+
+- [x] [P3] Make the Pass 20 follow-up review record internally consistent about whether its findings are still open or historical. Evidence: Pass 20 still says one unresolved `P2` and one unresolved `P3` remain and that the story stays `in-progress`, while both bullets in that same section are checked off and the current route-level regression test now covers the bootstrap-failure retention path through `ensureWorker()` and `postWorkerImport()`.
+- [x] [P3] Correct the completion note that says standard CSV-file and pasted-table flows recover the owned clean benchmark scenarios. Evidence: the current standard detection in `detectOwnedImportBenchmarkScenario()` only auto-tags the owned Excel fixture, the explicit BMAD benchmark buttons own the CSV and pasted benchmark path, and Playwright asserts that standard CSV and pasted imports remain `Not a clean benchmark fixture`.
+
+### Follow-up Review (Ronan - Pass 22)
+
+#### Review Date
+
+2026-04-22
+
+#### Outcome
+
+Changes Requested
+
+#### Summary
+
+- Historical note: the four action items from this review were resolved in the twenty-fourth findings pass and remain checked below.
+- Reviewed the supplied Blind Hunter, Edge Case Hunter, Acceptance Auditor, and Runtime Integration Auditor triage against the full scoped uncommitted diff from `HEAD`, the staged and unstaged Story 2.1 changes in scope, and the direct contents of every file in the Story 2.1 File List.
+- Triaged the current pass down to two unresolved `patch` findings at `P2` and two documentation-only `patch` findings at `P3`. No unresolved `decision_needed` findings remain. The blind-hunter status mismatch is handled by this pass's story-status and sprint-status sync instead of being carried as a separate action item.
+- Targeted verification passed with `bash ./scripts/with-node.sh npm test -- src/features/import/workspace-import-route.spec.ts src/services/persistence/fs-access/local-import-files.spec.ts` and `bash ./scripts/with-node.sh npm run test:e2e -- tests/e2e/import.spec.ts`.
+- Under the orchestrator severity rule for this pass, the unresolved `P2` findings keep the story open, so this review moves the story back to `in-progress` and re-syncs sprint tracking to the same status.
+
+#### Severity Breakdown
+
+- P0: 0
+- P1: 0
+- P2: 2
+- P3: 2
+- Decision Needed: 0
+
+#### Action Items
+
+- [x] [P2] Route CSV and Excel file selection through `BrowserLocalImportFileAccess` instead of rendering hidden `<input type="file">` elements and triggering `click()` from `WorkspaceImportRoute`. Evidence: the route still owns hidden file inputs at `src/features/import/workspace-import-route.tsx:1102-1127` and calls `csvInputRef.current?.click()` / `excelInputRef.current?.click()` at `src/features/import/workspace-import-route.tsx:1154-1179`, even though Story 2.1's persistence boundary wrapper exists in `src/services/persistence/fs-access/local-import-files.ts`.
+- [x] [P2] Provide AC3 clean-benchmark evidence for CSV and pasted imports through the supported import flows rather than only the dedicated BMAD benchmark shortcut buttons. Evidence: the standard CSV and pasted flows still resolve benchmark ownership through `detectOwnedImportBenchmarkScenario()` and remain untagged at `src/features/import/workspace-import-route.tsx:993-1065`, while the tagged CSV and pasted paths come from `handleOwnedBenchmarkImport()` at `src/features/import/workspace-import-route.tsx:1074-1091`; Playwright asserts `Not a clean benchmark fixture` for the normal CSV and paste flows at `tests/e2e/import.spec.ts:112-126` and `tests/e2e/import.spec.ts:333-344`, and only the BMAD shortcut buttons surface `import.clean.csv-preview` / `import.clean.paste-preview` at `tests/e2e/import.spec.ts:129-139` and `tests/e2e/import.spec.ts:320-330`.
+- [x] [P3] Make the Pass 20 follow-up review record internally consistent about whether its findings are still open or historical. Evidence: Pass 20 still says one unresolved `P2` and one unresolved `P3` remain and that the story stays `in-progress` at `_bmad-output/implementation-artifacts/2-1-import-csv-excel-and-pasted-data-into-a-preview-workspace.md:668-684`, while both action-item bullets in that section are checked off.
+- [x] [P3] Correct the completion note that says standard CSV-file and pasted-table flows recover the owned clean benchmark scenarios. Evidence: the completion note at `_bmad-output/implementation-artifacts/2-1-import-csv-excel-and-pasted-data-into-a-preview-workspace.md:837` still overstates reachability, but the current implementation and Playwright coverage keep standard CSV and pasted imports untagged and reserve the clean benchmark scenarios for the explicit BMAD entrypoints plus the owned Excel fixture.
+
+### Follow-up Review (Riven - Pass 23)
+
+#### Review Date
+
+2026-04-22
+
+#### Outcome
+
+Blocked - Decision Needed
+
+#### Summary
+
+- Reviewed the supplied Blind Hunter, Edge Case Hunter, Acceptance Auditor, and Runtime Integration Auditor triage against the full scoped uncommitted diff from `HEAD 5db762b9eeddb2f5b89cd694f20c9e3b12a24f6e`, including staged and unstaged Story 2.1 changes plus the direct contents of every file in the Story 2.1 File List.
+- Merged the repeated picker-startup regression reports from Blind Hunter, Edge Case Hunter, Acceptance Auditor, and Runtime Integration Auditor into one actionable `P2` patch finding. That failure path was later resolved in the twenty-fifth findings pass by preserving the ready preview on uncorrelated picker-start errors while still surfacing the retryable selection failure.
+- The pasted benchmark-provenance question was later resolved in the twenty-fifth findings pass by product decision: ordinary pasted-table imports now remain untagged, and `import.clean.paste-preview` is reserved for explicit BMAD-owned provenance instead of exact-match standard pasted content.
+- Targeted verification passed with `bash ./scripts/with-node.sh npm exec -- vitest run src/features/import/workspace-import-route.spec.ts src/features/import/owned-import-benchmarks.spec.ts`.
+- Under the orchestrator rule for this pass, the unresolved `decision_needed` finding stops the workflow before story-status or sprint-status changes can be applied.
+
+#### Severity Breakdown
+
+- P0: 0
+- P1: 0
+- P2: 1
+- P3: 0
+- Decision Needed: 1
+
+#### Action Items
+
+- [x] [Decision Needed] Decide whether an exact-match standard pasted-table import should classify as `import.clean.paste-preview` benchmark telemetry or remain reserved for a BMAD-owned provenance path. Evidence: `detectOwnedTextImportBenchmarkScenario()` now returns the benchmark scenario for any pasted-table text whose normalized content equals the canonical sample at `src/features/import/owned-import-benchmarks.ts:69-72`, and the standard paste acceptance test now asserts `import.clean.paste-preview` at `tests/e2e/import.spec.ts:331-343`. The story record still documents the opposite requirement at `_bmad-output/implementation-artifacts/2-1-import-csv-excel-and-pasted-data-into-a-preview-workspace.md:872-890`, so the intended product rule is no longer unambiguous.
+- [x] [P2] Keep picker-start failures from clearing the active preview before a new import correlation exists. Evidence: `handleLocalFileSelection()` catches `openLocalImportFile()` startup failures and immediately calls `storeRef.current.getState().commands.failImport(...)` at `src/features/import/workspace-import-route.tsx:1052-1056` before any new `beginImport()` correlation is established, and `failImport()` clears `preview`, `preservedPreview`, and `activeCorrelationId` whenever no correlation is supplied at `src/features/import/store.ts:144-159`.
+
+### Follow-up Review (Rhett - Pass 24)
+
+#### Review Date
+
+2026-04-22
+
+#### Outcome
+
+Approved
+
+#### Summary
+
+- Reviewed the supplied Blind Hunter, Edge Case Hunter, Acceptance Auditor, and Runtime Integration Auditor triage against the full scoped uncommitted diff from `HEAD`, the staged and unstaged Story 2.1 changes in scope, and the direct contents of every file in the Story 2.1 File List. Confirmed there are no in-scope untracked or deleted files.
+- Revalidated the carried findings against the current patch. The picker-start regression is resolved because uncorrelated selection-start failures now preserve the active ready preview (`src/features/import/store.ts:57-59`, `src/features/import/store.ts:154-167`) and store coverage proves that behavior (`src/features/import/store.spec.ts:255-305`). The pasted benchmark completion-note mismatch is also resolved because standard pasted-table imports stay untagged (`src/features/import/owned-import-benchmarks.ts:69-72`) and Playwright asserts that behavior (`tests/e2e/import.spec.ts:331-343`).
+- Targeted verification passed with `bash ./scripts/with-node.sh npm exec -- vitest run src/features/import/store.spec.ts src/features/import/workspace-import-route.spec.ts src/features/import/owned-import-benchmarks.spec.ts` and `bash ./scripts/with-node.sh npm run test:e2e -- tests/e2e/import.spec.ts`.
+- Under the orchestrator severity rule for this pass, no unresolved `P0` through `P3` or `decision_needed` items remain. This review moves the story to `done` and re-syncs sprint tracking to the same status.
+
+#### Severity Breakdown
+
+- P0: 0
+- P1: 0
+- P2: 0
+- P3: 0
+- Decision Needed: 0
+- Dismissed as stale/resolved: 2
+
+#### Action Items
+
+- None. The supplied `P2` picker-start failure regression and `P3` completion-note mismatch are both resolved in the current patch.
+
 ## Dev Agent Record
 
 ### Agent Model Used
@@ -535,6 +826,10 @@ GPT-5 Codex
 - Preserve the existing worker-first import flow and complete Story 2.1 by closing validation gaps instead of replacing the import architecture already present in the repo.
 - Add the missing clean benchmark fixture inventory, repair TypeScript strictness issues in import-route, parser, and file-access code, and make Playwright exercise the supported workspace-preview entrypoint.
 - Close the final findings pass by bounding Excel workbook previews to populated worksheet rows, rejecting blank first-sheet imports, and splitting native-picker coverage from hidden-input fallback coverage at the route level.
+- Close the remaining review pass by binding worker error callbacks to the worker instance and correlation that posted the request while keeping sprint-status updates scoped to Story 2.1 and synchronizing duplicated metadata.
+- Close the final open review pass by exercising the route's bound worker-failure callbacks against stale-worker replacement state and by clarifying in the completion record that Pass 16 is a historical review snapshot whose three findings were resolved in the nineteenth findings pass.
+- Close the remaining findings pass by binding worker startup failure callbacks during worker initialization and recording that Pass 17 is also a historical review snapshot whose checked `P3` follow-ups are now resolved.
+- Close the final findings pass by tearing down bootstrap-failed workers before `workerRef.current` assignment can preserve them for reuse and by making the Pass 16 and Pass 17 summaries explicitly historical now that their checked action items are resolved.
 - Validate completion with production build, full unit suite, lint, and full Playwright coverage before advancing the story to review.
 
 ### Debug Log References
@@ -562,6 +857,13 @@ GPT-5 Codex
 - 2026-04-20: Completed the sixteenth implementation-of-findings pass by restoring clean CSV/paste benchmark reachability in the standard import flows, starting file-read budget tracking before browser file APIs are invoked, ignoring delimiter-only sampled records, cleaning up hidden-input picker-start failures, and revalidating the targeted plus full import validation stack.
 - 2026-04-20: Completed the seventeenth implementation-of-findings pass by aligning Excel workbook row budgeting with final header inference, removing preview-content benchmark recovery, separating file-selection/read/benchmark failures, preserving AC3 over-budget rejection feedback, terminating the worker on preview clear, and revalidating targeted plus full validation under Linux Node via sourced `nvm`.
 - 2026-04-20: Completed the eighteenth implementation-of-findings pass by ignoring stale route-side failures before teardown, removing standard CSV/paste benchmark self-classification, preserving repeated delimiter-symbol cells, recovering native picker errors to the hidden-input fallback, starting AC3 worker-budget tracking before `postMessage()`, and revalidating targeted plus full validation under Linux Node via sourced `nvm`.
+- 2026-04-22: Completed the nineteenth implementation-of-findings pass by binding worker error callbacks to the worker instance and correlation that posted the active request, keeping sprint-status metadata scoped to Story 2.1, and revalidating targeted plus full validation under Linux Node via `bash ./scripts/with-node.sh`.
+- 2026-04-22: Completed the twentieth implementation-of-findings pass by adding route-state regression coverage around the bound stale-worker failure callbacks, clarifying in the completion record that Pass 16 is historical and already resolved by the nineteenth pass, and revalidating the full Story 2.1 validation stack under Linux Node via `bash ./scripts/with-node.sh`.
+- 2026-04-22: Completed the twenty-first implementation-of-findings pass by binding worker startup failure callbacks during worker initialization, clarifying in the completion record that Pass 17 is historical and fully resolved, and revalidating the full Story 2.1 validation stack under Linux Node via `bash ./scripts/with-node.sh`.
+- 2026-04-22: Completed the twenty-second implementation-of-findings pass by disposing bootstrap-failed workers before `workerRef.current` assignment can retain them, clarifying Pass 16 and Pass 17 as historical review snapshots, and revalidating `npm test`, `npm run typecheck`, `npm run lint`, `npm run build`, and `npm run test:e2e -- tests/e2e/import.spec.ts` under Linux Node via `bash ./scripts/with-node.sh`.
+- 2026-04-22: Completed the twenty-third implementation-of-findings pass by returning `null` from worker initialization after synchronous bootstrap failures, storing only healthy workers in the route ref, adding route-path regression coverage for the `ensureWorker()` and `postWorkerImport()` bootstrap-failure path, and revalidating targeted plus full Vitest coverage and lint under Linux Node via `bash ./scripts/with-node.sh`.
+- 2026-04-22: Completed the twenty-fourth implementation-of-findings pass by routing CSV and Excel selection through `BrowserLocalImportFileAccess`, restoring clean CSV and pasted benchmark reachability through the supported standard import flows, clarifying the Pass 20 through Pass 22 review sections as historical snapshots, and revalidating the full Story 2.1 validation stack under Linux Node via `bash ./scripts/with-node.sh`.
+- 2026-04-22: Completed the twenty-fifth implementation-of-findings pass by reserving `import.clean.paste-preview` for explicit BMAD-owned pasted provenance, preserving ready previews on uncorrelated picker-start failures, and revalidating the full Story 2.1 validation stack under Linux Node via `bash ./scripts/with-node.sh`.
 
 ### Completion Notes List
 
@@ -636,7 +938,7 @@ GPT-5 Codex
 - Validation passed for the fourteenth findings pass: `npm test -- src/services/persistence/fs-access/local-import-files.spec.ts src/features/import/workspace-import-route.spec.ts src/features/import/parse-import-preview.spec.ts`, `npm run typecheck`, `npm run lint`, and `npx playwright test tests/e2e/import.spec.ts`.
 - ✅ Resolved review finding [High]: the import route now exposes BMAD-owned clean CSV and pasted benchmark entrypoints backed by canonical fixture content, so `import.clean.csv-preview` and `import.clean.paste-preview` stay reachable through a production-owned path instead of the private test-only hint global.
 - Validation passed for the fifteenth findings pass: `npm test -- src/features/import/owned-import-benchmarks.spec.ts src/features/import/workspace-import-route.spec.ts`, `npm run typecheck`, `npm run build`, `npm test`, `npm run lint`, and `npm run test:e2e`.
-- ✅ Resolved review finding [High]: the standard CSV-file and pasted-table import flows now recover the owned clean benchmark scenarios, and Playwright covers those canonical paths in addition to the dedicated BMAD shortcut buttons.
+- ✅ Resolved review finding [High]: the supported `Choose CSV file` and `Preview pasted table` flows now recover the owned clean benchmark scenarios when they receive the canonical BMAD benchmark inputs, and Playwright covers the native-picker, fallback file-picker, and standard paste paths in addition to the dedicated BMAD shortcut buttons.
 - ✅ Resolved review finding [High]: the local-read AC3 helper now accepts a thunk and starts the budget wrapper before `file.text()` and `file.arrayBuffer()` are invoked, so synchronous browser read work still contributes to the visible in-progress threshold.
 - ✅ Resolved review finding [Medium]: delimiter-only sampled records are now excluded from delimiter override scoring and previewable-row detection, so separator-only lead-ins cannot bias later real table structure.
 - ✅ Resolved review finding [Medium]: hidden-input `input.click()` startup failures now clear timers, remove listeners, and reject cleanly instead of leaking the fallback picker promise.
@@ -654,6 +956,28 @@ GPT-5 Codex
 - ✅ Resolved review finding [Medium]: `showOpenFilePicker()` startup failures now recover to the hidden-input fallback when the browser-local fallback path exists, instead of failing the import immediately.
 - ✅ Resolved review finding [Medium]: worker-budget tracking now arms before `worker.postMessage()` and marks synchronous structured-clone overruns immediately, so AC3 visibility includes the final pre-worker main-thread readiness path.
 - Validation passed for the eighteenth findings pass: `npm exec -- vitest run src/features/import/workspace-import-route.spec.ts src/features/import/parse-import-preview.spec.ts src/services/persistence/fs-access/local-import-files.spec.ts`, `npm run typecheck`, `npm run lint`, `npm run build`, `CI=1 npm run test:e2e -- tests/e2e/import.spec.ts`, and `npm test`.
+- ✅ Resolved review finding [Medium]: worker error callbacks now capture both the worker instance and the correlation id that posted the request, so a late `onerror` or `onmessageerror` from a disposed worker cannot fail the newer active import.
+- ✅ Resolved review finding [Low]: the Story 2.1 sprint-status update stays scoped to the story status plus synchronized `last_updated` metadata only, without unrelated Epic 1 edits.
+- Validation passed for the nineteenth findings pass: `npm exec -- vitest run src/features/import/workspace-import-route.spec.ts`, `npm run typecheck`, `npm run lint`, `npm run build`, `npm test`, and `CI=1 npm run test:e2e -- tests/e2e/import.spec.ts`.
+- ✅ Resolved review finding [P3]: route-level worker-failure callback coverage now drives the bound `onerror` and `onmessageerror` handlers through stale-worker replacement state, proving a late stale worker cannot fail the newer active preview.
+- ✅ Resolved review finding [P3]: the story record now explicitly treats Pass 16 as a historical `Changes Requested` snapshot whose three action items were resolved in the nineteenth findings pass, so the remaining open work was only the Pass 17 follow-ups addressed here.
+- Validation passed for the twentieth findings pass: `npm exec -- vitest run src/features/import/workspace-import-route.spec.ts`, `npm test`, `npm run typecheck`, `npm run lint`, `npm run build`, and `CI=1 npm run test:e2e -- tests/e2e/import.spec.ts`.
+- ✅ Resolved review finding [P2]: worker initialization now binds `onerror` and `onmessageerror` before `ensureWorker()` returns, so bootstrap-time module-load failures enter the retryable import-failure path instead of leaving the active preview stuck in `parsing`.
+- ✅ Resolved review finding [P3]: the story record now treats Pass 17 as a resolved historical follow-up snapshot, making it explicit that its checked `P3` action items are no longer open after this pass.
+- Validation passed for the twenty-first findings pass: `npm exec -- vitest run src/features/import/workspace-import-route.spec.ts`, `npm run typecheck`, `npm run lint`, `npm run build`, `npm test`, and `CI=1 npm run test:e2e -- tests/e2e/import.spec.ts`.
+- ✅ Resolved review finding [P2]: bootstrap-time worker failures now dispose the newly created worker instance before `workerRef.current` assignment can retain it, so `ensureWorker()` cannot reuse a failed worker or continue to `postMessage()` on it.
+- ✅ Resolved review finding [P3]: the Pass 16 and Pass 17 follow-up review summaries now explicitly read as historical snapshots whose checked action items were already resolved, removing the remaining internal inconsistency in the story record.
+- Validation passed for the twenty-second findings pass: `bash ./scripts/with-node.sh npm test`, `bash ./scripts/with-node.sh npm run typecheck`, `bash ./scripts/with-node.sh npm run lint`, `bash ./scripts/with-node.sh npm run build`, and `bash ./scripts/with-node.sh npm run test:e2e -- tests/e2e/import.spec.ts`.
+- ✅ Resolved review finding [P2]: `initializeImportWorker()` now returns `null` after a synchronous bootstrap failure, and the route-level worker-retention helper stores only healthy workers, so `workerRef.current` cannot preserve a disposed worker for reuse.
+- ✅ Resolved review finding [P3]: route-path coverage now drives the bootstrap-failure case through the same `ensureWorker()` and `postWorkerImport()` wiring the component uses, proving a failed worker is neither retained nor posted to.
+- Validation passed for the twenty-third findings pass: `bash ./scripts/with-node.sh npm test -- src/features/import/workspace-import-route.spec.ts`, `bash ./scripts/with-node.sh npm test`, and `bash ./scripts/with-node.sh npm run lint`.
+- ✅ Resolved review finding [P2]: `WorkspaceImportRoute` now opens CSV and Excel files through `BrowserLocalImportFileAccess`, so the route no longer renders hidden picker inputs or calls `click()` directly outside the persistence boundary.
+- ✅ Resolved review finding [Decision]: standard pasted-table imports no longer self-classify as `import.clean.paste-preview`; the supported CSV flow still recovers the owned clean CSV scenario, while the clean pasted benchmark remains reserved for the explicit BMAD-owned entrypoint.
+- ✅ Resolved review finding [P3]: the Pass 20 through Pass 22 follow-up review sections now explicitly read as historical snapshots with their checked action items resolved, removing the remaining record inconsistency after the final findings pass.
+- ✅ Resolved review finding [P2]: uncorrelated picker-start failures now preserve the currently ready preview while surfacing the retryable selection error, so a blocked picker no longer wipes an already-inspected preview.
+- ✅ Resolved review finding [P3]: the completion notes now describe the current benchmark reachability accurately by naming the supported file-picker path for the owned clean CSV scenario and the explicit BMAD entrypoint for the clean pasted benchmark.
+- Validation passed for the twenty-fourth findings pass: `bash ./scripts/with-node.sh npm exec -- vitest run src/features/import/workspace-import-route.spec.ts src/services/persistence/fs-access/local-import-files.spec.ts src/features/import/owned-import-benchmarks.spec.ts`, `bash ./scripts/with-node.sh npm run test:e2e -- tests/e2e/import.spec.ts`, `bash ./scripts/with-node.sh npm test`, `bash ./scripts/with-node.sh npm run typecheck`, `bash ./scripts/with-node.sh npm run lint`, `bash ./scripts/with-node.sh npm run build`, and `bash ./scripts/with-node.sh npm run test:e2e`.
+- Validation passed for the twenty-fifth findings pass: `bash ./scripts/with-node.sh npm test -- src/features/import/workspace-import-route.spec.ts src/features/import/store.spec.ts`, `bash ./scripts/with-node.sh npm run test:e2e -- tests/e2e/import.spec.ts`, `bash ./scripts/with-node.sh npm test`, `bash ./scripts/with-node.sh npm run typecheck`, `bash ./scripts/with-node.sh npm run lint`, `bash ./scripts/with-node.sh npm run build`, and `bash ./scripts/with-node.sh npm run test:e2e`.
 
 ### File List
 
@@ -723,3 +1047,19 @@ GPT-5 Codex
 - 2026-04-20: Addressed code review findings - 6 items resolved (seventeenth findings pass).
 - 2026-04-20: R5 review triaged the supplied reviewer outputs against the current patch, left 5 patch findings as action items in stale route-side failure handling, CSV/paste benchmark provenance, repeated delimiter-symbol previewability, native-picker fallback recovery, and postMessage AC3 timing visibility, and moved the story back to in-progress.
 - 2026-04-20: Addressed code review findings - 5 items resolved (eighteenth findings pass).
+- 2026-04-22: R1 review triaged the supplied reviewer outputs against the current patch, left 3 patch findings as action items in worker error correlation and sprint-status hygiene, dismissed the benchmark-reachability regression reports as stale against the current route and Playwright coverage, and moved the story back to in-progress.
+- 2026-04-22: Addressed code review findings - 3 items resolved (nineteenth findings pass).
+- 2026-04-22: R1 review triaged the supplied reviewer outputs against the current patch, left 2 P3 patch findings as action items in route-level stale-worker regression coverage and review-artifact clarity, found no unresolved P0 through P2 or decision-needed items, and advanced the story to done under the orchestrator severity rule.
+- 2026-04-22: Addressed code review findings - 2 items resolved (twentieth findings pass).
+- 2026-04-22: R2 review triaged the supplied reviewer outputs against the current patch, left 1 P2 patch finding in worker-bootstrap failure handling and 1 P3 patch finding in Pass 17 review-artifact clarity, re-synced the story and sprint tracker to in-progress, and kept the story open under the orchestrator severity rule.
+- 2026-04-22: Addressed code review findings - 2 items resolved (twenty-first findings pass).
+- 2026-04-22: R3 review triaged the supplied reviewer outputs against the current patch, left 1 P2 patch finding in worker bootstrap teardown/assignment ordering and 1 P3 patch finding in Pass 16 and Pass 17 review-record consistency, re-synced the story and sprint tracker to in-progress, and kept the story open under the orchestrator severity rule.
+- 2026-04-22: Addressed code review findings - 2 items resolved (twenty-second findings pass).
+- 2026-04-22: R4 review triaged the supplied reviewer outputs against the current patch, left 1 P2 patch finding in bootstrap-failed worker retention and 1 P3 patch finding in missing route-level regression coverage, re-synced the story and sprint tracker to in-progress, and kept the story open under the orchestrator severity rule.
+- 2026-04-22: Addressed code review findings - 2 items resolved (twenty-third findings pass).
+- 2026-04-22: R5 review triaged the supplied reviewer outputs against the current Story 2.1 scope, left 2 documentation-only `P3` action items in Pass 20 record consistency and benchmark-reachability wording, found no unresolved `P0` through `P2` or `decision_needed` items, and advanced the story to done under the orchestrator severity rule.
+- 2026-04-22: Ronan review triaged the supplied reviewer outputs against the current Story 2.1 scope, left 2 `P2` acceptance findings in persistence-boundary file selection and CSV/paste AC3 benchmark-flow evidence plus 2 documentation-only `P3` action items, found no unresolved `decision_needed` items, and re-synced the story and sprint tracker to in-progress.
+- 2026-04-22: Addressed code review findings - 4 items resolved (twenty-fourth findings pass).
+- 2026-04-22: Riven review triaged the supplied reviewer outputs against the current Story 2.1 scope, left 1 `decision_needed` blocker in pasted benchmark provenance plus 1 `P2` patch action item in picker-start failure handling, and stopped before story-status and sprint-status updates pending the benchmark-classification decision.
+- 2026-04-22: Addressed code review findings - 2 items resolved (twenty-fifth findings pass).
+- 2026-04-22: Rhett review triaged the supplied reviewer outputs against the current Story 2.1 scope, found no unresolved `P0` through `P3` or `decision_needed` items after full File List inspection plus targeted Vitest and Playwright validation, and advanced the story to done with sprint tracking re-synced.

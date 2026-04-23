@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   importBenchmarkScenarioSchema,
   importPreviewDatasetSchema,
+  importRepairSelectionsSchema,
   importSourceKindSchema,
 } from '../../features/import/preview-model';
 import { nonEmptyStringSchema, strictObject, positiveIntegerSchema } from '../validation';
@@ -21,6 +22,8 @@ export const importPreviewRequestPayloadSchema = strictObject({
   benchmarkScenario: importBenchmarkScenarioSchema.nullable().optional(),
   textContent: nonEmptyStringSchema.nullable().optional(),
   binaryContent: arrayBufferSchema.nullable().optional(),
+  repairSelections: importRepairSelectionsSchema.optional(),
+  materializeConfirmedDataset: z.boolean().optional(),
 });
 
 export const importPreviewProgressPayloadSchema = strictObject({
@@ -67,3 +70,4 @@ export type ImportPreviewRequestMessage = z.infer<typeof importPreviewRequestMes
 export type ImportPreviewProgressMessage = z.infer<typeof importPreviewProgressMessageSchema>;
 export type ImportPreviewSuccessMessage = z.infer<typeof importPreviewSuccessMessageSchema>;
 export type ImportPreviewFailureMessage = z.infer<typeof importPreviewFailureMessageSchema>;
+export type ImportPreviewRequestPayload = z.infer<typeof importPreviewRequestPayloadSchema>;

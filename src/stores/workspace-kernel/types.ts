@@ -1,6 +1,7 @@
 import type { StoreApi } from 'zustand/vanilla';
 
 import type { ReadinessSummary } from '../../domain/readiness';
+import type { ImportRepairSelections, ImportPreviewSource } from '../../features/import/preview-model';
 import type {
   CompatibilityState,
   IssueState,
@@ -48,6 +49,25 @@ export interface ReplaceSnapshotInput {
   datasetFileHandles?: PersistedDatasetFileHandle[];
 }
 
+export interface ConfirmImportInput extends KernelMutationMeta {
+  previewId: string;
+  graphId: string;
+  source: Pick<ImportPreviewSource, 'sourceKind' | 'sourceLabel' | 'fileName' | 'benchmarkScenario'>;
+  repairSelections: ImportRepairSelections;
+  dataset: WorkspaceSnapshot['datasets'][number];
+  issues: IssueRecord[];
+}
+
+export interface RollbackConfirmedImportInput extends KernelMutationMeta {
+  datasetId: string;
+  graphId: string;
+  issueIds: string[];
+  previousActiveGraphId: string;
+  previousReferenceGraphId: string;
+  fallbackDatasets: WorkspaceSnapshot['datasets'];
+  fallbackGraphDefinitions: WorkspaceSnapshot['graphDefinitions'];
+}
+
 export interface ApplyWorkerEnvelopeSuccess {
   applied: true;
 }
@@ -71,6 +91,8 @@ export interface WorkspaceKernelCommands {
   replaceSnapshot(input: ReplaceSnapshotInput): void;
   replaceDatasetFileHandles(datasetFileHandles: PersistedDatasetFileHandle[]): void;
   promoteReferenceGraph(input: PromoteReferenceGraphInput): void;
+  confirmImport(input: ConfirmImportInput): void;
+  rollbackConfirmedImport(input: RollbackConfirmedImportInput): void;
   replaceIssues(issues: IssueRecord[], meta?: KernelMutationMeta): void;
   updateTelemetrySnapshot(
     telemetrySnapshot: WorkspaceSnapshot['telemetrySnapshot'],

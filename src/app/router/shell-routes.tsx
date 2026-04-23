@@ -1,9 +1,21 @@
+import { useEffect, useState } from 'react';
 import { Link, Navigate, Outlet, createBrowserRouter, useLocation, useParams } from 'react-router';
 import type { StoreApi } from 'zustand/vanilla';
 import { useStore } from 'zustand';
 
 import { routePath, ROUTES } from './routes';
 import { WorkspaceImportRoute } from '../../features/import';
+import {
+  retainDatasetFileHandlesForSnapshot,
+  sanitizePersistedDatasetFileHandlesForHydration,
+} from '../../features/workspace-persistence/persisted-dataset-file-handles';
+import { reopenPersistedWorkspaceRecord, type WorkspaceCompatibilityEnvelope } from '../../features/workspace-persistence/reopen-workspace';
+import {
+  getPersistedWorkspaceKernelVersion,
+  markWorkspaceKernelStorePersisted,
+} from '../../features/workspace-persistence/workspace-kernel-persistence-state';
+import { IndexedDbWorkspaceStorage, createWorkspaceRepository, type PersistedDatasetFileHandle, type PersistedWorkspaceRecord } from '../../services/persistence';
+import { createImportWorkspaceSnapshot, createWorkspaceKernelStore, type WorkspaceKernelStore } from '../../stores/workspace-kernel';
 import type { ShellStatusStoreState } from '../../stores/shell-status';
 
 function useShellStore<T>(store: StoreApi<ShellStatusStoreState>, selector: (state: ShellStatusStoreState) => T) {
@@ -263,8 +275,257 @@ function ShellHomeRoute({ store }: { store: StoreApi<ShellStatusStoreState> }) {
   );
 }
 
+export const IMPORT_PREVIEW_WORKSPACE_ID = 'workspace_import_preview';
+
+interface CachedWorkspaceKernelStore {
+  hydratedFromPersistence: boolean;
+  hydrationPromise: Promise<void> | null;
+  lastAccessedAt: number;
+  store: WorkspaceKernelStore;
+}
+
+const workspaceKernelStores = new Map<string, CachedWorkspaceKernelStore>();
+export const MAX_CACHED_WORKSPACE_KERNEL_STORES = 8;
+
+export function resetWorkspaceKernelStoresForTest() {
+  workspaceKernelStores.clear();
+}
+
+function createBootstrapKernelStore(workspaceId: string) {
+  const store = createWorkspaceKernelStore({
+    snapshot: createImportWorkspaceSnapshot(workspaceId),
+    ledger: [],
+  });
+
+  markWorkspaceKernelStorePersisted(store);
+
+  return store;
+}
+
+async function loadWorkspaceRecordFromPersistence(workspaceId: string) {
+  if (typeof indexedDB === 'undefined') {
+    return null;
+  }
+
+  const repository = createWorkspaceRepository(new IndexedDbWorkspaceStorage());
+  return repository.loadWorkspaceRecord(workspaceId);
+}
+
+async function parsePersistedWorkspaceForHydration(record: PersistedWorkspaceRecord, workspaceId: string) {
+  if (record.workspaceId !== workspaceId) {
+    throw new Error(`Persisted workspace "${record.workspaceId}" does not match requested workspace "${workspaceId}".`);
+  }
+
+  const bootstrapSnapshot = createImportWorkspaceSnapshot(workspaceId);
+  const compatibilityEnvelope = {
+    currentAppBuildVersion: bootstrapSnapshot.appBuildVersion,
+    minimumReadableWorkspaceFormat: bootstrapSnapshot.workspaceFormatVersion,
+    maximumReadableWorkspaceFormat: `${bootstrapSnapshot.workspaceFormatVersion.split('.')[0] ?? '1'}.x`,
+    migrationPolicy: 'migrate-on-open',
+  } satisfies WorkspaceCompatibilityEnvelope;
+  const report = reopenPersistedWorkspaceRecord(record, {
+    compatibilityEnvelope,
+  });
+  const snapshot = report.snapshot;
+
+  if (snapshot.workspaceId !== workspaceId) {
+    throw new Error(`Persisted snapshot "${snapshot.workspaceId}" does not match requested workspace "${workspaceId}".`);
+  }
+
+  const datasetFileHandles = retainDatasetFileHandlesForSnapshot(
+    snapshot,
+    await sanitizePersistedDatasetFileHandlesForHydration(record.datasetFileHandles ?? []),
+  );
+
+  return {
+    snapshot,
+    ledger: report.ledger,
+    ...(datasetFileHandles.length > 0 ? { datasetFileHandles } : {}),
+  } satisfies {
+    snapshot: typeof report.snapshot;
+    ledger: typeof report.ledger;
+    datasetFileHandles?: PersistedDatasetFileHandle[];
+  };
+}
+
+function replaceStoreWithPersistedWorkspace(
+  store: WorkspaceKernelStore,
+  record: Awaited<ReturnType<typeof parsePersistedWorkspaceForHydration>>,
+) {
+  store.getState().commands.replaceSnapshot({
+    snapshot: record.snapshot,
+    ledger: record.ledger,
+    ...(record.datasetFileHandles ? { datasetFileHandles: record.datasetFileHandles } : {}),
+  });
+}
+
+function touchCachedWorkspaceKernelStore(cachedStore: CachedWorkspaceKernelStore) {
+  cachedStore.lastAccessedAt = Date.now();
+}
+
+function evictLeastRecentlyUsedWorkspaceKernelStores() {
+  if (workspaceKernelStores.size <= MAX_CACHED_WORKSPACE_KERNEL_STORES) {
+    return;
+  }
+
+  const entriesByAccessTime = Array.from(workspaceKernelStores.entries())
+    .filter(
+      ([, cachedStore]) =>
+        cachedStore.store.getState().workspaceVersion === getPersistedWorkspaceKernelVersion(cachedStore.store),
+    )
+    .sort(
+    ([, left], [, right]) => left.lastAccessedAt - right.lastAccessedAt,
+    );
+
+  while (workspaceKernelStores.size > MAX_CACHED_WORKSPACE_KERNEL_STORES) {
+    const oldestEntry = entriesByAccessTime.shift();
+
+    if (!oldestEntry) {
+      return;
+    }
+
+    workspaceKernelStores.delete(oldestEntry[0]);
+  }
+}
+
+function getOrCreateCachedWorkspaceKernelStore(workspaceId: string) {
+  const cachedStore = workspaceKernelStores.get(workspaceId);
+
+  if (cachedStore) {
+    touchCachedWorkspaceKernelStore(cachedStore);
+    return cachedStore;
+  }
+
+  const store = createBootstrapKernelStore(workspaceId);
+  const createdStore = {
+    hydratedFromPersistence: false,
+    hydrationPromise: null,
+    lastAccessedAt: Date.now(),
+    store,
+  } satisfies CachedWorkspaceKernelStore;
+
+  workspaceKernelStores.set(workspaceId, createdStore);
+  evictLeastRecentlyUsedWorkspaceKernelStores();
+
+  return createdStore;
+}
+
+async function hydrateWorkspaceKernelStore(
+  cachedStore: CachedWorkspaceKernelStore,
+  workspaceId: string,
+  loadWorkspaceRecord: (workspaceId: string) => Promise<PersistedWorkspaceRecord | null>,
+) {
+  if (cachedStore.hydratedFromPersistence) {
+    return cachedStore.store;
+  }
+
+  if (!cachedStore.hydrationPromise) {
+    cachedStore.hydrationPromise = (async () => {
+      let record: PersistedWorkspaceRecord | null;
+
+      try {
+        record = await loadWorkspaceRecord(workspaceId);
+      } catch (error) {
+        console.error(`Falling back to a clean workspace bootstrap for "${workspaceId}".`, error);
+        return;
+      }
+
+      if (!record) {
+        cachedStore.hydratedFromPersistence = true;
+        markWorkspaceKernelStorePersisted(cachedStore.store);
+        return;
+      }
+
+      try {
+        replaceStoreWithPersistedWorkspace(
+          cachedStore.store,
+          await parsePersistedWorkspaceForHydration(record, workspaceId),
+        );
+      } catch (error) {
+        console.error(`Falling back to a clean workspace bootstrap for "${workspaceId}".`, error);
+        return;
+      }
+
+      cachedStore.hydratedFromPersistence = true;
+      markWorkspaceKernelStorePersisted(cachedStore.store);
+    })().finally(() => {
+      cachedStore.hydrationPromise = null;
+    });
+  }
+
+  await cachedStore.hydrationPromise;
+
+  return cachedStore.store;
+}
+
+export async function resolveWorkspaceKernelStore(
+  workspaceId?: string | undefined,
+  options?: {
+    loadWorkspaceRecord?: ((workspaceId: string) => Promise<PersistedWorkspaceRecord | null>) | undefined;
+  },
+) {
+  const resolvedWorkspaceId = workspaceId ?? IMPORT_PREVIEW_WORKSPACE_ID;
+  const cachedStore = getOrCreateCachedWorkspaceKernelStore(resolvedWorkspaceId);
+  const loadWorkspaceRecord = options?.loadWorkspaceRecord ?? loadWorkspaceRecordFromPersistence;
+  return hydrateWorkspaceKernelStore(cachedStore, resolvedWorkspaceId, loadWorkspaceRecord);
+}
+
 function ShellWorkspaceRoute({ workspaceId }: { workspaceId?: string | undefined }) {
-  return <WorkspaceImportRoute workspaceId={workspaceId} />;
+  const resolvedWorkspaceId = workspaceId ?? IMPORT_PREVIEW_WORKSPACE_ID;
+  const [kernelStore, setKernelStore] = useState<WorkspaceKernelStore | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setKernelStore(null);
+    setLoadError(null);
+
+    void resolveWorkspaceKernelStore(resolvedWorkspaceId)
+      .then((resolvedStore) => {
+        if (cancelled) {
+          return;
+        }
+
+        setKernelStore(resolvedStore);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+
+        setLoadError(error instanceof Error ? error.message : 'The workspace state could not be restored from local persistence.');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [resolvedWorkspaceId]);
+
+  if (loadError) {
+    return (
+      <section>
+        <h2 style={{ marginTop: 0 }}>Workspace state could not load</h2>
+        <p style={{ lineHeight: 1.6 }}>
+          The import route could not hydrate the canonical workspace state for {resolvedWorkspaceId}.
+        </p>
+        <p style={{ lineHeight: 1.6 }}>{loadError}</p>
+      </section>
+    );
+  }
+
+  if (!kernelStore) {
+    return (
+      <section>
+        <h2 style={{ marginTop: 0 }}>Loading workspace state</h2>
+        <p style={{ lineHeight: 1.6 }}>
+          Restoring the canonical workspace snapshot for {resolvedWorkspaceId} before import and confirmation actions open.
+        </p>
+      </section>
+    );
+  }
+
+  return <WorkspaceImportRoute key={resolvedWorkspaceId} workspaceId={resolvedWorkspaceId} kernelStore={kernelStore} />;
 }
 
 function ShellReviewRoute({ workspaceId }: { workspaceId: string | undefined }) {
