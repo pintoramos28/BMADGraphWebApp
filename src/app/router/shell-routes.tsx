@@ -6,6 +6,7 @@ import { useStore } from 'zustand';
 import { routePath, ROUTES } from './routes';
 import { WorkspaceImportRoute } from '../../features/import';
 import {
+  parsePersistedDatasetFileHandles,
   retainDatasetFileHandlesForSnapshot,
   sanitizePersistedDatasetFileHandlesForHydration,
 } from '../../features/workspace-persistence/persisted-dataset-file-handles';
@@ -16,6 +17,7 @@ import {
 } from '../../features/workspace-persistence/workspace-kernel-persistence-state';
 import { IndexedDbWorkspaceStorage, createWorkspaceRepository, type PersistedDatasetFileHandle, type PersistedWorkspaceRecord } from '../../services/persistence';
 import { createImportWorkspaceSnapshot, createWorkspaceKernelStore, type WorkspaceKernelStore } from '../../stores/workspace-kernel';
+import { synchronizeDatasetSourceFileMetadata } from '../../stores/workspace-kernel/dataset-file-handle-metadata';
 import type { ShellStatusStoreState } from '../../stores/shell-status';
 
 function useShellStore<T>(store: StoreApi<ShellStatusStoreState>, selector: (state: ShellStatusStoreState) => T) {
@@ -279,6 +281,8 @@ export const IMPORT_PREVIEW_WORKSPACE_ID = 'workspace_import_preview';
 
 interface CachedWorkspaceKernelStore {
   hydratedFromPersistence: boolean;
+  hydrationAbortController: AbortController | null;
+  hydrationConsumerCount: number;
   hydrationPromise: Promise<void> | null;
   lastAccessedAt: number;
   store: WorkspaceKernelStore;
@@ -286,6 +290,7 @@ interface CachedWorkspaceKernelStore {
 
 const workspaceKernelStores = new Map<string, CachedWorkspaceKernelStore>();
 export const MAX_CACHED_WORKSPACE_KERNEL_STORES = 8;
+export const WORKSPACE_HYDRATION_RECORD_LOAD_TIMEOUT_MS = 5_000;
 
 export function resetWorkspaceKernelStoresForTest() {
   workspaceKernelStores.clear();
@@ -302,18 +307,35 @@ function createBootstrapKernelStore(workspaceId: string) {
   return store;
 }
 
-async function loadWorkspaceRecordFromPersistence(workspaceId: string) {
+async function loadWorkspaceRecordFromPersistence(
+  workspaceId: string,
+  options: { signal?: AbortSignal | undefined } = {},
+) {
   if (typeof indexedDB === 'undefined') {
     return null;
   }
 
   const repository = createWorkspaceRepository(new IndexedDbWorkspaceStorage());
-  return repository.loadWorkspaceRecord(workspaceId);
+  return repository.loadWorkspaceRecord(workspaceId, {
+    abortSignal: options.signal,
+  });
 }
 
-async function parsePersistedWorkspaceForHydration(record: PersistedWorkspaceRecord, workspaceId: string) {
+async function parsePersistedWorkspaceForHydration(
+  record: PersistedWorkspaceRecord,
+  workspaceId: string,
+  options: { signal?: AbortSignal | undefined } = {},
+) {
   if (record.workspaceId !== workspaceId) {
     throw new Error(`Persisted workspace "${record.workspaceId}" does not match requested workspace "${workspaceId}".`);
+  }
+
+  const persistedSnapshotWorkspaceId = record.snapshot && typeof record.snapshot === 'object'
+    ? (record.snapshot as { workspaceId?: unknown }).workspaceId
+    : undefined;
+
+  if (persistedSnapshotWorkspaceId !== workspaceId) {
+    throw new Error(`Persisted snapshot "${String(persistedSnapshotWorkspaceId)}" does not match requested workspace "${workspaceId}".`);
   }
 
   const bootstrapSnapshot = createImportWorkspaceSnapshot(workspaceId);
@@ -323,10 +345,28 @@ async function parsePersistedWorkspaceForHydration(record: PersistedWorkspaceRec
     maximumReadableWorkspaceFormat: `${bootstrapSnapshot.workspaceFormatVersion.split('.')[0] ?? '1'}.x`,
     migrationPolicy: 'migrate-on-open',
   } satisfies WorkspaceCompatibilityEnvelope;
-  const report = reopenPersistedWorkspaceRecord(record, {
+
+  const initialReport = reopenPersistedWorkspaceRecord(record, {
     compatibilityEnvelope,
   });
-  const snapshot = report.snapshot;
+  const parsedDatasetFileHandles = parsePersistedDatasetFileHandles(record.datasetFileHandles ?? []);
+
+  const retainedDatasetFileHandlesForAcceptedSnapshot = retainDatasetFileHandlesForSnapshot(
+    initialReport.snapshot,
+    parsedDatasetFileHandles,
+  );
+
+  const sanitizedDatasetFileHandles = await sanitizePersistedDatasetFileHandlesForHydration(
+    retainedDatasetFileHandlesForAcceptedSnapshot,
+    options,
+  );
+  const report = reopenPersistedWorkspaceRecord({
+    ...record,
+    datasetFileHandles: sanitizedDatasetFileHandles,
+  }, {
+    compatibilityEnvelope,
+  });
+  let snapshot = report.snapshot;
 
   if (snapshot.workspaceId !== workspaceId) {
     throw new Error(`Persisted snapshot "${snapshot.workspaceId}" does not match requested workspace "${workspaceId}".`);
@@ -334,8 +374,9 @@ async function parsePersistedWorkspaceForHydration(record: PersistedWorkspaceRec
 
   const datasetFileHandles = retainDatasetFileHandlesForSnapshot(
     snapshot,
-    await sanitizePersistedDatasetFileHandlesForHydration(record.datasetFileHandles ?? []),
+    sanitizedDatasetFileHandles,
   );
+  snapshot = synchronizeDatasetSourceFileMetadata(snapshot, datasetFileHandles);
 
   return {
     snapshot,
@@ -399,6 +440,8 @@ function getOrCreateCachedWorkspaceKernelStore(workspaceId: string) {
   const store = createBootstrapKernelStore(workspaceId);
   const createdStore = {
     hydratedFromPersistence: false,
+    hydrationAbortController: null,
+    hydrationConsumerCount: 0,
     hydrationPromise: null,
     lastAccessedAt: Date.now(),
     store,
@@ -410,27 +453,215 @@ function getOrCreateCachedWorkspaceKernelStore(workspaceId: string) {
   return createdStore;
 }
 
+function getAbortReason(signal: AbortSignal) {
+  return signal.reason instanceof Error ? signal.reason : new Error('Workspace hydration was canceled.');
+}
+
+function assertHydrationSignalActive(signal: AbortSignal) {
+  if (signal.aborted) {
+    throw getAbortReason(signal);
+  }
+}
+
+function createHydrationRecordLoadTimeoutError(workspaceId: string) {
+  return new Error(`Workspace persistence did not respond while loading "${workspaceId}". Try reopening the workspace again.`);
+}
+
+function createChildHydrationSignal(
+  parentSignal: AbortSignal,
+  timeoutMs: number,
+  timeoutError: Error,
+) {
+  const controller = new AbortController();
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const abortFromParent = () => {
+    controller.abort(getAbortReason(parentSignal));
+  };
+
+  if (parentSignal.aborted) {
+    abortFromParent();
+  } else {
+    parentSignal.addEventListener('abort', abortFromParent, { once: true });
+    if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+      timeoutId = setTimeout(() => {
+        controller.abort(timeoutError);
+      }, timeoutMs);
+    }
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup() {
+      parentSignal.removeEventListener('abort', abortFromParent);
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+      }
+    },
+  };
+}
+
+async function awaitHydrationRecordLoad<T>(
+  operation: Promise<T>,
+  signal: AbortSignal,
+) {
+  assertHydrationSignalActive(signal);
+
+  let cleanup = () => {};
+  const cancellation = new Promise<never>((_, reject) => {
+    const rejectIfAborted = () => reject(getAbortReason(signal));
+
+    signal.addEventListener('abort', rejectIfAborted, { once: true });
+    cleanup = () => signal.removeEventListener('abort', rejectIfAborted);
+  });
+
+  try {
+    return await Promise.race([operation, cancellation]);
+  } finally {
+    cleanup();
+  }
+}
+
+async function loadWorkspaceRecordForHydration(
+  loadWorkspaceRecord: (
+    workspaceId: string,
+    options?: { signal?: AbortSignal | undefined },
+  ) => Promise<PersistedWorkspaceRecord | null>,
+  workspaceId: string,
+  sharedHydrationSignal: AbortSignal,
+) {
+  const childSignal = createChildHydrationSignal(
+    sharedHydrationSignal,
+    WORKSPACE_HYDRATION_RECORD_LOAD_TIMEOUT_MS,
+    createHydrationRecordLoadTimeoutError(workspaceId),
+  );
+
+  try {
+    assertHydrationSignalActive(childSignal.signal);
+
+    return await awaitHydrationRecordLoad(
+      loadWorkspaceRecord(workspaceId, { signal: childSignal.signal }),
+      childSignal.signal,
+    );
+  } finally {
+    childSignal.cleanup();
+  }
+}
+
+function clearAbortedSharedHydrationAttempt(cachedStore: CachedWorkspaceKernelStore) {
+  if (
+    cachedStore.hydrationPromise
+    && cachedStore.hydrationAbortController?.signal.aborted
+    && !cachedStore.hydratedFromPersistence
+  ) {
+    cachedStore.hydrationPromise.catch(() => {
+      // The aborted attempt is intentionally abandoned so a remount can start
+      // a fresh shared hydration attempt instead of inheriting the prior route's
+      // cancellation.
+    });
+    cachedStore.hydrationPromise = null;
+    cachedStore.hydrationAbortController = null;
+    cachedStore.hydrationConsumerCount = 0;
+  }
+}
+
+function registerHydrationConsumer(
+  cachedStore: CachedWorkspaceKernelStore,
+  signal: AbortSignal | undefined,
+) {
+  let released = false;
+  let rejectAbortPromise: ((reason: Error) => void) | null = null;
+  const abortPromise = signal
+    ? new Promise<never>((_, reject) => {
+        rejectAbortPromise = reject;
+      })
+    : null;
+  const release = (abortReason?: Error | undefined) => {
+    if (released) {
+      return;
+    }
+
+    released = true;
+    cachedStore.hydrationConsumerCount = Math.max(0, cachedStore.hydrationConsumerCount - 1);
+
+    if (signal) {
+      signal.removeEventListener('abort', onAbort);
+    }
+
+    if (
+      abortReason
+      && cachedStore.hydrationConsumerCount === 0
+      && cachedStore.hydrationAbortController
+      && !cachedStore.hydrationAbortController.signal.aborted
+      && !cachedStore.hydratedFromPersistence
+    ) {
+      cachedStore.hydrationAbortController.abort(abortReason);
+    }
+  };
+  const onAbort = () => {
+    const reason = signal ? getAbortReason(signal) : new Error('Workspace hydration was canceled.');
+    release(reason);
+    rejectAbortPromise?.(reason);
+  };
+
+  if (signal?.aborted) {
+    const reason = getAbortReason(signal);
+
+    if (
+      cachedStore.hydrationConsumerCount === 0
+      && cachedStore.hydrationAbortController
+      && !cachedStore.hydrationAbortController.signal.aborted
+      && !cachedStore.hydratedFromPersistence
+    ) {
+      cachedStore.hydrationAbortController.abort(reason);
+    }
+
+    return {
+      abortPromise: Promise.reject(reason) as Promise<never>,
+      release: () => {},
+    };
+  }
+
+  cachedStore.hydrationConsumerCount += 1;
+  signal?.addEventListener('abort', onAbort, { once: true });
+
+  return {
+    abortPromise,
+    release,
+  };
+}
+
 async function hydrateWorkspaceKernelStore(
   cachedStore: CachedWorkspaceKernelStore,
   workspaceId: string,
-  loadWorkspaceRecord: (workspaceId: string) => Promise<PersistedWorkspaceRecord | null>,
+  loadWorkspaceRecord: (
+    workspaceId: string,
+    options?: { signal?: AbortSignal | undefined },
+  ) => Promise<PersistedWorkspaceRecord | null>,
+  options: { signal?: AbortSignal | undefined } = {},
 ) {
   if (cachedStore.hydratedFromPersistence) {
     return cachedStore.store;
   }
 
+  clearAbortedSharedHydrationAttempt(cachedStore);
+
   if (!cachedStore.hydrationPromise) {
-    cachedStore.hydrationPromise = (async () => {
+    cachedStore.hydrationAbortController = new AbortController();
+    const sharedHydrationSignal = cachedStore.hydrationAbortController.signal;
+
+    const hydrationPromise = (async () => {
       let record: PersistedWorkspaceRecord | null;
 
       try {
-        record = await loadWorkspaceRecord(workspaceId);
+        record = await loadWorkspaceRecordForHydration(loadWorkspaceRecord, workspaceId, sharedHydrationSignal);
+        assertHydrationSignalActive(sharedHydrationSignal);
       } catch (error) {
-        console.error(`Falling back to a clean workspace bootstrap for "${workspaceId}".`, error);
-        return;
+        console.error(`Workspace hydration failed for "${workspaceId}".`, error);
+        throw error;
       }
 
       if (!record) {
+        assertHydrationSignalActive(sharedHydrationSignal);
         cachedStore.hydratedFromPersistence = true;
         markWorkspaceKernelStorePersisted(cachedStore.store);
         return;
@@ -439,21 +670,39 @@ async function hydrateWorkspaceKernelStore(
       try {
         replaceStoreWithPersistedWorkspace(
           cachedStore.store,
-          await parsePersistedWorkspaceForHydration(record, workspaceId),
+          await parsePersistedWorkspaceForHydration(record, workspaceId, {
+            signal: sharedHydrationSignal,
+          }),
         );
       } catch (error) {
-        console.error(`Falling back to a clean workspace bootstrap for "${workspaceId}".`, error);
-        return;
+        console.error(`Workspace hydration failed for "${workspaceId}".`, error);
+        throw error;
       }
 
+      assertHydrationSignalActive(sharedHydrationSignal);
       cachedStore.hydratedFromPersistence = true;
       markWorkspaceKernelStorePersisted(cachedStore.store);
     })().finally(() => {
-      cachedStore.hydrationPromise = null;
+      if (cachedStore.hydrationPromise === hydrationPromise) {
+        cachedStore.hydrationPromise = null;
+        cachedStore.hydrationAbortController = null;
+      }
     });
+
+    cachedStore.hydrationPromise = hydrationPromise;
   }
 
-  await cachedStore.hydrationPromise;
+  const consumer = registerHydrationConsumer(cachedStore, options.signal);
+
+  try {
+    if (consumer.abortPromise) {
+      await Promise.race([cachedStore.hydrationPromise, consumer.abortPromise]);
+    } else {
+      await cachedStore.hydrationPromise;
+    }
+  } finally {
+    consumer.release();
+  }
 
   return cachedStore.store;
 }
@@ -461,13 +710,19 @@ async function hydrateWorkspaceKernelStore(
 export async function resolveWorkspaceKernelStore(
   workspaceId?: string | undefined,
   options?: {
-    loadWorkspaceRecord?: ((workspaceId: string) => Promise<PersistedWorkspaceRecord | null>) | undefined;
+    loadWorkspaceRecord?: ((
+      workspaceId: string,
+      options?: { signal?: AbortSignal | undefined },
+    ) => Promise<PersistedWorkspaceRecord | null>) | undefined;
+    signal?: AbortSignal | undefined;
   },
 ) {
   const resolvedWorkspaceId = workspaceId ?? IMPORT_PREVIEW_WORKSPACE_ID;
   const cachedStore = getOrCreateCachedWorkspaceKernelStore(resolvedWorkspaceId);
   const loadWorkspaceRecord = options?.loadWorkspaceRecord ?? loadWorkspaceRecordFromPersistence;
-  return hydrateWorkspaceKernelStore(cachedStore, resolvedWorkspaceId, loadWorkspaceRecord);
+  return hydrateWorkspaceKernelStore(cachedStore, resolvedWorkspaceId, loadWorkspaceRecord, {
+    ...(options?.signal ? { signal: options.signal } : {}),
+  });
 }
 
 function ShellWorkspaceRoute({ workspaceId }: { workspaceId?: string | undefined }) {
@@ -477,11 +732,14 @@ function ShellWorkspaceRoute({ workspaceId }: { workspaceId?: string | undefined
 
   useEffect(() => {
     let cancelled = false;
+    const hydrationAbortController = new AbortController();
 
     setKernelStore(null);
     setLoadError(null);
 
-    void resolveWorkspaceKernelStore(resolvedWorkspaceId)
+    void resolveWorkspaceKernelStore(resolvedWorkspaceId, {
+      signal: hydrationAbortController.signal,
+    })
       .then((resolvedStore) => {
         if (cancelled) {
           return;
@@ -499,6 +757,7 @@ function ShellWorkspaceRoute({ workspaceId }: { workspaceId?: string | undefined
 
     return () => {
       cancelled = true;
+      hydrationAbortController.abort(new Error('Workspace route unmounted.'));
     };
   }, [resolvedWorkspaceId]);
 

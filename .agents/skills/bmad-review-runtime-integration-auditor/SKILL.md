@@ -1,6 +1,6 @@
 ---
 name: bmad-review-runtime-integration-auditor
-description: 'Audit diffs for runtime integration failures caused by hostile browser state, execution-context leaks, stale assets, async lifecycle quirks, and environment drift. Use when reviewing changes that touch browser APIs, workers, service workers, routing, caching, storage, file input flows, or dev/prod boundaries.'
+description: 'Audit diffs for runtime integration failures caused by hostile browser state, execution-context leaks, stale assets, async lifecycle quirks, and environment drift. Use when reviewing changes that touch browser APIs, workers, service workers, routing, caching, storage, file input flows, dev/prod boundaries, or when a runtime reviewer must verify behavior with Playwright or Chrome DevTools.'
 ---
 
 # Runtime Integration Auditor Review
@@ -18,6 +18,13 @@ description: 'Audit diffs for runtime integration failures caused by hostile bro
 **Your method is runtime-first. Do not spend time on normal code quality comments. Report only failures or missing probes that could cause the feature to break in real execution contexts.**
 
 **Live-testing requirement:** If the reviewed content touches runtime-sensitive surfaces and the current tools allow a live probe, you MUST perform targeted runtime checks before finalizing findings. If live testing is unavailable, say so in your reasoning and treat the missing verification itself as a gap when relevant.
+
+**Browser-tool contract:** For browser-reachable runtime surfaces, source review alone is incomplete. Before final output, use at least one browser automation path unless no route, server, runnable command, or local file target can be derived:
+
+- Use `chrome-devtools_*` tools when a page can be opened or an existing browser session is available. At minimum, navigate/open the target, take a snapshot or evaluate a focused script, and inspect console/network where relevant.
+- Use Playwright when repeatability, file uploads, persisted profiles/storage, routing mocks, or scripted multi-step checks are needed. Load the `playwright-cli` skill if command syntax is needed, then run `playwright-cli`/`npx playwright-cli` through Bash.
+- If both Chrome DevTools and Playwright are available, prefer Chrome DevTools for fast interactive probes and Playwright for hostile-state setup or reproducible regression probes.
+- Do not finalize a runtime-sensitive audit after only reading code unless live probing is genuinely unavailable; instead, run a probe now or report the missing concrete probe as a finding.
 
 
 ## EXECUTION
@@ -43,6 +50,10 @@ description: 'Audit diffs for runtime integration failures caused by hostile bro
 ### Step 3: Plan Live Probes
 
 - For each runtime-sensitive surface, decide whether a targeted live check is possible in the current environment
+- Treat a probe as possible when any of these are available or derivable from the diff/project: an existing browser page, a localhost/dev/prod URL, a route path, an npm/scripted app start command, a targeted Playwright command, or a static file target
+- Choose the execution tool before continuing:
+  - `chrome-devtools_*` for route smoke tests, console errors, network/module graph failures, storage/service-worker checks, reloads, viewport/context changes, and focused `evaluate_script` probes
+  - Playwright CLI for repeatable scripts, file chooser/upload/drop paths, persisted browser profiles, storage/cookie seeding, request interception, or multi-step hostile-state flows
 - Prefer the smallest probe that can falsify the implementation quickly. Examples:
   - exact route load on the real dev/prod origin
   - stale browser state or existing service worker control
@@ -50,6 +61,7 @@ description: 'Audit diffs for runtime integration failures caused by hostile bro
   - console errors, page errors, and runtime network/module graph checks
 - If live testing is possible, perform at least one focused probe per risky runtime surface class
 - If live testing is not possible, keep track of the missing probe so it can appear in `required_probe` for any relevant finding
+- Record internally which browser tool or Playwright command was executed and what it observed; use that result to accept or discard suspected findings
 
 ### Step 4: Hostile Runtime Audit
 
@@ -73,7 +85,8 @@ For each runtime-sensitive surface, audit only issues that are directly reachabl
 
 - Revisit every runtime-sensitive surface from Step 2
 - Confirm you checked stale state, execution context, async lifecycle, environment drift, and negative-path API behavior where applicable
-- Confirm you either ran a live probe for each risky runtime surface class or explicitly recorded why you could not
+- Confirm you either ran a live probe for each risky runtime surface class with Chrome DevTools or Playwright, or explicitly recorded why no browser/Playwright probe could be run
+- If runtime-sensitive surfaces exist, live probing was possible, and no `chrome-devtools_*` tool call or Playwright command was executed, STOP this step and run the smallest valid probe before presenting findings
 - Add any newly found unhandled failures; discard confirmed-handled ones
 
 ### Step 6: Present Findings

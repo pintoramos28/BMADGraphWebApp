@@ -1,0 +1,4 @@
+Sample	Reading	MeasuredAt
+A-1	42.5	2026-04-18
+A-2		2026-04-19
+A-3	uncertain	2026-04-20

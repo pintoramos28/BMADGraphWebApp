@@ -27,9 +27,42 @@ function transactionToPromise(transaction: IDBTransaction) {
   });
 }
 
+function createPersistenceAbortError(signal: AbortSignal | undefined) {
+  return signal?.reason instanceof Error ? signal.reason : new Error('Workspace persistence was aborted.');
+}
+
+function throwIfAborted(signal: AbortSignal | undefined) {
+  if (signal?.aborted) {
+    throw createPersistenceAbortError(signal);
+  }
+}
+
+async function awaitWithAbort<T>(operation: Promise<T>, signal: AbortSignal | undefined) {
+  if (!signal) {
+    return operation;
+  }
+
+  throwIfAborted(signal);
+
+  let cleanup = () => {};
+  const cancellation = new Promise<never>((_, reject) => {
+    const rejectIfAborted = () => reject(createPersistenceAbortError(signal));
+
+    signal.addEventListener('abort', rejectIfAborted, { once: true });
+    cleanup = () => signal.removeEventListener('abort', rejectIfAborted);
+  });
+
+  try {
+    return await Promise.race([operation, cancellation]);
+  } finally {
+    cleanup();
+  }
+}
+
 export class IndexedDbWorkspaceStorage implements WorkspacePersistenceStorage {
   readonly #options: Required<IndexedDbWorkspaceStorageOptions>;
-  #databasePromise?: Promise<IDBDatabase>;
+  #databasePromise: Promise<IDBDatabase> | undefined;
+  #databaseOpenWaiterCount = 0;
 
   constructor(options: IndexedDbWorkspaceStorageOptions = {}) {
     this.#options = {
@@ -38,28 +71,125 @@ export class IndexedDbWorkspaceStorage implements WorkspacePersistenceStorage {
     };
   }
 
-  async putRecord(record: PersistedWorkspaceRecord) {
-    const database = await this.#openDatabase();
-    const transaction = database.transaction(this.#options.objectStoreName, 'readwrite');
+  async putRecord(record: PersistedWorkspaceRecord, options: { abortSignal?: AbortSignal | undefined } = {}) {
+    throwIfAborted(options.abortSignal);
+    let database: IDBDatabase;
+    const openDatabasePromise = this.#openDatabase();
+    this.#databaseOpenWaiterCount += 1;
 
-    transaction.objectStore(this.#options.objectStoreName).put(structuredClone(record));
-    await transactionToPromise(transaction);
+    try {
+      database = await awaitWithAbort(openDatabasePromise, options.abortSignal);
+    } catch (error) {
+      if (
+        options.abortSignal?.aborted
+        && this.#databaseOpenWaiterCount === 1
+        && this.#databasePromise === openDatabasePromise
+      ) {
+        this.#databasePromise = undefined;
+        void openDatabasePromise.then((lateDatabase) => {
+          lateDatabase.close();
+        }, () => {
+          // The original open failed after the caller already observed abort.
+        });
+      }
+
+      throw error;
+    } finally {
+      this.#databaseOpenWaiterCount -= 1;
+    }
+
+    const throwIfPutAborted = () => throwIfAborted(options.abortSignal);
+
+    throwIfPutAborted();
+
+    const transaction = database.transaction(this.#options.objectStoreName, 'readwrite');
+    const abortTransaction = () => {
+      try {
+        transaction.abort();
+      } catch {
+        // The transaction may already be complete or aborted; in either case the
+        // awaiting caller will observe either completion plus a post-save guard or
+        // the transaction rejection.
+      }
+    };
+
+    options.abortSignal?.addEventListener('abort', abortTransaction, { once: true });
+
+    try {
+      throwIfPutAborted();
+      transaction.objectStore(this.#options.objectStoreName).put(structuredClone(record));
+      await transactionToPromise(transaction);
+    } finally {
+      options.abortSignal?.removeEventListener('abort', abortTransaction);
+    }
   }
 
-  async getRecord(workspaceId: string) {
-    const database = await this.#openDatabase();
+  async getRecord(workspaceId: string, options: { abortSignal?: AbortSignal | undefined } = {}) {
+    throwIfAborted(options.abortSignal);
+    let database: IDBDatabase;
+    const openDatabasePromise = this.#openDatabase();
+    this.#databaseOpenWaiterCount += 1;
+
+    try {
+      database = await awaitWithAbort(openDatabasePromise, options.abortSignal);
+    } catch (error) {
+      if (
+        options.abortSignal?.aborted
+        && this.#databaseOpenWaiterCount === 1
+        && this.#databasePromise === openDatabasePromise
+      ) {
+        this.#databasePromise = undefined;
+        void openDatabasePromise.then((lateDatabase) => {
+          lateDatabase.close();
+        }, () => {
+          // The original open failed after the caller already observed abort.
+        });
+      }
+
+      throw error;
+    } finally {
+      this.#databaseOpenWaiterCount -= 1;
+    }
+
+    throwIfAborted(options.abortSignal);
+
     const transaction = database.transaction(this.#options.objectStoreName, 'readonly');
-    const result = await requestToPromise(
-      transaction.objectStore(this.#options.objectStoreName).get(workspaceId),
-    );
+    const abortTransaction = () => {
+      try {
+        transaction.abort();
+      } catch {
+        // The read may already have completed or been aborted; the awaiting
+        // operation will observe whichever state won the race.
+      }
+    };
 
-    await transactionToPromise(transaction);
+    options.abortSignal?.addEventListener('abort', abortTransaction, { once: true });
 
-    return result ? structuredClone(result as PersistedWorkspaceRecord) : null;
+    try {
+      const result = await awaitWithAbort(
+        requestToPromise(transaction.objectStore(this.#options.objectStoreName).get(workspaceId)),
+        options.abortSignal,
+      );
+
+      await awaitWithAbort(transactionToPromise(transaction), options.abortSignal);
+
+      return result ? structuredClone(result as PersistedWorkspaceRecord) : null;
+    } finally {
+      options.abortSignal?.removeEventListener('abort', abortTransaction);
+    }
   }
 
   async listRecords() {
-    const database = await this.#openDatabase();
+    const openDatabasePromise = this.#openDatabase();
+    this.#databaseOpenWaiterCount += 1;
+    let database: IDBDatabase;
+
+    try {
+      database = await openDatabasePromise;
+    } finally {
+      this.#databaseOpenWaiterCount -= 1;
+    }
+
     const transaction = database.transaction(this.#options.objectStoreName, 'readonly');
     const result = await requestToPromise(
       transaction.objectStore(this.#options.objectStoreName).getAll(),
@@ -70,7 +200,7 @@ export class IndexedDbWorkspaceStorage implements WorkspacePersistenceStorage {
     return (result as PersistedWorkspaceRecord[]).map((record) => structuredClone(record));
   }
 
-  async #openDatabase() {
+  #openDatabase() {
     if (!this.#databasePromise) {
       this.#databasePromise = new Promise<IDBDatabase>((resolve, reject) => {
         const request = indexedDB.open(this.#options.databaseName, this.#options.version);

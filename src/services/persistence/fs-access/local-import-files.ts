@@ -52,9 +52,182 @@ export interface LocalImportSelection {
   handle?: WorkspaceFileHandle;
 }
 
+export interface LocalImportSourceValidationInput {
+  sourceKind: Extract<ImportSourceKind, 'csv-file' | 'excel-file'>;
+  fileName: string;
+  previewFile: File;
+  signal?: AbortSignal | undefined;
+  selection: {
+    sourceKind: Extract<ImportSourceKind, 'csv-file' | 'excel-file'>;
+    fileName: string;
+    handle?: WorkspaceFileHandle | undefined;
+  } | null;
+}
+
+export interface ValidatedLocalImportSourceFileHandle {
+  handle: WorkspaceFileHandle;
+  fileName: string;
+  fileSize: number;
+  fileLastModified: number;
+  fileSha256: string;
+}
+
+export class LocalImportSourceValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LocalImportSourceValidationError';
+  }
+}
+
 export const HIDDEN_INPUT_CANCEL_POLL_MS = 50;
 export const HIDDEN_INPUT_CANCEL_GRACE_MS = 500;
 export const HIDDEN_INPUT_PICKER_STALE_TIMEOUT_MS = 60_000;
+export const LOCAL_IMPORT_SOURCE_VALIDATION_TIMEOUT_MS = 30_000;
+
+const SOURCE_RESELECTION_MESSAGE = 'Reselect the source file before confirming this import.';
+const SOURCE_CHANGED_MESSAGE = 'The selected source file changed after preview. Reselect and preview it again before confirming.';
+const SOURCE_VALIDATION_CANCELED_MESSAGE = 'The source-file validation was canceled because the preview changed.';
+const SOURCE_VALIDATION_TIMEOUT_MESSAGE = 'The source-file validation timed out. Reselect the source file before confirming this import.';
+
+function assertSourceValidationNotAborted(signal: AbortSignal | undefined) {
+  if (signal?.aborted) {
+    throw new LocalImportSourceValidationError(SOURCE_VALIDATION_CANCELED_MESSAGE);
+  }
+}
+
+async function awaitWithSourceValidationCancellation<T>(
+  operation: Promise<T>,
+  signal: AbortSignal | undefined,
+  deadlineMs: number = Date.now() + LOCAL_IMPORT_SOURCE_VALIDATION_TIMEOUT_MS,
+) {
+  assertSourceValidationNotAborted(signal);
+
+  let cleanup = () => {};
+  const cancellation = signal
+    ? new Promise<never>((_, reject) => {
+        const rejectIfAborted = () => reject(new LocalImportSourceValidationError(SOURCE_VALIDATION_CANCELED_MESSAGE));
+
+        signal.addEventListener('abort', rejectIfAborted, { once: true });
+        cleanup = () => signal.removeEventListener('abort', rejectIfAborted);
+      })
+    : null;
+  let timeoutHandle: ReturnType<typeof globalThis.setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    const timeoutMs = Math.max(0, deadlineMs - Date.now());
+
+    timeoutHandle = globalThis.setTimeout(() => {
+      reject(new LocalImportSourceValidationError(SOURCE_VALIDATION_TIMEOUT_MESSAGE));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race(cancellation ? [operation, cancellation, timeout] : [operation, timeout]);
+  } finally {
+    cleanup();
+
+    if (timeoutHandle !== undefined) {
+      globalThis.clearTimeout(timeoutHandle);
+    }
+  }
+}
+
+function isSourceValidationControlError(error: unknown) {
+  return error instanceof LocalImportSourceValidationError && (
+    error.message === SOURCE_VALIDATION_CANCELED_MESSAGE || error.message === SOURCE_VALIDATION_TIMEOUT_MESSAGE
+  );
+}
+
+async function sha256Hex(binaryContent: ArrayBuffer, signal?: AbortSignal | undefined, deadlineMs?: number | undefined) {
+  if (typeof crypto === 'undefined' || !crypto.subtle) {
+    throw new LocalImportSourceValidationError(SOURCE_RESELECTION_MESSAGE);
+  }
+
+  const digest = await awaitWithSourceValidationCancellation(crypto.subtle.digest('SHA-256', binaryContent), signal, deadlineMs);
+
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+async function readFileBytesForSourceValidation(file: File, signal?: AbortSignal | undefined, deadlineMs?: number | undefined) {
+  try {
+    return await awaitWithSourceValidationCancellation(file.arrayBuffer(), signal, deadlineMs);
+  } catch (error) {
+    if (isSourceValidationControlError(error)) {
+      throw error;
+    }
+
+    throw new LocalImportSourceValidationError(SOURCE_RESELECTION_MESSAGE);
+  }
+}
+
+export async function validateLocalImportFileHandleMatchesPreview({
+  sourceKind,
+  fileName,
+  previewFile,
+  signal,
+  selection,
+}: LocalImportSourceValidationInput): Promise<ValidatedLocalImportSourceFileHandle | undefined> {
+  const validationDeadlineMs = Date.now() + LOCAL_IMPORT_SOURCE_VALIDATION_TIMEOUT_MS;
+
+  assertSourceValidationNotAborted(signal);
+
+  if (!selection?.handle) {
+    return undefined;
+  }
+
+  if (selection.sourceKind !== sourceKind || selection.fileName !== fileName) {
+    throw new LocalImportSourceValidationError(SOURCE_RESELECTION_MESSAGE);
+  }
+
+  let liveFile: File;
+
+  try {
+    assertSourceValidationNotAborted(signal);
+    liveFile = await awaitWithSourceValidationCancellation(selection.handle.getFile(), signal, validationDeadlineMs);
+  } catch (error) {
+    if (isSourceValidationControlError(error)) {
+      throw error;
+    }
+
+    assertSourceValidationNotAborted(signal);
+    throw new LocalImportSourceValidationError(SOURCE_RESELECTION_MESSAGE);
+  }
+
+  assertSourceValidationNotAborted(signal);
+
+  if (
+    liveFile.name !== previewFile.name
+    || liveFile.size !== previewFile.size
+    || liveFile.lastModified !== previewFile.lastModified
+  ) {
+    throw new LocalImportSourceValidationError(SOURCE_CHANGED_MESSAGE);
+  }
+
+  assertSourceValidationNotAborted(signal);
+  const liveSha256 = await sha256Hex(
+    await readFileBytesForSourceValidation(liveFile, signal, validationDeadlineMs),
+    signal,
+    validationDeadlineMs,
+  );
+  assertSourceValidationNotAborted(signal);
+  const previewSha256 = await sha256Hex(
+    await readFileBytesForSourceValidation(previewFile, signal, validationDeadlineMs),
+    signal,
+    validationDeadlineMs,
+  );
+  assertSourceValidationNotAborted(signal);
+
+  if (liveSha256 !== previewSha256) {
+    throw new LocalImportSourceValidationError(SOURCE_CHANGED_MESSAGE);
+  }
+
+  return {
+    handle: selection.handle,
+    fileName: liveFile.name,
+    fileSize: liveFile.size,
+    fileLastModified: liveFile.lastModified,
+    fileSha256: liveSha256,
+  };
+}
 
 export function resolveLocalImportAccept(sourceKind: OpenLocalImportFileOptions['sourceKind']) {
   return sourceKind === 'excel-file'

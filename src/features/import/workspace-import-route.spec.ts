@@ -7,6 +7,8 @@ import { IMPORT_PREVIEW_BUDGET_MS } from './benchmark-timing';
 import type { ImportPreviewDataset } from './preview-model';
 import { createImportPreviewStore } from './store';
 import {
+  CONFIRMATION_MATERIALIZATION_TIMEOUT_MESSAGE,
+  CONFIRMATION_PERSISTENCE_IMPORT_ENTRYPOINT_BLOCKED_MESSAGE,
   failImportIfActive,
   bindWorkerImportFailureCallbacks,
   commitConfirmedImportToKernel,
@@ -16,19 +18,29 @@ import {
   applyResolvedImportPreviewTiming,
   awaitImportBudgetThreshold,
   clearActiveImportPreview,
+  clearAbortControllerIfCurrent,
   createImportActivityTracker,
   createReplayableSourceRequest,
+  isConfirmTimePreviewStillCurrent,
   createWorkerPayloadFromReplayableSourceRequest,
   detectOwnedImportBenchmarkScenario,
   describePartialPreviewNotice,
+  getImportEntrypointPersistenceBlockedMessage,
   postWorkerImportFromRoute,
   postWorkerImportMessageWithBudget,
   readFileArrayBuffer,
   readFileText,
   readFileWithFileReader,
+  rememberPreviewReplayContext,
   resolveDisplayedBenchmarkScenario,
   runImportBudgetedRead,
+  shouldShowRejectImportAction,
   toImportPreparationError,
+  validateSourceFileHandleMatchesPreview,
+  isConfirmMaterializationRecoveryError,
+  isImportEntrypointPersistenceBlocked,
+  isRejectImportPersistenceBlocked,
+  shouldSurfaceConfirmTimePreviewForAcknowledgement,
 } from './workspace-import-route';
 import { createWorkspaceKernelStore, createImportWorkspaceSnapshot } from '../../stores/workspace-kernel';
 
@@ -859,6 +871,160 @@ describe('createImportActivityTracker', () => {
   });
 });
 
+describe('rememberPreviewReplayContext', () => {
+  it('caches a replay source for a newly surfaced confirm-time blocker preview', () => {
+    const contexts = new Map();
+    const sourceRequest = createReplayableSourceRequest({
+      sourceKind: 'csv-file',
+      payload: {
+        sourceLabel: 'Local CSV file',
+        fileName: 'blocking.csv',
+        mimeType: 'text/csv',
+      },
+      localFile: new File(['Sample,Reading\nA-1,'], 'blocking.csv', {
+        type: 'text/csv',
+      }),
+    });
+
+    rememberPreviewReplayContext({
+      contexts,
+      previewId: 'preview_confirm_time_blocker',
+      sourceRequest,
+      pendingLocalImportSelection: {
+        sourceKind: 'csv-file',
+        fileName: 'blocking.csv',
+      },
+    });
+
+    expect(contexts.get('preview_confirm_time_blocker')).toMatchObject({
+      sourceRequest,
+      pendingLocalImportSelection: {
+        sourceKind: 'csv-file',
+        fileName: 'blocking.csv',
+      },
+    });
+  });
+});
+
+describe('isConfirmTimePreviewStillCurrent', () => {
+  it('rejects confirm-time previews materialized for a stale visible preview', () => {
+    expect(isConfirmTimePreviewStillCurrent({
+      expectedPreviewId: 'preview_original',
+      visiblePreviewId: 'preview_newer',
+    })).toBe(false);
+  });
+
+  it('allows confirm-time previews while the expected preview is still visible', () => {
+    expect(isConfirmTimePreviewStillCurrent({
+      expectedPreviewId: 'preview_original',
+      visiblePreviewId: 'preview_original',
+    })).toBe(true);
+  });
+});
+
+describe('confirm-time recovery affordances', () => {
+  it('keeps Reject Import available while confirm-time materialization is pending', () => {
+    expect(shouldShowRejectImportAction({
+      previewCommitted: false,
+      confirmPersistencePending: false,
+    })).toBe(true);
+  });
+
+  it('hides Reject Import once confirm persistence is in flight', () => {
+    expect(shouldShowRejectImportAction({
+      previewCommitted: false,
+      confirmPersistencePending: true,
+    })).toBe(false);
+  });
+
+  it('blocks stale Reject handlers synchronously after confirm persistence starts', () => {
+    expect(isRejectImportPersistenceBlocked({
+      previewId: 'preview_confirming',
+      pendingPreviewId: 'preview_confirming',
+    })).toBe(true);
+    expect(isRejectImportPersistenceBlocked({
+      previewId: 'preview_other',
+      pendingPreviewId: 'preview_confirming',
+    })).toBe(false);
+  });
+
+  it('blocks stale import entrypoint handlers synchronously after confirm persistence starts', () => {
+    expect(isImportEntrypointPersistenceBlocked({
+      pendingPreviewId: 'preview_confirming',
+    })).toBe(true);
+    expect(isImportEntrypointPersistenceBlocked({
+      pendingPreviewId: null,
+      confirmationPendingPreviewId: 'preview_confirming',
+    })).toBe(true);
+    expect(isImportEntrypointPersistenceBlocked({
+      pendingPreviewId: null,
+    })).toBe(false);
+    expect(CONFIRMATION_PERSISTENCE_IMPORT_ENTRYPOINT_BLOCKED_MESSAGE).toContain('validating or saving');
+  });
+
+  it('provides visible entrypoint lock copy while confirm persistence is pending', () => {
+    expect(getImportEntrypointPersistenceBlockedMessage({
+      pendingPreviewId: 'preview_confirming',
+    })).toBe(CONFIRMATION_PERSISTENCE_IMPORT_ENTRYPOINT_BLOCKED_MESSAGE);
+    expect(getImportEntrypointPersistenceBlockedMessage({
+      pendingPreviewId: null,
+      confirmationPendingPreviewId: 'preview_confirming',
+    })).toBe(CONFIRMATION_PERSISTENCE_IMPORT_ENTRYPOINT_BLOCKED_MESSAGE);
+    expect(getImportEntrypointPersistenceBlockedMessage({
+      pendingPreviewId: null,
+    })).toBeNull();
+  });
+
+  it('requires acknowledgement when confirm-time materialization discovers rows after a complete preview', () => {
+    const visiblePreview = {
+      previewId: 'preview_sparse_stale_ref',
+      rowCount: 1,
+      columnCount: 2,
+      isPartialPreview: false,
+    } as ImportPreviewDataset;
+    const confirmedPreview = {
+      ...visiblePreview,
+      previewId: 'preview_sparse_stale_ref_confirmed',
+      rowCount: 2,
+      isPartialPreview: true,
+    } as ImportPreviewDataset;
+
+    expect(shouldSurfaceConfirmTimePreviewForAcknowledgement({
+      visiblePreview,
+      confirmedPreview,
+    })).toBe(true);
+    expect(shouldSurfaceConfirmTimePreviewForAcknowledgement({
+      visiblePreview: {
+        ...visiblePreview,
+        isPartialPreview: true,
+      },
+      confirmedPreview,
+    })).toBe(false);
+  });
+
+  it('does not show Reject Import after the preview has committed', () => {
+    expect(shouldShowRejectImportAction({ previewCommitted: true })).toBe(false);
+  });
+
+  it('preserves confirm-time materialization timeout errors as user-recoverable action copy', () => {
+    expect(isConfirmMaterializationRecoveryError(new Error(CONFIRMATION_MATERIALIZATION_TIMEOUT_MESSAGE))).toBe(true);
+    expect(isConfirmMaterializationRecoveryError(new Error('other failure'))).toBe(false);
+  });
+
+  it('does not let a stale confirm flow clear a newer source-validation abort controller', () => {
+    const staleController = new AbortController();
+    const newerController = new AbortController();
+    const ref = {
+      current: newerController,
+    };
+
+    expect(clearAbortControllerIfCurrent(ref, staleController)).toBe(false);
+    expect(ref.current).toBe(newerController);
+    expect(clearAbortControllerIfCurrent(ref, newerController)).toBe(true);
+    expect(ref.current).toBeNull();
+  });
+});
+
 describe('createWorkerPayloadFromReplayableSourceRequest', () => {
   it('re-reads local Excel files for repair reruns instead of depending on a retained transferred buffer', async () => {
     const localFile = new File([cleanExcelFixtureBuffer], 'repair.xlsx', {
@@ -904,6 +1070,126 @@ describe('createWorkerPayloadFromReplayableSourceRequest', () => {
     expect(repairedPayload.binaryContent).toBeDefined();
     expect(repairedPayload.binaryContent).not.toBe(initialTransferredBuffer);
     expect(repairedPayload.binaryContent?.byteLength).toBe(cleanExcelFixtureBuffer.byteLength);
+  });
+
+  it('rejects local-file payload creation when confirm materialization is canceled during the source read', async () => {
+    const localFile = new File(['Sample,Reading\nA-1,42.5'], 'source.csv', {
+      type: 'text/csv',
+    });
+    const abortController = new AbortController();
+    const replayableRequest = createReplayableSourceRequest({
+      sourceKind: 'csv-file',
+      payload: {
+        sourceLabel: 'Local CSV file',
+        fileName: 'source.csv',
+        mimeType: 'text/csv',
+      },
+      localFile,
+    });
+
+    await expect(createWorkerPayloadFromReplayableSourceRequest(
+      replayableRequest,
+      {
+        delimiter: null,
+        headerSelection: 'first-row-header',
+        columnTypeOverrides: {},
+        missingValuePolicy: null,
+        additionalColumnsAcknowledgement: null,
+      },
+      {
+        async readTextFile() {
+          abortController.abort();
+
+          return 'Sample,Reading\nA-1,42.5';
+        },
+        signal: abortController.signal,
+      },
+    )).rejects.toThrow('confirm-time import pass was canceled');
+  });
+});
+
+describe('validateSourceFileHandleMatchesPreview', () => {
+  it('fails closed when a local source handle no longer matches the previewed file bytes', async () => {
+    const previewedFile = new File(['previewed'], 'source.csv', {
+      type: 'text/csv',
+      lastModified: 1713830400000,
+    });
+    const changedFile = new File(['changed!'], 'source.csv', {
+      type: 'text/csv',
+      lastModified: 1713830400000,
+    });
+    const replayableRequest = createReplayableSourceRequest({
+      sourceKind: 'csv-file',
+      payload: {
+        sourceLabel: 'Local CSV file',
+        fileName: 'source.csv',
+        mimeType: 'text/csv',
+      },
+      localFile: previewedFile,
+    });
+
+    await expect(validateSourceFileHandleMatchesPreview(replayableRequest, {
+      sourceKind: 'csv-file',
+      fileName: 'source.csv',
+      handle: {
+        name: 'source.csv',
+        async getFile() {
+          return changedFile;
+        },
+        async createWritable() {
+          return {
+            async write() {},
+            async close() {},
+          };
+        },
+      },
+    })).rejects.toThrow('changed after preview');
+  });
+
+  it('passes cancellation through local source-handle validation before preview byte reads', async () => {
+    const previewedFile = new File(['previewed'], 'source.csv', {
+      type: 'text/csv',
+      lastModified: 1713830400000,
+    });
+    const liveFile = new File(['previewed'], 'source.csv', {
+      type: 'text/csv',
+      lastModified: 1713830400000,
+    });
+    const abortController = new AbortController();
+    const previewArrayBuffer = vi.spyOn(previewedFile, 'arrayBuffer');
+    const replayableRequest = createReplayableSourceRequest({
+      sourceKind: 'csv-file',
+      payload: {
+        sourceLabel: 'Local CSV file',
+        fileName: 'source.csv',
+        mimeType: 'text/csv',
+      },
+      localFile: previewedFile,
+    });
+
+    vi.spyOn(liveFile, 'arrayBuffer').mockImplementation(async () => {
+      abortController.abort();
+
+      return new File(['previewed'], 'source.csv').arrayBuffer();
+    });
+
+    await expect(validateSourceFileHandleMatchesPreview(replayableRequest, {
+      sourceKind: 'csv-file',
+      fileName: 'source.csv',
+      handle: {
+        name: 'source.csv',
+        async getFile() {
+          return liveFile;
+        },
+        async createWritable() {
+          return {
+            async write() {},
+            async close() {},
+          };
+        },
+      },
+    }, abortController.signal)).rejects.toThrow('source-file validation was canceled');
+    expect(previewArrayBuffer).not.toHaveBeenCalled();
   });
 });
 
@@ -1521,14 +1807,23 @@ describe('commitConfirmedImportToKernel', () => {
         };
       },
     };
+    const validatedSourceFileHandle = {
+      handle: sourceFileHandle,
+      fileName: 'repair.csv',
+      fileSize: 24,
+      fileLastModified: 1713830400000,
+      fileSha256: 'validated-source-digest',
+    };
 
     await expect(
       commitConfirmedImportToKernel({
         kernelStore,
         preview,
         confirmationToken: 'confirm_token_success',
-        sourceFileHandle,
-        saveWorkspace: async (store, datasetFileHandles) => {
+        sourceFileHandle: validatedSourceFileHandle,
+        saveWorkspace: async (store, datasetFileHandles, requiredDatasetFileHandleDatasetIds) => {
+          expect(requiredDatasetFileHandleDatasetIds).toEqual(['dataset_import_confirm_token_success']);
+
           if (datasetFileHandles) {
             store.getState().commands.replaceDatasetFileHandles(datasetFileHandles);
           }
@@ -1562,6 +1857,9 @@ describe('commitConfirmedImportToKernel', () => {
         datasetId: 'dataset_import_confirm_token_success',
         fileName: 'repair.csv',
         fileHandleToken: 'dataset.dataset_import_confirm_token_success.source-file',
+        fileSize: 24,
+        fileLastModified: 1713830400000,
+        fileSha256: 'validated-source-digest',
         handle: sourceFileHandle,
       }),
     ]);

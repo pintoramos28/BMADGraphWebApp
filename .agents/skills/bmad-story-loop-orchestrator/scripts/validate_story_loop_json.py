@@ -329,7 +329,7 @@ def validate_review_report(obj: dict[str, Any], path: str) -> None:
                 + ", ".join(f"{layer}={status}" for layer, status in sorted(incomplete_layers.items())),
             )
 
-    if not gating:
+    if not gating and result != "decision_needed":
         action_p3 = [item for item in p3 if item["action_state"] == "action_item"]
         if action_p3:
             fail(f"{path}.p3_findings", "P3 findings may be action items only when gating findings are present")

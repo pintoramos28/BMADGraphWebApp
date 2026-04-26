@@ -7,7 +7,7 @@ import {
   importPreviewProgressMessageSchema,
   importPreviewSuccessMessageSchema,
 } from '../../schemas/worker';
-import { saveWorkspaceKernel } from '../workspace-persistence';
+import { WORKSPACE_SAVE_PERSISTENCE_TIMEOUT_MS, saveWorkspaceKernel } from '../workspace-persistence';
 import {
   IndexedDbWorkspaceStorage,
   createWorkspaceRepository,
@@ -15,7 +15,10 @@ import {
 } from '../../services/persistence';
 import {
   BrowserLocalImportFileAccess,
+  LocalImportSourceValidationError,
   type LocalImportSelection,
+  type ValidatedLocalImportSourceFileHandle,
+  validateLocalImportFileHandleMatchesPreview,
 } from '../../services/persistence/fs-access/local-import-files';
 import type { WorkspaceFileHandle } from '../../services/persistence/fs-access/portable-workspace-files';
 import {
@@ -57,6 +60,96 @@ function createCorrelationId() {
 
 function formatDuration(durationMs: number) {
   return `${(durationMs / 1000).toFixed(2)}s`;
+}
+
+export function isConfirmTimePreviewStillCurrent({
+  expectedPreviewId,
+  visiblePreviewId,
+}: {
+  expectedPreviewId: string;
+  visiblePreviewId: string | null | undefined;
+}) {
+  return visiblePreviewId === expectedPreviewId;
+}
+
+export const CONFIRMATION_MATERIALIZATION_TIMEOUT_MS = Math.max(IMPORT_PREVIEW_BUDGET_MS * 6, 30_000);
+export const CONFIRMATION_MATERIALIZATION_TIMEOUT_MESSAGE =
+  'The confirm-time import worker did not respond. Reject this preview or try Confirm Import again.';
+export const CONFIRMATION_PERSISTENCE_TIMEOUT_MS = WORKSPACE_SAVE_PERSISTENCE_TIMEOUT_MS;
+export const CONFIRMATION_PERSISTENCE_IMPORT_ENTRYPOINT_BLOCKED_MESSAGE =
+  'Confirm Import is already validating or saving this dataset. Wait for it to finish before starting another import.';
+
+export function isConfirmMaterializationRecoveryError(error: unknown): error is Error {
+  return error instanceof Error && error.message === CONFIRMATION_MATERIALIZATION_TIMEOUT_MESSAGE;
+}
+
+export function shouldShowRejectImportAction({
+  previewCommitted,
+  confirmPersistencePending = false,
+}: {
+  previewCommitted: boolean;
+  confirmPersistencePending?: boolean | undefined;
+}) {
+  return !previewCommitted && !confirmPersistencePending;
+}
+
+export function isRejectImportPersistenceBlocked({
+  previewId,
+  pendingPreviewId,
+}: {
+  previewId: string;
+  pendingPreviewId: string | null;
+}) {
+  return pendingPreviewId === previewId;
+}
+
+export function isImportEntrypointPersistenceBlocked({
+  pendingPreviewId,
+  confirmationPendingPreviewId = null,
+}: {
+  pendingPreviewId: string | null;
+  confirmationPendingPreviewId?: string | null | undefined;
+}) {
+  return pendingPreviewId !== null || confirmationPendingPreviewId !== null;
+}
+
+export function getImportEntrypointPersistenceBlockedMessage({
+  pendingPreviewId,
+  confirmationPendingPreviewId = null,
+}: {
+  pendingPreviewId: string | null;
+  confirmationPendingPreviewId?: string | null | undefined;
+}) {
+  return isImportEntrypointPersistenceBlocked({ pendingPreviewId, confirmationPendingPreviewId })
+    ? CONFIRMATION_PERSISTENCE_IMPORT_ENTRYPOINT_BLOCKED_MESSAGE
+    : null;
+}
+
+export function shouldSurfaceConfirmTimePreviewForAcknowledgement({
+  visiblePreview,
+  confirmedPreview,
+}: {
+  visiblePreview: ImportPreviewDataset;
+  confirmedPreview: ImportPreviewDataset;
+}) {
+  return !visiblePreview.isPartialPreview
+    && (
+      confirmedPreview.isPartialPreview
+      || confirmedPreview.rowCount > visiblePreview.rowCount
+      || confirmedPreview.columnCount > visiblePreview.columnCount
+    );
+}
+
+export function clearAbortControllerIfCurrent(
+  ref: { current: AbortController | null },
+  controller: AbortController | null,
+) {
+  if (controller !== null && ref.current === controller) {
+    ref.current = null;
+    return true;
+  }
+
+  return false;
 }
 
 function formatHeaderSelection(selection: ImportHeaderSelection) {
@@ -105,23 +198,34 @@ export async function commitConfirmedImportToKernel({
   actorId = 'workspace-import-route',
   occurredAt = new Date().toISOString(),
   persistenceAvailable = typeof indexedDB !== 'undefined',
-  saveWorkspace = async (store: WorkspaceKernelStore, datasetFileHandles?: PersistedDatasetFileHandle[]) => {
+  saveWorkspace = async (
+    store: WorkspaceKernelStore,
+    datasetFileHandles?: PersistedDatasetFileHandle[],
+    requiredDatasetFileHandleDatasetIds?: string[],
+  ) => {
     await saveWorkspaceKernel({
       repository: createWorkspaceRepository(new IndexedDbWorkspaceStorage()),
       kernelStore: store,
+      persistenceTimeoutMs: CONFIRMATION_PERSISTENCE_TIMEOUT_MS,
       ...(datasetFileHandles ? { datasetFileHandles } : {}),
+      requireDatasetFileHandles: datasetFileHandles !== undefined,
+      ...(requiredDatasetFileHandleDatasetIds ? { requiredDatasetFileHandleDatasetIds } : {}),
     });
   },
 }: {
   kernelStore: WorkspaceKernelStore;
   preview: ImportPreviewDataset;
   confirmationToken: string;
-  sourceFileHandle?: WorkspaceFileHandle | undefined;
+  sourceFileHandle?: ValidatedLocalImportSourceFileHandle | undefined;
   actorId?: string | undefined;
   occurredAt?: string | undefined;
   persistenceAvailable?: boolean | undefined;
   saveWorkspace?:
-    | ((kernelStore: WorkspaceKernelStore, datasetFileHandles?: PersistedDatasetFileHandle[]) => Promise<unknown>)
+    | ((
+      kernelStore: WorkspaceKernelStore,
+      datasetFileHandles?: PersistedDatasetFileHandle[],
+      requiredDatasetFileHandleDatasetIds?: string[],
+    ) => Promise<unknown>)
     | undefined;
 }) {
   if (!persistenceAvailable) {
@@ -151,7 +255,10 @@ export async function commitConfirmedImportToKernel({
           datasetId: dataset.datasetId,
           fileName: dataset.sourceFile!.fileName,
           fileHandleToken: dataset.sourceFile!.fileHandleToken,
-          handle: sourceFileHandle,
+          fileSize: sourceFileHandle.fileSize,
+          fileLastModified: sourceFileHandle.fileLastModified,
+          fileSha256: sourceFileHandle.fileSha256,
+          handle: sourceFileHandle.handle,
         } satisfies PersistedDatasetFileHandle,
       ]
     : undefined;
@@ -171,7 +278,11 @@ export async function commitConfirmedImportToKernel({
   const canonicalIssueIds = preview.issues.map((issue) => `${issue.issueId}:${dataset.datasetId}`);
 
   try {
-    await saveWorkspace(kernelStore, nextDatasetFileHandles);
+    await saveWorkspace(
+      kernelStore,
+      nextDatasetFileHandles,
+      sourceFileHandle ? [dataset.datasetId] : undefined,
+    );
   } catch (error) {
     const currentKernelState = kernelStore.getState();
 
@@ -248,6 +359,31 @@ export function createImportActivityTracker(now: () => number = () => performanc
   };
 }
 
+export async function validateSourceFileHandleMatchesPreview(
+  sourceRequest: ReplayableSourceRequest,
+  pendingLocalImportSelection: PendingLocalImportSelection | null,
+  signal?: AbortSignal | undefined,
+) {
+  if (sourceRequest.replayMode !== 'local-file' || !pendingLocalImportSelection?.handle) {
+    return undefined;
+  }
+
+  return validateLocalImportFileHandleMatchesPreview({
+    sourceKind: sourceRequest.sourceKind,
+    fileName: sourceRequest.fileName,
+    previewFile: sourceRequest.localFile,
+    signal,
+    selection: pendingLocalImportSelection,
+  });
+}
+
+function isSourceValidationError(error: unknown): error is Error {
+  return error instanceof LocalImportSourceValidationError || (error instanceof Error && (
+    error.message.includes('Reselect the source file') ||
+    error.message.includes('source file changed after preview')
+  ));
+}
+
 const sectionCardStyle = {
   padding: '1rem 1.1rem',
   borderRadius: '1rem',
@@ -286,18 +422,58 @@ type ReplayableLocalFileSourceRequest = {
   localFile: File;
 };
 
-type ReplayableSourceRequest = ReplayableInlineSourceRequest | ReplayableLocalFileSourceRequest;
+export type ReplayableSourceRequest = ReplayableInlineSourceRequest | ReplayableLocalFileSourceRequest;
 
-type PendingLocalImportSelection = {
+export type PendingLocalImportSelection = {
   sourceKind: Extract<ImportSourceKind, 'csv-file' | 'excel-file'>;
   fileName: string;
   handle?: WorkspaceFileHandle;
 };
 
-type PreviewReplayContext = {
+export type PreviewReplayContext = {
   sourceRequest: ReplayableSourceRequest;
   pendingLocalImportSelection: PendingLocalImportSelection | null;
 };
+
+const MAX_PREVIEW_REPLAY_CONTEXTS = 3;
+
+export function rememberPreviewReplayContext({
+  contexts,
+  previewId,
+  sourceRequest,
+  pendingLocalImportSelection,
+  maxContexts = MAX_PREVIEW_REPLAY_CONTEXTS,
+}: {
+  contexts: Map<string, PreviewReplayContext>;
+  previewId: string;
+  sourceRequest: ReplayableSourceRequest | null;
+  pendingLocalImportSelection: PendingLocalImportSelection | null;
+  maxContexts?: number | undefined;
+}) {
+  if (!sourceRequest) {
+    contexts.delete(previewId);
+    return;
+  }
+
+  contexts.set(previewId, {
+    sourceRequest,
+    pendingLocalImportSelection: pendingLocalImportSelection
+      ? {
+          ...pendingLocalImportSelection,
+        }
+      : null,
+  });
+
+  while (contexts.size > maxContexts) {
+    const oldestPreviewId = contexts.keys().next().value;
+
+    if (!oldestPreviewId) {
+      break;
+    }
+
+    contexts.delete(oldestPreviewId);
+  }
+}
 
 const CLEAN_EXCEL_BENCHMARK_SHA256 = '9a3c80dcce51ee6739bc4271b02b722ef5d6e6cdf2057e2251fc820d77b3f8e5';
 
@@ -594,29 +770,43 @@ export async function createWorkerPayloadFromReplayableSourceRequest(
   options: {
     readTextFile?: ((file: File) => Promise<string>) | undefined;
     readBinaryFile?: ((file: File) => Promise<ArrayBuffer>) | undefined;
+    signal?: AbortSignal | undefined;
   } = {},
 ): Promise<WorkerImportPayload> {
   const readTextFile = options.readTextFile ?? readFileText;
   const readBinaryFile = options.readBinaryFile ?? readFileArrayBuffer;
+  const assertNotAborted = () => {
+    if (options.signal?.aborted) {
+      throw new Error('The confirm-time import pass was canceled because the preview changed.');
+    }
+  };
+
+  assertNotAborted();
 
   if (sourceRequest.replayMode === 'local-file') {
     if (sourceRequest.sourceKind === 'excel-file') {
+      const binaryContent = await readBinaryFile(sourceRequest.localFile);
+      assertNotAborted();
+
       return {
         sourceLabel: sourceRequest.sourceLabel,
         fileName: sourceRequest.fileName,
         mimeType: sourceRequest.mimeType ?? null,
         benchmarkScenario: sourceRequest.benchmarkScenario ?? null,
-        binaryContent: await readBinaryFile(sourceRequest.localFile),
+        binaryContent,
         repairSelections,
       };
     }
+
+    const textContent = await readTextFile(sourceRequest.localFile);
+    assertNotAborted();
 
     return {
       sourceLabel: sourceRequest.sourceLabel,
       fileName: sourceRequest.fileName,
       mimeType: sourceRequest.mimeType ?? null,
       benchmarkScenario: sourceRequest.benchmarkScenario ?? null,
-      textContent: await readTextFile(sourceRequest.localFile),
+      textContent,
       repairSelections,
     };
   }
@@ -928,17 +1118,25 @@ export function WorkspaceImportRoute({
   const storeRef = useRef(createImportPreviewStore());
   const activityTrackerRef = useRef(createImportActivityTracker());
   const workerRef = useRef<Worker | null>(null);
+  const confirmationMaterializationRef = useRef<{
+    worker: Worker | null;
+    abortController: AbortController;
+    reject: (error: Error) => void;
+  } | null>(null);
   const budgetTimerRef = useRef<number | null>(null);
   const budgetTimerCorrelationRef = useRef<string | null>(null);
   const localImportFileAccessRef = useRef<BrowserLocalImportFileAccess | null>(null);
   const pendingLocalImportSelectionRef = useRef<PendingLocalImportSelection | null>(null);
   const replayableSourceRequestRef = useRef<ReplayableSourceRequest | null>(null);
   const previewReplayContextRef = useRef(new Map<string, PreviewReplayContext>());
+  const confirmationSourceValidationAbortControllerRef = useRef<AbortController | null>(null);
   const confirmationPendingPreviewIdRef = useRef<string | null>(null);
+  const confirmationPersistencePendingPreviewIdRef = useRef<string | null>(null);
   const [pasteText, setPasteText] = useState('');
   const [pasteValidationError, setPasteValidationError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmationPendingPreviewId, setConfirmationPendingPreviewId] = useState<string | null>(null);
+  const [confirmationPersistencePendingPreviewId, setConfirmationPersistencePendingPreviewId] = useState<string | null>(null);
 
   const status = useStore(storeRef.current, (state) => state.status);
   const preview = useStore(storeRef.current, (state) => state.preview);
@@ -956,6 +1154,17 @@ export function WorkspaceImportRoute({
   const previewCommitLocked = preview
     ? previewCommitted || confirmationPendingPreviewId === preview.previewId
     : false;
+  const previewConfirmPersistencePending = preview
+    ? confirmationPersistencePendingPreviewId === preview.previewId
+    : false;
+  const importEntrypointsLocked = isImportEntrypointPersistenceBlocked({
+    pendingPreviewId: confirmationPersistencePendingPreviewId,
+    confirmationPendingPreviewId,
+  });
+  const importEntrypointPersistenceBlockedMessage = getImportEntrypointPersistenceBlockedMessage({
+    pendingPreviewId: confirmationPersistencePendingPreviewId,
+    confirmationPendingPreviewId,
+  });
   const canonicalDatasetCount = committedSnapshot.datasets.filter(
     (dataset) => dataset.datasetId !== IMPORT_BOOTSTRAP_DATASET_ID,
   ).length;
@@ -972,6 +1181,7 @@ export function WorkspaceImportRoute({
 
       budgetTimerCorrelationRef.current = null;
       disposeWorker();
+      cancelConfirmationMaterialization();
       replayableSourceRequestRef.current = null;
       previewReplayContextRef.current.clear();
       storeRef.current.getState().commands.reset();
@@ -988,6 +1198,22 @@ export function WorkspaceImportRoute({
     workerRef.current.onmessageerror = null;
     workerRef.current.terminate();
     workerRef.current = null;
+  }
+
+  function cancelConfirmationMaterialization() {
+    confirmationSourceValidationAbortControllerRef.current?.abort(
+      new Error('The source-file validation was canceled because the preview changed.'),
+    );
+    confirmationSourceValidationAbortControllerRef.current = null;
+
+    const activeMaterialization = confirmationMaterializationRef.current;
+
+    if (!activeMaterialization) {
+      return;
+    }
+
+    activeMaterialization.abortController.abort(new Error('The confirm-time import pass was canceled because the preview changed.'));
+    activeMaterialization.reject(new Error('The confirm-time import pass was canceled because the preview changed.'));
   }
 
   function clearBudgetTimer(correlationId?: string) {
@@ -1192,9 +1418,26 @@ export function WorkspaceImportRoute({
     return localImportFileAccessRef.current;
   }
 
+  function blockImportEntrypointIfConfirmationPersistencePending() {
+    if (!isImportEntrypointPersistenceBlocked({
+      pendingPreviewId: confirmationPersistencePendingPreviewIdRef.current,
+      confirmationPendingPreviewId: confirmationPendingPreviewIdRef.current,
+    })) {
+      return false;
+    }
+
+    setActionError(CONFIRMATION_PERSISTENCE_IMPORT_ENTRYPOINT_BLOCKED_MESSAGE);
+    return true;
+  }
+
   function beginImport(sourceKind: ImportSourceKind) {
+    if (blockImportEntrypointIfConfirmationPersistencePending()) {
+      return null;
+    }
+
     clearBudgetTimer();
     disposeWorker();
+    cancelConfirmationMaterialization();
     activityTrackerRef.current.clearBenchmark();
     clearReplayableSourceRequest();
     setActionError(null);
@@ -1221,15 +1464,10 @@ export function WorkspaceImportRoute({
   }
 
   function rememberReplayContextForPreview(previewId: string) {
-    const sourceRequest = replayableSourceRequestRef.current;
-
-    if (!sourceRequest) {
-      previewReplayContextRef.current.delete(previewId);
-      return;
-    }
-
-    previewReplayContextRef.current.set(previewId, {
-      sourceRequest,
+    rememberPreviewReplayContext({
+      contexts: previewReplayContextRef.current,
+      previewId,
+      sourceRequest: replayableSourceRequestRef.current,
       pendingLocalImportSelection: clonePendingLocalImportSelection(pendingLocalImportSelectionRef.current),
     });
   }
@@ -1259,72 +1497,123 @@ export function WorkspaceImportRoute({
     sourceRequest: ReplayableSourceRequest,
     repairSelectionsForConfirm: ImportRepairSelections,
   ) {
-    const payload = await createWorkerPayloadFromReplayableSourceRequest(sourceRequest, repairSelectionsForConfirm, {
-      readTextFile: readFileText,
-      readBinaryFile: readFileArrayBuffer,
-    });
-
     return new Promise<ImportPreviewDataset>((resolve, reject) => {
-      const worker = new Worker(new URL('../../workers/import.worker.ts', import.meta.url), {
-        type: 'module',
-      });
+      const abortController = new AbortController();
+      let worker: Worker | null = null;
+      let timeoutId: number | null = null;
       const correlationId = `import_confirm_${createCorrelationId()}`;
+      let settled = false;
       const cleanup = () => {
-        worker.onmessage = null;
-        worker.onerror = null;
-        worker.onmessageerror = null;
-        worker.terminate();
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+
+        if (confirmationMaterializationRef.current?.reject === rejectOnce) {
+          confirmationMaterializationRef.current = null;
+        }
+
+        if (worker) {
+          worker.onmessage = null;
+          worker.onerror = null;
+          worker.onmessageerror = null;
+          worker.terminate();
+        }
       };
-
-      worker.onmessage = (event: MessageEvent) => {
-        const successMessage = importPreviewSuccessMessageSchema.safeParse(event.data);
-
-        if (successMessage.success && successMessage.data.correlationId === correlationId) {
-          cleanup();
-          resolve(successMessage.data.payload.preview);
+      const resolveOnce = (preview: ImportPreviewDataset) => {
+        if (settled) {
           return;
         }
 
-        const failureMessage = importPreviewFailureMessageSchema.safeParse(event.data);
-
-        if (failureMessage.success && failureMessage.data.correlationId === correlationId) {
-          cleanup();
-          reject(new Error(failureMessage.data.payload.detail));
+        settled = true;
+        cleanup();
+        resolve(preview);
+      };
+      const rejectOnce = (error: Error) => {
+        if (settled) {
+          return;
         }
+
+        settled = true;
+        cleanup();
+        reject(error);
       };
 
-      worker.onerror = (event) => {
-        cleanup();
-        reject(new Error(event.message || 'The import worker could not materialize the confirmed dataset.'));
-        event.preventDefault();
+      confirmationMaterializationRef.current = {
+        worker: null,
+        abortController,
+        reject: rejectOnce,
       };
-      worker.onmessageerror = () => {
-        cleanup();
-        reject(new Error('The import worker returned an unreadable confirmed-import payload.'));
-      };
+      timeoutId = window.setTimeout(() => {
+        const timeoutError = new Error(CONFIRMATION_MATERIALIZATION_TIMEOUT_MESSAGE);
+        abortController.abort(timeoutError);
+        rejectOnce(timeoutError);
+      }, CONFIRMATION_MATERIALIZATION_TIMEOUT_MS);
 
-      try {
-        const binaryContent = payload.binaryContent ?? null;
-        worker.postMessage(
-          importPreviewRequestMessageSchema.parse({
-            schemaVersion: '1.0.0',
-            messageId: `import_confirm_${correlationId}`,
-            correlationId,
-            workspaceVersion: 1,
-            type: 'import.preview.request',
-            payload: {
-              sourceKind: sourceRequest.sourceKind,
-              ...payload,
-              ...(binaryContent ? { binaryContent } : {}),
-              materializeConfirmedDataset: true,
-            },
-          }),
-          binaryContent ? [binaryContent] : [],
-        );
-      } catch (error) {
-        cleanup();
-        reject(error instanceof Error ? error : new Error('The import worker could not start the confirmed import pass.'));
-      }
+      void (async () => {
+        try {
+          const payload = await createWorkerPayloadFromReplayableSourceRequest(sourceRequest, repairSelectionsForConfirm, {
+            readTextFile: readFileText,
+            readBinaryFile: readFileArrayBuffer,
+            signal: abortController.signal,
+          });
+
+          if (settled || abortController.signal.aborted) {
+            return;
+          }
+
+          worker = new Worker(new URL('../../workers/import.worker.ts', import.meta.url), {
+            type: 'module',
+          });
+
+          if (confirmationMaterializationRef.current?.reject === rejectOnce) {
+            confirmationMaterializationRef.current.worker = worker;
+          }
+
+          worker.onmessage = (event: MessageEvent) => {
+            const successMessage = importPreviewSuccessMessageSchema.safeParse(event.data);
+
+            if (successMessage.success && successMessage.data.correlationId === correlationId) {
+              resolveOnce(successMessage.data.payload.preview);
+              return;
+            }
+
+            const failureMessage = importPreviewFailureMessageSchema.safeParse(event.data);
+
+            if (failureMessage.success && failureMessage.data.correlationId === correlationId) {
+              rejectOnce(new Error(failureMessage.data.payload.detail));
+            }
+          };
+
+          worker.onerror = (event) => {
+            rejectOnce(new Error(event.message || 'The import worker could not materialize the confirmed dataset.'));
+            event.preventDefault();
+          };
+          worker.onmessageerror = () => {
+            rejectOnce(new Error('The import worker returned an unreadable confirmed-import payload.'));
+          };
+
+          const binaryContent = payload.binaryContent ?? null;
+          worker.postMessage(
+            importPreviewRequestMessageSchema.parse({
+              schemaVersion: '1.0.0',
+              messageId: `import_confirm_${correlationId}`,
+              correlationId,
+              workspaceVersion: 1,
+              type: 'import.preview.request',
+              payload: {
+                sourceKind: sourceRequest.sourceKind,
+                ...payload,
+                ...(binaryContent ? { binaryContent } : {}),
+                materializeConfirmedDataset: true,
+              },
+            }),
+            binaryContent ? [binaryContent] : [],
+          );
+        } catch (error) {
+          rejectOnce(error instanceof Error ? error : new Error('The import worker could not start the confirmed import pass.'));
+        }
+      })();
     });
   }
 
@@ -1342,9 +1631,34 @@ export function WorkspaceImportRoute({
     setConfirmationPendingPreviewId(null);
   }
 
+  function markConfirmationPersistencePending(previewId: string) {
+    confirmationPersistencePendingPreviewIdRef.current = previewId;
+    setConfirmationPersistencePendingPreviewId(previewId);
+  }
+
+  function clearConfirmationPersistencePending(previewId?: string) {
+    if (previewId !== undefined && confirmationPersistencePendingPreviewIdRef.current !== previewId) {
+      return;
+    }
+
+    confirmationPersistencePendingPreviewIdRef.current = null;
+    setConfirmationPersistencePendingPreviewId((currentPreviewId) => {
+      if (previewId !== undefined && currentPreviewId !== previewId) {
+        return currentPreviewId;
+      }
+
+      return null;
+    });
+  }
+
   function beginRepairImport(sourceKind: ImportSourceKind) {
+    if (blockImportEntrypointIfConfirmationPersistencePending()) {
+      return null;
+    }
+
     clearBudgetTimer();
     disposeWorker();
+    cancelConfirmationMaterialization();
     activityTrackerRef.current.clearBenchmark();
     setActionError(null);
     const correlationId = createCorrelationId();
@@ -1421,6 +1735,10 @@ export function WorkspaceImportRoute({
       return;
     }
 
+    if (blockImportEntrypointIfConfirmationPersistencePending()) {
+      return;
+    }
+
     const { file, handle } = selection;
     setPasteValidationError(null);
     setPendingLocalImportSelection({
@@ -1429,6 +1747,12 @@ export function WorkspaceImportRoute({
       ...(handle ? { handle } : {}),
     });
     const correlationId = beginImport(sourceKind);
+
+    if (correlationId === null) {
+      setPendingLocalImportSelection(null);
+      return;
+    }
+
     storeRef.current.getState().commands.updateProgress(
       {
         phase: 'loading',
@@ -1565,6 +1889,10 @@ export function WorkspaceImportRoute({
   }
 
   async function handleLocalFileSelection(sourceKind: Extract<ImportSourceKind, 'csv-file' | 'excel-file'>) {
+    if (blockImportEntrypointIfConfirmationPersistencePending()) {
+      return;
+    }
+
     setPasteValidationError(null);
 
     let selection: LocalImportSelection | null;
@@ -1580,6 +1908,10 @@ export function WorkspaceImportRoute({
   }
 
   async function handlePasteImport() {
+    if (blockImportEntrypointIfConfirmationPersistencePending()) {
+      return;
+    }
+
     if (pasteText.trim().length === 0) {
       setPasteValidationError('Paste some tabular data first');
       return;
@@ -1588,6 +1920,11 @@ export function WorkspaceImportRoute({
     setPasteValidationError(null);
     setPendingLocalImportSelection(null);
     const correlationId = beginImport('pasted-table');
+
+    if (correlationId === null) {
+      return;
+    }
+
     activityTrackerRef.current.markBenchmarkStart(correlationId);
 
     let benchmarkScenario: ImportBenchmarkScenario | null;
@@ -1622,10 +1959,19 @@ export function WorkspaceImportRoute({
   }
 
   function handleOwnedBenchmarkImport(sourceKind: Extract<ImportSourceKind, 'csv-file' | 'pasted-table'>) {
+    if (blockImportEntrypointIfConfirmationPersistencePending()) {
+      return;
+    }
+
     setPasteValidationError(null);
     setPendingLocalImportSelection(null);
     const fixture = getOwnedImportBenchmarkFixture(sourceKind);
     const correlationId = beginImport(sourceKind);
+
+    if (correlationId === null) {
+      return;
+    }
+
     activityTrackerRef.current.markBenchmarkStart(correlationId);
 
     if (sourceKind === 'pasted-table') {
@@ -1664,6 +2010,11 @@ export function WorkspaceImportRoute({
       }
 
       const correlationId = beginRepairImport(sourceRequest.sourceKind);
+
+      if (correlationId === null) {
+        return;
+      }
+
       storeRef.current.getState().commands.setRepairSelections(nextRepairSelections);
       activityTrackerRef.current.markBenchmarkStart(correlationId);
       storeRef.current.getState().commands.updateProgress(
@@ -1717,6 +2068,7 @@ export function WorkspaceImportRoute({
     setActionError(null);
     markConfirmationPending(currentPreview.previewId);
     const sourceRequest = replayableSourceRequestRef.current;
+    let sourceValidationAbortController: AbortController | null = null;
 
     if (!sourceRequest) {
       setActionError('Confirmed import could not replay the selected source. Reopen the preview and try again.');
@@ -1724,36 +2076,86 @@ export function WorkspaceImportRoute({
       return;
     }
 
-    const pendingLocalImportSelection = pendingLocalImportSelectionRef.current;
-    const sourceFileHandle =
-      pendingLocalImportSelection?.handle &&
-      pendingLocalImportSelection.sourceKind === currentPreview.source.sourceKind &&
-      pendingLocalImportSelection.fileName === currentPreview.source.fileName
-        ? pendingLocalImportSelection.handle
-        : undefined;
-
     try {
+      sourceValidationAbortController = new AbortController();
+      confirmationSourceValidationAbortControllerRef.current = sourceValidationAbortController;
+      const sourceFileHandle = await validateSourceFileHandleMatchesPreview(
+        sourceRequest,
+        pendingLocalImportSelectionRef.current,
+        sourceValidationAbortController.signal,
+      );
+      clearAbortControllerIfCurrent(confirmationSourceValidationAbortControllerRef, sourceValidationAbortController);
+
+      if (!isConfirmTimePreviewStillCurrent({
+        expectedPreviewId: currentPreview.previewId,
+        visiblePreviewId: storeRef.current.getState().preview?.previewId,
+      })) {
+        return;
+      }
+
       const confirmedPreview = await materializeConfirmedPreviewForImport(sourceRequest, currentPreview.repairSelections);
 
       if (!hasMaterializedConfirmedDataset(confirmedPreview)) {
         throw new Error('The confirmed import dataset could not be materialized.');
       }
 
-      if (storeRef.current.getState().preview?.previewId !== currentPreview.previewId) {
+      const confirmedIssueSummary = summarizeImportIssues(confirmedPreview.issues);
+
+      if (!isConfirmTimePreviewStillCurrent({
+        expectedPreviewId: currentPreview.previewId,
+        visiblePreviewId: storeRef.current.getState().preview?.previewId,
+      })) {
         return;
       }
 
-      await commitConfirmedImportToKernel({
-        kernelStore,
-        preview: confirmedPreview,
-        confirmationToken: createCorrelationId(),
-        ...(sourceFileHandle ? { sourceFileHandle } : {}),
-      });
-      storeRef.current.getState().commands.markCommitted(currentPreview.previewId);
+      if (confirmedIssueSummary.blocking > 0) {
+        storeRef.current.getState().commands.resolveImport(confirmedPreview, null);
+        rememberReplayContextForPreview(confirmedPreview.previewId);
+        setActionError('The full dataset still has repairable blocking issues. Review the updated repair cards before confirming again.');
+        return;
+      }
+
+      if (shouldSurfaceConfirmTimePreviewForAcknowledgement({
+        visiblePreview: currentPreview,
+        confirmedPreview,
+      })) {
+        storeRef.current.getState().commands.resolveImport(confirmedPreview, null);
+        rememberReplayContextForPreview(confirmedPreview.previewId);
+        setActionError('The full workbook includes additional rows or columns that were not visible in the earlier complete preview. Review the updated preview before confirming again.');
+        return;
+      }
+
+      markConfirmationPersistencePending(currentPreview.previewId);
+
+      try {
+        await commitConfirmedImportToKernel({
+          kernelStore,
+          preview: confirmedPreview,
+          confirmationToken: createCorrelationId(),
+          ...(sourceFileHandle ? { sourceFileHandle } : {}),
+        });
+        storeRef.current.getState().commands.markCommitted(currentPreview.previewId);
+      } finally {
+        clearConfirmationPersistencePending(currentPreview.previewId);
+      }
     } catch (error) {
+      if (!isConfirmTimePreviewStillCurrent({
+        expectedPreviewId: currentPreview.previewId,
+        visiblePreviewId: storeRef.current.getState().preview?.previewId,
+      })) {
+        return;
+      }
+
       console.error('Failed to persist the confirmed import workspace state.', error);
-      setActionError('Confirmed import could not be persisted. Restore local workspace storage and try again.');
+      setActionError(
+        isSourceValidationError(error)
+          ? error.message
+          : isConfirmMaterializationRecoveryError(error)
+            ? error.message
+            : 'Confirmed import could not be persisted. Restore local workspace storage and try again.',
+      );
     } finally {
+      clearAbortControllerIfCurrent(confirmationSourceValidationAbortControllerRef, sourceValidationAbortController);
       clearConfirmationPending(currentPreview.previewId);
     }
   }
@@ -1785,10 +2187,10 @@ export function WorkspaceImportRoute({
             Choose a local comma-, semicolon-, tab-, or pipe-delimited file through the persistence boundary.
           </p>
           <div style={{ display: 'grid', gap: '0.5rem' }}>
-            <button type="button" onClick={() => void handleLocalFileSelection('csv-file')}>
+            <button type="button" onClick={() => void handleLocalFileSelection('csv-file')} disabled={importEntrypointsLocked}>
               Choose CSV file
             </button>
-            <button type="button" onClick={() => handleOwnedBenchmarkImport('csv-file')}>
+            <button type="button" onClick={() => handleOwnedBenchmarkImport('csv-file')} disabled={importEntrypointsLocked}>
               {getOwnedImportBenchmarkFixture('csv-file').actionLabel}
             </button>
           </div>
@@ -1797,7 +2199,7 @@ export function WorkspaceImportRoute({
         <article style={sectionCardStyle}>
           <h3 style={{ marginTop: 0 }}>Excel workbook</h3>
           <p style={{ lineHeight: 1.6 }}>Open a local `.xlsx` or `.xls` workbook and preview the first sheet only.</p>
-          <button type="button" onClick={() => void handleLocalFileSelection('excel-file')}>
+          <button type="button" onClick={() => void handleLocalFileSelection('excel-file')} disabled={importEntrypointsLocked}>
             Choose Excel file
           </button>
         </article>
@@ -1815,6 +2217,7 @@ export function WorkspaceImportRoute({
               setPasteValidationError(null);
             }}
             rows={6}
+            disabled={importEntrypointsLocked}
             style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical' }}
             placeholder={'Sample\tReading\tMeasuredAt\nA-1\t42.5\t2026-04-18'}
           />
@@ -1824,15 +2227,20 @@ export function WorkspaceImportRoute({
             </p>
           ) : null}
           <div style={{ marginTop: '0.75rem', display: 'grid', gap: '0.5rem' }}>
-            <button type="button" onClick={() => void handlePasteImport()}>
+            <button type="button" onClick={() => void handlePasteImport()} disabled={importEntrypointsLocked}>
               Preview pasted table
             </button>
-            <button type="button" onClick={() => handleOwnedBenchmarkImport('pasted-table')}>
+            <button type="button" onClick={() => handleOwnedBenchmarkImport('pasted-table')} disabled={importEntrypointsLocked}>
               {getOwnedImportBenchmarkFixture('pasted-table').actionLabel}
             </button>
           </div>
         </article>
       </section>
+      {importEntrypointPersistenceBlockedMessage ? (
+        <p role="status" aria-live="polite" style={{ margin: 0, color: '#6f5b45', lineHeight: 1.5 }}>
+          {importEntrypointPersistenceBlockedMessage}
+        </p>
+      ) : null}
 
       <section aria-live="polite" style={sectionCardStyle}>
         <strong style={{ display: 'block', marginBottom: '0.35rem' }}>Preview status</strong>
@@ -1893,10 +2301,22 @@ export function WorkspaceImportRoute({
               <button type="button" onClick={() => void confirmImport()} disabled={confirmBlocked || previewCommitLocked}>
                 Confirm Import
               </button>
-              {!previewCommitLocked ? (
+              {shouldShowRejectImportAction({
+                previewCommitted,
+                confirmPersistencePending: previewConfirmPersistencePending,
+              }) ? (
                 <button
                   type="button"
                   onClick={() => {
+                    if (isRejectImportPersistenceBlocked({
+                      previewId: preview.previewId,
+                      pendingPreviewId: confirmationPersistencePendingPreviewIdRef.current,
+                    })) {
+                      setActionError('Confirm Import is already saving this dataset. Wait for it to finish before rejecting the preview.');
+                      return;
+                    }
+
+                    cancelConfirmationMaterialization();
                     clearActiveImportPreview({
                       clearPasteValidationError: () => {
                         setPasteValidationError(null);
@@ -1911,6 +2331,7 @@ export function WorkspaceImportRoute({
                       disposeWorker,
                       resetPreview: () => {
                         clearReplayableSourceRequest();
+                        previewReplayContextRef.current.clear();
                         storeRef.current.getState().commands.reset();
                       },
                     });

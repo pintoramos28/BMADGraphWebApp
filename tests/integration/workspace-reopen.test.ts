@@ -21,6 +21,44 @@ function createSourceFile(name: string, contents: string, lastModified: number) 
   });
 }
 
+async function sha256Hex(file: File) {
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+async function createPersistedDatasetFileHandle({
+  datasetId = 'ds_main',
+  fileName,
+  fileHandleToken = 'dataset.ds_main.source-file',
+  contents,
+  lastModified,
+  handle,
+}: {
+  datasetId?: string;
+  fileName: string;
+  fileHandleToken?: string;
+  contents: string;
+  lastModified: number;
+  handle: {
+    name: string;
+    getFile: () => Promise<File>;
+    createWritable: () => Promise<{ write: () => Promise<void>; close: () => Promise<void> }>;
+  };
+}) {
+  const file = createSourceFile(fileName, contents, lastModified);
+
+  return {
+    datasetId,
+    fileName,
+    fileHandleToken,
+    fileSize: file.size,
+    fileLastModified: file.lastModified,
+    fileSha256: await sha256Hex(file),
+    handle,
+  };
+}
+
 describe('workspace reopen integration', () => {
   it('round-trips a saved workspace and hydrates WorkspaceKernel without collapsing graph identity', async () => {
     const repository = createWorkspaceRepository(new InMemoryWorkspaceStorage());
@@ -278,12 +316,12 @@ describe('workspace reopen integration', () => {
       kernelStore,
       savedAt: '2026-04-16T18:41:00Z',
       datasetFileHandles: [
-        {
-          datasetId: 'ds_main',
+        await createPersistedDatasetFileHandle({
           fileName: 'battery-cycles.csv',
-          fileHandleToken: 'dataset.ds_main.source-file',
+          contents: 'battery-cycles',
+          lastModified: 1713398400000,
           handle,
-        },
+        }),
       ],
     });
 
@@ -349,12 +387,12 @@ describe('workspace reopen integration', () => {
       kernelStore,
       savedAt: '2026-04-16T18:42:00Z',
       datasetFileHandles: [
-        {
-          datasetId: 'ds_main',
+        await createPersistedDatasetFileHandle({
           fileName: 'battery-cycles.csv',
-          fileHandleToken: 'dataset.ds_main.source-file',
+          contents: 'battery-cycles',
+          lastModified: 1713398400000,
           handle,
-        },
+        }),
       ],
     });
 
@@ -420,7 +458,7 @@ describe('workspace reopen integration', () => {
     ]);
   });
 
-  it('round-trips a relinked dataset handle after the source file name changes', async () => {
+  it('drops a relinked dataset handle when the snapshot still points at the prior source', async () => {
     const repository = createWorkspaceRepository(new InMemoryWorkspaceStorage());
     const originalHandle = {
       name: 'battery-cycles.csv',
@@ -465,12 +503,12 @@ describe('workspace reopen integration', () => {
       kernelStore,
       savedAt: '2026-04-16T18:42:20Z',
       datasetFileHandles: [
-        {
-          datasetId: 'ds_main',
+        await createPersistedDatasetFileHandle({
           fileName: 'battery-cycles.csv',
-          fileHandleToken: 'dataset.ds_main.source-file',
+          contents: 'battery-cycles',
+          lastModified: 1713398400000,
           handle: originalHandle,
-        },
+        }),
       ],
     });
 
@@ -490,12 +528,12 @@ describe('workspace reopen integration', () => {
       kernelStore: reopened.kernelStore,
       savedAt: '2026-04-16T18:42:30Z',
       datasetFileHandles: [
-        {
-          datasetId: 'ds_main',
+        await createPersistedDatasetFileHandle({
           fileName: 'battery-cycles-relinked.csv',
-          fileHandleToken: 'dataset.ds_main.source-file',
+          contents: 'battery-cycles-relinked',
+          lastModified: 1713398460000,
           handle: relinkedHandle,
-        },
+        }),
       ],
     });
 
@@ -504,24 +542,13 @@ describe('workspace reopen integration', () => {
     expect(record?.snapshot).toEqual(
       expect.objectContaining({
         datasets: [
-          expect.objectContaining({
-            datasetId: 'ds_main',
-            sourceFile: {
-              fileName: 'battery-cycles-relinked.csv',
-              fileHandleToken: 'dataset.ds_main.source-file',
-            },
+          expect.not.objectContaining({
+            sourceFile: expect.anything(),
           }),
         ],
       }),
     );
-    expect(record?.datasetFileHandles).toEqual([
-      expect.objectContaining({
-        datasetId: 'ds_main',
-        fileName: 'battery-cycles-relinked.csv',
-        fileHandleToken: 'dataset.ds_main.source-file',
-        handle: relinkedHandle,
-      }),
-    ]);
+    expect(record?.datasetFileHandles).toEqual([]);
 
     const reopenedAfterRelink = await reopenWorkspaceKernel({
       repository,
@@ -542,25 +569,14 @@ describe('workspace reopen integration', () => {
       ]),
     );
     expect(reopenedAfterRelink.kernelStore.getState().snapshot.datasets).toEqual([
-      expect.objectContaining({
-        datasetId: 'ds_main',
-        sourceFile: {
-          fileName: 'battery-cycles-relinked.csv',
-          fileHandleToken: 'dataset.ds_main.source-file',
-        },
+      expect.not.objectContaining({
+        sourceFile: expect.anything(),
       }),
     ]);
-    expect(reopenedAfterRelink.kernelStore.getState().selectors.datasetFileHandles()).toEqual([
-      expect.objectContaining({
-        datasetId: 'ds_main',
-        fileName: 'battery-cycles-relinked.csv',
-        fileHandleToken: 'dataset.ds_main.source-file',
-        handle: relinkedHandle,
-      }),
-    ]);
+    expect(reopenedAfterRelink.kernelStore.getState().selectors.datasetFileHandles()).toEqual([]);
   });
 
-  it('synchronizes stale snapshot dataset metadata when implicit retained handles are reused on save', async () => {
+  it('drops implicit retained handles when snapshot source metadata is stale', async () => {
     const repository = createWorkspaceRepository(new InMemoryWorkspaceStorage());
     const originalHandle = {
       name: 'battery-cycles.csv',
@@ -605,12 +621,12 @@ describe('workspace reopen integration', () => {
       kernelStore,
       savedAt: '2026-04-16T18:42:40Z',
       datasetFileHandles: [
-        {
-          datasetId: 'ds_main',
+        await createPersistedDatasetFileHandle({
           fileName: 'battery-cycles.csv',
-          fileHandleToken: 'dataset.ds_main.source-file',
+          contents: 'battery-cycles',
+          lastModified: 1713398400000,
           handle: originalHandle,
-        },
+        }),
       ],
     });
 
@@ -626,12 +642,12 @@ describe('workspace reopen integration', () => {
     });
 
     reopened.kernelStore.getState().commands.replaceDatasetFileHandles([
-      {
-        datasetId: 'ds_main',
+      await createPersistedDatasetFileHandle({
         fileName: 'battery-cycles-relinked.csv',
-        fileHandleToken: 'dataset.ds_main.source-file',
+        contents: 'battery-cycles-relinked',
+        lastModified: 1713398460000,
         handle: relinkedHandle,
-      },
+      }),
     ]);
 
     reopened.kernelStore.setState((state) => ({
@@ -662,24 +678,13 @@ describe('workspace reopen integration', () => {
     expect(record?.snapshot).toEqual(
       expect.objectContaining({
         datasets: [
-          expect.objectContaining({
-            datasetId: 'ds_main',
-            sourceFile: {
-              fileName: 'battery-cycles-relinked.csv',
-              fileHandleToken: 'dataset.ds_main.source-file',
-            },
+          expect.not.objectContaining({
+            sourceFile: expect.anything(),
           }),
         ],
       }),
     );
-    expect(record?.datasetFileHandles).toEqual([
-      expect.objectContaining({
-        datasetId: 'ds_main',
-        fileName: 'battery-cycles-relinked.csv',
-        fileHandleToken: 'dataset.ds_main.source-file',
-        handle: relinkedHandle,
-      }),
-    ]);
+    expect(record?.datasetFileHandles).toEqual([]);
 
     const reopenedAfterImplicitSave = await reopenWorkspaceKernel({
       repository,
@@ -700,12 +705,8 @@ describe('workspace reopen integration', () => {
       ]),
     );
     expect(reopenedAfterImplicitSave.kernelStore.getState().snapshot.datasets).toEqual([
-      expect.objectContaining({
-        datasetId: 'ds_main',
-        sourceFile: {
-          fileName: 'battery-cycles-relinked.csv',
-          fileHandleToken: 'dataset.ds_main.source-file',
-        },
+      expect.not.objectContaining({
+        sourceFile: expect.anything(),
       }),
     ]);
   });
@@ -751,12 +752,12 @@ describe('workspace reopen integration', () => {
       },
       ledger: structuredClone(benchmarkWorkspaceLocalLedgerFixture),
       datasetFileHandles: [
-        {
-          datasetId: 'ds_main',
+        await createPersistedDatasetFileHandle({
           fileName: 'battery-cycles-relinked.csv',
-          fileHandleToken: 'dataset.ds_main.source-file',
+          contents: 'battery-cycles-relinked',
+          lastModified: 1713398460000,
           handle: relinkedHandle,
-        },
+        }),
       ],
     });
 
@@ -1194,12 +1195,9 @@ describe('workspace reopen integration', () => {
       expect.objectContaining({
         datasetId: 'ds_main',
         displayName: 'battery-cycles.csv',
-        sourceFile: {
-          fileName: 'battery-cycles.csv',
-          fileHandleToken: 'dataset.ds_main.source-file',
-        },
       }),
     ]);
+    expect(reopened.kernelStore.getState().snapshot.datasets[0]).not.toHaveProperty('sourceFile');
     expect(reopened.report.localizedIssues).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

@@ -193,14 +193,11 @@ describe('shell routes', () => {
     expect(hydratedStore.getState().ledger).toEqual(workspaceLedgerFixture);
   });
 
-  it('falls back to a clean bootstrap store when persisted workspace loading rejects', async () => {
-    const store = await resolveWorkspaceKernelStore('workspace_demo_load_failure', {
+  it('fails closed when persisted workspace loading rejects', async () => {
+    await expect(resolveWorkspaceKernelStore('workspace_demo_load_failure', {
       loadWorkspaceRecord: async () => {
         throw new Error('indexeddb open failed');
       },
-    });
-
-    expect(store.getState().snapshot.workspaceId).toBe('workspace_demo_load_failure');
-    expect(store.getState().ledger).toEqual([]);
+    })).rejects.toThrow('indexeddb open failed');
   });
 });

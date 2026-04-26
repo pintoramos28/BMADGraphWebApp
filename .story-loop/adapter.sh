@@ -152,6 +152,7 @@ review_scope() {
 
   python3 - "$repo_root" "$story_path" "$baseline" <<'PY'
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -175,9 +176,12 @@ if story_path.exists():
             break
         if in_file_list and raw_line.startswith("- "):
             value = raw_line[2:].strip()
-            match = re.match(r"^`([^`]+)`$", value)
+            match = re.match(r"^`([^`]+)`(?:\s+.*)?$", value)
             if match:
                 value = match.group(1).strip()
+                if value and not value.startswith("["):
+                    file_list.append(value)
+                continue
             if value and not value.startswith("[") and " " not in value:
                 file_list.append(value)
 
@@ -189,13 +193,12 @@ def in_story_scratch_scope(path: str) -> bool:
 def keep_path(path: str) -> bool:
     return path in file_list_set or path == story_rel or in_story_scratch_scope(path)
 
-status_lines = subprocess.run(
-    ["git", "status", "--short"],
+status_records = subprocess.run(
+    ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
     cwd=repo_root,
-    text=True,
     capture_output=True,
     check=True,
-).stdout.splitlines()
+).stdout.split(b"\0")
 
 tracked_changed = []
 untracked = []
@@ -203,11 +206,36 @@ deleted = []
 all_tracked_changed = []
 all_untracked = []
 all_deleted = []
-for line in status_lines:
-    code = line[:2]
-    path = line[3:].strip()
+record_index = 0
+while record_index < len(status_records):
+    record = status_records[record_index]
+    record_index += 1
+
+    if not record:
+        continue
+
+    code = os.fsdecode(record[:2])
+    path = os.fsdecode(record[3:])
     if not path:
         continue
+    rename_or_copy_status = next((status for status in code if status in {"R", "C"}), None)
+    pair_in_scope = keep_path(path)
+    if rename_or_copy_status and record_index < len(status_records):
+        # Porcelain v1 -z emits an additional NUL-terminated source path for
+        # renames/copies. Preserve both endpoints when either side is story
+        # scoped so reviewers can audit the move/copy boundary.
+        source_path = os.fsdecode(status_records[record_index])
+        record_index += 1
+        if source_path:
+            pair_in_scope = pair_in_scope or keep_path(source_path)
+            if rename_or_copy_status == "R":
+                all_deleted.append(source_path)
+                if pair_in_scope:
+                    deleted.append(source_path)
+            else:
+                all_tracked_changed.append(source_path)
+                if pair_in_scope:
+                    tracked_changed.append(source_path)
     if code == "??":
         all_untracked.append(path)
         if keep_path(path):
@@ -215,11 +243,11 @@ for line in status_lines:
         continue
     if "D" in code:
         all_deleted.append(path)
-        if keep_path(path):
+        if pair_in_scope:
             deleted.append(path)
     else:
         all_tracked_changed.append(path)
-        if keep_path(path):
+        if pair_in_scope:
             tracked_changed.append(path)
 
 scope = sorted(set(file_list + tracked_changed + untracked + deleted))

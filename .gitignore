@@ -13,3 +13,7 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+
+.story-loop/active-run-story-loop-*.json
+.story-loop/run-story-loop-*.jsonl
+.story-loop/*report-story-loop-*.md

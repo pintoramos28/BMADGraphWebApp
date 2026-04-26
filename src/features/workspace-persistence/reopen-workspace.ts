@@ -36,6 +36,7 @@ import {
   versionRangeSchema,
 } from '../../schemas/validation';
 import type {
+  PersistedDatasetFileHandle,
   PersistedWorkspaceRecord,
   WorkspaceRepository,
 } from '../../services/persistence';
@@ -1390,6 +1391,69 @@ export function reopenPersistedWorkspaceRecord(
   };
 }
 
+function retainRawDatasetFileHandlesForAcceptedSnapshot(record: PersistedWorkspaceRecord, snapshot: WorkspaceSnapshot) {
+  const parsedDatasetFileHandles = parsePersistedDatasetFileHandles(
+    Array.isArray(record.datasetFileHandles) ? record.datasetFileHandles : [],
+  );
+
+  return parsedDatasetFileHandles.filter((entry) =>
+    snapshot.datasets.some((dataset) => isCompatibleDatasetFileHandle(dataset, entry)),
+  );
+}
+
+function synchronizeSnapshotSourceFileMetadata(
+  snapshot: WorkspaceSnapshot,
+  datasetFileHandles: PersistedDatasetFileHandle[],
+) {
+  const sourceFilesByDatasetId = new Map(
+    datasetFileHandles.map((entry) => [
+      entry.datasetId,
+      {
+        fileName: entry.fileName,
+        fileHandleToken: entry.fileHandleToken,
+      },
+    ]),
+  );
+  let changed = false;
+  const datasets = snapshot.datasets.map((dataset) => {
+    const sourceFile = sourceFilesByDatasetId.get(dataset.datasetId);
+
+    if (!sourceFile) {
+      if (!dataset.sourceFile) {
+        return dataset;
+      }
+
+      changed = true;
+
+      const datasetWithoutSourceFile = { ...dataset };
+      delete datasetWithoutSourceFile.sourceFile;
+
+      return datasetWithoutSourceFile;
+    }
+
+    if (
+      dataset.sourceFile?.fileName === sourceFile.fileName
+      && dataset.sourceFile?.fileHandleToken === sourceFile.fileHandleToken
+    ) {
+      return dataset;
+    }
+
+    changed = true;
+
+    return {
+      ...dataset,
+      sourceFile,
+    };
+  });
+
+  return changed
+    ? workspaceSnapshotSchema.parse({
+        ...snapshot,
+        datasets,
+      } satisfies WorkspaceSnapshot)
+    : snapshot;
+}
+
 export async function reopenWorkspaceKernel(input: {
   repository: WorkspaceRepository;
   workspaceId: string;
@@ -1403,20 +1467,54 @@ export async function reopenWorkspaceKernel(input: {
     throw new Error(`Saved workspace "${input.workspaceId}" was not found in local persistence.`);
   }
 
-  const report = reopenPersistedWorkspaceRecord(record, {
+  const acceptedReport = reopenPersistedWorkspaceRecord(
+    {
+      ...record,
+      datasetFileHandles: [],
+    },
+    {
+      compatibilityEnvelope: input.compatibilityEnvelope,
+      ...(input.now ? { now: input.now } : {}),
+      ...(input.nowMs ? { nowMs: input.nowMs } : {}),
+    },
+  );
+  const sanitizedDatasetFileHandles = await sanitizePersistedDatasetFileHandlesForHydration(
+    retainRawDatasetFileHandlesForAcceptedSnapshot(record, acceptedReport.snapshot),
+  );
+  const reopenRecord = {
+    ...record,
+    datasetFileHandles: sanitizedDatasetFileHandles,
+  } satisfies PersistedWorkspaceRecord & { datasetFileHandles: PersistedDatasetFileHandle[] };
+
+  const reopenedReport = reopenPersistedWorkspaceRecord(reopenRecord, {
     compatibilityEnvelope: input.compatibilityEnvelope,
-    ...(input.now ? { now: input.now } : {}),
-    ...(input.nowMs ? { nowMs: input.nowMs } : {}),
+    now: () => acceptedReport.benchmark.completedAt,
+    nowMs: () => 0,
   });
+  const retainedDatasetFileHandles = retainDatasetFileHandlesForSnapshot(
+    reopenedReport.snapshot,
+    sanitizedDatasetFileHandles,
+  );
+  const synchronizedSnapshot = synchronizeSnapshotSourceFileMetadata(
+    reopenedReport.snapshot,
+    retainedDatasetFileHandles,
+  );
+  const report = {
+    ...reopenedReport,
+    snapshot: synchronizedSnapshot,
+    benchmark: {
+      ...reopenedReport.benchmark,
+      startedAt: acceptedReport.benchmark.startedAt,
+      completedAt: acceptedReport.benchmark.completedAt,
+      durationMs: acceptedReport.benchmark.durationMs,
+    },
+  } satisfies WorkspaceReopenReport;
 
   return {
     kernelStore: createWorkspaceKernelStore({
       snapshot: report.snapshot,
       ledger: report.ledger,
-      datasetFileHandles: retainDatasetFileHandlesForSnapshot(
-        report.snapshot,
-        await sanitizePersistedDatasetFileHandlesForHydration(record.datasetFileHandles ?? []),
-      ),
+      datasetFileHandles: retainDatasetFileHandlesForSnapshot(report.snapshot, retainedDatasetFileHandles),
     }),
     report,
   };

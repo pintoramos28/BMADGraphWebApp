@@ -4,14 +4,334 @@ import {
   BrowserLocalImportFileAccess,
   HIDDEN_INPUT_CANCEL_GRACE_MS,
   HIDDEN_INPUT_PICKER_STALE_TIMEOUT_MS,
+  LocalImportSourceValidationError,
+  LOCAL_IMPORT_SOURCE_VALIDATION_TIMEOUT_MS,
   resolveLocalImportAccept,
+  validateLocalImportFileHandleMatchesPreview,
 } from './local-import-files';
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('BrowserLocalImportFileAccess', () => {
+  it('validates local import handles by byte identity behind the file-access boundary', async () => {
+    const previewFile = new File(['Sample,Reading\nA-1,42.5'], 'source.csv', {
+      type: 'text/csv',
+      lastModified: 1713830400000,
+    });
+    const handle = {
+      name: 'source.csv',
+      getFile: vi.fn(async () => previewFile),
+      createWritable: vi.fn(async () => ({
+        async write() {},
+        async close() {},
+      })),
+    };
+
+    await expect(validateLocalImportFileHandleMatchesPreview({
+      sourceKind: 'csv-file',
+      fileName: 'source.csv',
+      previewFile,
+      selection: {
+        sourceKind: 'csv-file',
+        fileName: 'source.csv',
+        handle,
+      },
+    })).resolves.toEqual({
+      handle,
+      fileName: 'source.csv',
+      fileSize: previewFile.size,
+      fileLastModified: 1713830400000,
+      fileSha256: expect.any(String),
+    });
+  });
+
+  it('does not hold live and preview source bytes in memory concurrently during validation', async () => {
+    const previewFile = new File(['Sample,Reading\nA-1,42.5'], 'source.csv', {
+      type: 'text/csv',
+      lastModified: 1713830400000,
+    });
+    const liveFile = new File(['Sample,Reading\nA-1,42.5'], 'source.csv', {
+      type: 'text/csv',
+      lastModified: 1713830400000,
+    });
+    const previewArrayBuffer = vi.spyOn(previewFile, 'arrayBuffer');
+    let resolveLiveBytes: (value: ArrayBuffer) => void = (value: ArrayBuffer) => {
+      void value;
+      throw new Error('Live byte read did not start.');
+    };
+    let markLiveByteReadStarted: () => void = () => {};
+    const liveByteReadStarted = new Promise<void>((resolve) => {
+      markLiveByteReadStarted = resolve;
+    });
+
+    vi.spyOn(liveFile, 'arrayBuffer').mockImplementation(() => new Promise<ArrayBuffer>((resolve) => {
+      markLiveByteReadStarted();
+      resolveLiveBytes = resolve;
+    }));
+
+    const validation = validateLocalImportFileHandleMatchesPreview({
+      sourceKind: 'csv-file',
+      fileName: 'source.csv',
+      previewFile,
+      selection: {
+        sourceKind: 'csv-file',
+        fileName: 'source.csv',
+        handle: {
+          name: 'source.csv',
+          async getFile() {
+            return liveFile;
+          },
+          async createWritable() {
+            return {
+              async write() {},
+              async close() {},
+            };
+          },
+        },
+      },
+    });
+
+    await liveByteReadStarted;
+    expect(previewArrayBuffer).not.toHaveBeenCalled();
+
+    resolveLiveBytes(await new File(['Sample,Reading\nA-1,42.5'], 'source.csv').arrayBuffer());
+
+    await expect(validation).resolves.toEqual(expect.objectContaining({
+      fileSha256: expect.any(String),
+    }));
+    expect(previewArrayBuffer).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-checks cancellation before starting preview source byte reads during validation', async () => {
+    const previewFile = new File(['Sample,Reading\nA-1,42.5'], 'source.csv', {
+      type: 'text/csv',
+      lastModified: 1713830400000,
+    });
+    const liveFile = new File(['Sample,Reading\nA-1,42.5'], 'source.csv', {
+      type: 'text/csv',
+      lastModified: 1713830400000,
+    });
+    const abortController = new AbortController();
+    const previewArrayBuffer = vi.spyOn(previewFile, 'arrayBuffer');
+
+    vi.spyOn(liveFile, 'arrayBuffer').mockImplementation(async () => {
+      abortController.abort();
+
+      return new File(['Sample,Reading\nA-1,42.5'], 'source.csv').arrayBuffer();
+    });
+
+    await expect(validateLocalImportFileHandleMatchesPreview({
+      sourceKind: 'csv-file',
+      fileName: 'source.csv',
+      previewFile,
+      signal: abortController.signal,
+      selection: {
+        sourceKind: 'csv-file',
+        fileName: 'source.csv',
+        handle: {
+          name: 'source.csv',
+          async getFile() {
+            return liveFile;
+          },
+          async createWritable() {
+            return {
+              async write() {},
+              async close() {},
+            };
+          },
+        },
+      },
+    })).rejects.toThrow('source-file validation was canceled');
+    expect(previewArrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it('rejects promptly when validation is aborted during a pending source byte read', async () => {
+    const previewFile = new File(['Sample,Reading\nA-1,42.5'], 'source.csv', {
+      type: 'text/csv',
+      lastModified: 1713830400000,
+    });
+    const liveFile = new File(['Sample,Reading\nA-1,42.5'], 'source.csv', {
+      type: 'text/csv',
+      lastModified: 1713830400000,
+    });
+    const abortController = new AbortController();
+
+    vi.spyOn(liveFile, 'arrayBuffer').mockReturnValue(new Promise<ArrayBuffer>(() => {}));
+
+    const validation = validateLocalImportFileHandleMatchesPreview({
+      sourceKind: 'csv-file',
+      fileName: 'source.csv',
+      previewFile,
+      signal: abortController.signal,
+      selection: {
+        sourceKind: 'csv-file',
+        fileName: 'source.csv',
+        handle: {
+          name: 'source.csv',
+          async getFile() {
+            return liveFile;
+          },
+          async createWritable() {
+            return {
+              async write() {},
+              async close() {},
+            };
+          },
+        },
+      },
+    });
+
+    await Promise.resolve();
+    abortController.abort();
+
+    await expect(validation).rejects.toThrow('source-file validation was canceled');
+  });
+
+  it('times out non-cooperative local source validation before confirm materialization can start', async () => {
+    vi.useFakeTimers();
+
+    const previewFile = new File(['Sample,Reading\nA-1,42.5'], 'source.csv', {
+      type: 'text/csv',
+      lastModified: 1713830400000,
+    });
+    const validation = validateLocalImportFileHandleMatchesPreview({
+      sourceKind: 'csv-file',
+      fileName: 'source.csv',
+      previewFile,
+      selection: {
+        sourceKind: 'csv-file',
+        fileName: 'source.csv',
+        handle: {
+          name: 'source.csv',
+          getFile: vi.fn(() => new Promise<File>(() => {})),
+          async createWritable() {
+            return {
+              async write() {},
+              async close() {},
+            };
+          },
+        },
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(LOCAL_IMPORT_SOURCE_VALIDATION_TIMEOUT_MS - 1);
+    await expect(Promise.race([validation.then(() => 'resolved', () => 'rejected'), Promise.resolve('pending')]))
+      .resolves.toBe('pending');
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(validation).rejects.toThrow('source-file validation timed out');
+  });
+
+  it('uses one aggregate source-validation deadline across file and digest phases', async () => {
+    vi.useFakeTimers();
+
+    const liveFile = new File(['Sample,Reading\nA-1,42.5'], 'source.csv', {
+      type: 'text/csv',
+      lastModified: 1713830400000,
+    });
+    const previewFile = new File(['Sample,Reading\nA-1,42.5'], 'source.csv', {
+      type: 'text/csv',
+      lastModified: 1713830400000,
+    });
+    vi.spyOn(liveFile, 'arrayBuffer').mockImplementation(() => new Promise<ArrayBuffer>((resolve) => {
+      setTimeout(() => resolve(new TextEncoder().encode('Sample,Reading\nA-1,42.5').buffer), LOCAL_IMPORT_SOURCE_VALIDATION_TIMEOUT_MS - 1);
+    }));
+    vi.spyOn(previewFile, 'arrayBuffer').mockReturnValue(new Promise<ArrayBuffer>(() => {}));
+
+    const validation = validateLocalImportFileHandleMatchesPreview({
+      sourceKind: 'csv-file',
+      fileName: 'source.csv',
+      previewFile,
+      selection: {
+        sourceKind: 'csv-file',
+        fileName: 'source.csv',
+        handle: {
+          name: 'source.csv',
+          async getFile() {
+            return liveFile;
+          },
+          async createWritable() {
+            return {
+              async write() {},
+              async close() {},
+            };
+          },
+        },
+      },
+    });
+    const observedValidation = validation.then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    await vi.advanceTimersByTimeAsync(LOCAL_IMPORT_SOURCE_VALIDATION_TIMEOUT_MS - 1);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(observedValidation).resolves.toEqual(expect.objectContaining({
+      message: expect.stringContaining('source-file validation timed out'),
+    }));
+  });
+
+  it('reports unreadable local source bytes as source-reselection failures', async () => {
+    const previewFile = new File(['previewed'], 'source.csv', {
+      type: 'text/csv',
+      lastModified: 1713830400000,
+    });
+    const unreadableFile = new File(['previewed'], 'source.csv', {
+      type: 'text/csv',
+      lastModified: 1713830400000,
+    });
+    vi.spyOn(unreadableFile, 'arrayBuffer').mockRejectedValue(new Error('not readable'));
+
+    await expect(validateLocalImportFileHandleMatchesPreview({
+      sourceKind: 'csv-file',
+      fileName: 'source.csv',
+      previewFile,
+      selection: {
+        sourceKind: 'csv-file',
+        fileName: 'source.csv',
+        handle: {
+          name: 'source.csv',
+          async getFile() {
+            return unreadableFile;
+          },
+          async createWritable() {
+            return {
+              async write() {},
+              async close() {},
+            };
+          },
+        },
+      },
+    })).rejects.toThrow(LocalImportSourceValidationError);
+    await expect(validateLocalImportFileHandleMatchesPreview({
+      sourceKind: 'csv-file',
+      fileName: 'source.csv',
+      previewFile,
+      selection: {
+        sourceKind: 'csv-file',
+        fileName: 'source.csv',
+        handle: {
+          name: 'source.csv',
+          async getFile() {
+            return unreadableFile;
+          },
+          async createWritable() {
+            return {
+              async write() {},
+              async close() {},
+            };
+          },
+        },
+      },
+    })).rejects.toThrow('Reselect the source file');
+  });
+
   it('returns the native picker handle alongside the selected file when available', async () => {
     const handle = {
       name: 'clean.csv',

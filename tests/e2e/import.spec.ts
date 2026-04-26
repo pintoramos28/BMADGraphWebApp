@@ -114,6 +114,92 @@ async function mockNativeCsvPicker(page: Page, input: { fileName: string; textCo
   }, input);
 }
 
+async function mockNativeCsvPickerWithOpfsHandle(page: Page, input: { fileName: string; textContent: string }) {
+  await page.addInitScript(({ fileName, textContent }) => {
+    const host = window as typeof window & {
+      __nativePickerCallCount?: number;
+    };
+    const readCallCount = () => Number(window.sessionStorage.getItem('__nativePickerCallCount') ?? '0');
+    const writeCallCount = (value: number) => {
+      window.sessionStorage.setItem('__nativePickerCallCount', String(value));
+      host.__nativePickerCallCount = value;
+    };
+
+    host.__nativePickerCallCount = readCallCount();
+
+    Object.defineProperty(window, 'showOpenFilePicker', {
+      configurable: true,
+      value: async () => {
+        if (window.sessionStorage.getItem('__nativePickerReuseGuard') === 'armed') {
+          throw new Error('Native picker should not be re-run after persisted handle confirmation.');
+        }
+
+        const storageManager = navigator.storage as StorageManager & {
+          getDirectory?: () => Promise<{
+            getFileHandle: (name: string, options?: { create?: boolean }) => Promise<{
+              name: string;
+              getFile: () => Promise<File>;
+              createWritable: () => Promise<{
+                write: (data: string) => Promise<void>;
+                close: () => Promise<void>;
+              }>;
+            }>;
+          }>;
+        };
+        const directory = await storageManager.getDirectory?.();
+
+        if (!directory) {
+          throw new Error('OPFS file handles are unavailable in this browser context.');
+        }
+
+        const handle = await directory.getFileHandle(fileName, { create: true });
+        const writable = await handle.createWritable();
+        await writable.write(textContent);
+        await writable.close();
+        writeCallCount(readCallCount() + 1);
+
+        return [handle];
+      },
+    });
+  }, input);
+}
+
+async function readPersistedWorkspaceHandleSummary(page: Page) {
+  return page.evaluate(async () => {
+    const requestToPromise = <T,>(request: IDBRequest<T>) => new Promise<T>((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error ?? new Error('IndexedDB request failed.'));
+    });
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('bmad-graph-web-app', 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error ?? new Error('Unable to open IndexedDB.'));
+    });
+    const transaction = database.transaction('workspaceRecords', 'readonly');
+    const record = await requestToPromise(transaction.objectStore('workspaceRecords').get('workspace_import_preview')) as {
+      datasetFileHandles?: Array<{
+        fileName?: string;
+        fileSha256?: string;
+        handle?: {
+          name?: string;
+          getFile?: unknown;
+          createWritable?: unknown;
+        };
+      }>;
+    } | undefined;
+
+    database.close();
+
+    return (record?.datasetFileHandles ?? []).map((entry) => ({
+      fileName: entry.fileName,
+      fileSha256: entry.fileSha256,
+      handleName: entry.handle?.name,
+      canReadHandle: typeof entry.handle?.getFile === 'function',
+      canWriteHandle: typeof entry.handle?.createWritable === 'function',
+    }));
+  });
+}
+
 test.describe('import preview workspace', () => {
   test.beforeEach(async ({ page }) => {
     await page.route('**/api/release-manifest', async (route) => {
@@ -133,7 +219,7 @@ test.describe('import preview workspace', () => {
     });
   });
 
-test('previews a local CSV file through the persistence wrapper native-picker path when available', async ({ page }) => {
+  test('previews a local CSV file through the persistence wrapper native-picker path when available', async ({ page }) => {
     await mockNativeCsvPicker(page, {
       fileName: 'import.clean.csv-preview.csv',
       textContent: cleanCsvFixtureText,
@@ -154,6 +240,79 @@ test('previews a local CSV file through the persistence wrapper native-picker pa
     await expect(page.getByText('Confirm or reject this import')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Confirm Import' })).toBeEnabled();
     await expect(page.getByText('import.clean.csv-preview', { exact: true })).toBeVisible();
+  });
+
+  test('persists native-picker file handles through confirm, reload, and reopen sanitation', async ({ page }) => {
+    await mockNativeCsvPickerWithOpfsHandle(page, {
+      fileName: 'import.clean.csv-preview.csv',
+      textContent: cleanCsvFixtureText,
+    });
+
+    await page.goto(workspacePreviewRoute);
+    await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Choose CSV file' }).click();
+
+    await expectAc3Outcome(page);
+    await page.getByRole('button', { name: 'Confirm Import' }).click();
+    await expect(page.getByText(previewConfirmedMessage)).toBeVisible();
+
+    await expect.poll(() => readPersistedWorkspaceHandleSummary(page)).toEqual([
+      expect.objectContaining({
+        fileName: 'import.clean.csv-preview.csv',
+        fileSha256: expect.any(String),
+        handleName: 'import.clean.csv-preview.csv',
+        canReadHandle: true,
+        canWriteHandle: true,
+      }),
+    ]);
+
+    await page.evaluate(() => {
+      window.sessionStorage.setItem('__nativePickerReuseGuard', 'armed');
+    });
+
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
+    await expect.poll(() => readPersistedWorkspaceHandleSummary(page)).toEqual([
+      expect.objectContaining({
+        fileName: 'import.clean.csv-preview.csv',
+        fileSha256: expect.any(String),
+        handleName: 'import.clean.csv-preview.csv',
+        canReadHandle: true,
+        canWriteHandle: true,
+      }),
+    ]);
+    await page.getByLabel('Paste tabular data').fill('Sample\tReading\nB-1\t45.2');
+    await page.getByRole('button', { name: 'Preview pasted table' }).click();
+    await expectAc3Outcome(page);
+    await page.getByRole('button', { name: 'Confirm Import' }).click();
+    await expect(page.getByText(previewConfirmedMessage)).toBeVisible();
+    await expect.poll(() => readPersistedWorkspaceHandleSummary(page)).toEqual([
+      expect.objectContaining({
+        fileName: 'import.clean.csv-preview.csv',
+        fileSha256: expect.any(String),
+        handleName: 'import.clean.csv-preview.csv',
+        canReadHandle: true,
+        canWriteHandle: true,
+      }),
+    ]);
+    await expect
+      .poll(() =>
+        page.evaluate(() => Number(window.sessionStorage.getItem('__nativePickerCallCount') ?? '0')),
+      )
+      .toBe(1);
+
+    await page.goto('/workspace/workspace_import_preview');
+    await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
+    await expect.poll(() => readPersistedWorkspaceHandleSummary(page)).toEqual([
+      expect.objectContaining({
+        fileName: 'import.clean.csv-preview.csv',
+        fileSha256: expect.any(String),
+        handleName: 'import.clean.csv-preview.csv',
+        canReadHandle: true,
+        canWriteHandle: true,
+      }),
+    ]);
   });
 
   test('repairs a dirty CSV import through the native-picker path', async ({ page }) => {

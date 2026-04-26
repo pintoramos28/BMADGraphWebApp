@@ -11,7 +11,7 @@ orchestration_mode: '' # set at workflow entry; step files must preserve caller-
 - The Blind Hunter subagent receives NO project context — diff only.
 - The Edge Case Hunter subagent receives diff and project read access.
 - The Runtime Integration Auditor subagent receives diff and project read access. When available, it also receives the spec and context docs.
-- The Runtime Integration Auditor MUST perform targeted live validation when the diff touches runtime-sensitive surfaces and the current environment allows it. If live validation cannot be performed, it must say that explicitly and treat the missing probe as part of the review risk.
+- The Runtime Integration Auditor MUST perform targeted live validation when the diff touches runtime-sensitive surfaces and the current environment allows it. It is explicitly authorized to use `chrome-devtools_*` tools and/or Playwright CLI for browser probes. If live validation cannot be performed, it must say that explicitly and treat the missing probe as part of the review risk.
 - The Acceptance Auditor subagent receives diff, spec, and context docs.
 - In `story-loop` orchestration mode, these reviewer lanes must be nested under the review worker. If nested subagents are unavailable, report a blocker rather than generating manual prompt files.
 - Every reviewer lane should assign each finding a P0/P1/P2/P3 priority with a concise rationale.
@@ -26,7 +26,7 @@ orchestration_mode: '' # set at workflow entry; step files must preserve caller-
 
    - **Edge Case Hunter** — receives `{diff_output}` and read access to the project. Invoke via the `bmad-review-edge-case-hunter` skill. Require P0/P1/P2/P3 priority on every finding.
 
-   - **Runtime Integration Auditor** — receives `{diff_output}`, read access to the project, and if available the content of `{spec_file}` plus any loaded context docs. Invoke via the `bmad-review-runtime-integration-auditor` skill. Its job includes targeted live probes for runtime-sensitive changes, not just source inspection. Require P0/P1/P2/P3 priority on every finding.
+   - **Runtime Integration Auditor** — receives `{diff_output}`, read access to the project, and if available the content of `{spec_file}` plus any loaded context docs. Invoke via the `bmad-review-runtime-integration-auditor` skill. Its job includes targeted live probes for runtime-sensitive changes, not just source inspection. Tell it to use Chrome DevTools for route/console/network/storage probes when a browser target is available, or load `playwright-cli` and use Playwright CLI when scripted hostile-state, file input, persisted profile, storage seeding, or repeated interaction probes are needed. Require P0/P1/P2/P3 priority on every finding.
 
    - **Acceptance Auditor** (only if `{review_mode}` = `"full"`) — receives `{diff_output}`, the content of the file at `{spec_file}`, and any loaded context docs. Its prompt:
      > You are an Acceptance Auditor. Review this diff against the spec and context docs. Check for: violations of acceptance criteria, deviations from spec intent, missing implementation of specified behavior, contradictions between spec constraints and actual code. Output findings as a Markdown list. Each finding: one-line title, P0/P1/P2/P3 priority with rationale, which AC/constraint it violates, and evidence from the diff.

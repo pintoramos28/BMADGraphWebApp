@@ -8,6 +8,7 @@ import { workspaceSnapshotFixture } from '../../test/fixtures/workspace/workspac
 import {
   collectAvailableFormulaDependencyIds,
   reopenPersistedWorkspaceRecord,
+  reopenWorkspaceKernel,
   type WorkspaceCompatibilityEnvelope,
 } from './reopen-workspace';
 
@@ -17,6 +18,12 @@ const compatibilityEnvelope: WorkspaceCompatibilityEnvelope = {
   maximumReadableWorkspaceFormat: '1.x',
   migrationPolicy: 'migrate-on-open',
 };
+
+async function sha256Hex(file: File) {
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');
+}
 
 describe('reopenPersistedWorkspaceRecord', () => {
   it('localizes invalid graph records into issue records while preserving valid state', () => {
@@ -447,6 +454,247 @@ describe('reopenPersistedWorkspaceRecord', () => {
         }),
       ]),
     );
+  });
+
+  it('sanitizes and filters persisted file handles before direct reopen issue localization', async () => {
+    const validFile = new File(['live'], 'battery-cycles.csv', {
+      lastModified: 1713830400000,
+    });
+    const extraFile = new File(['extra'], 'extra.csv', {
+      lastModified: 1713830400000,
+    });
+    let extraHandleReadCount = 0;
+    const record: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:32:29Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [
+          {
+            ...structuredClone(workspaceSnapshotFixture.datasets[0]),
+            sourceFile: {
+              fileName: 'battery-cycles.csv',
+              fileHandleToken: 'dataset.ds_main.source-file',
+            },
+          },
+        ],
+      },
+      datasetFileHandles: [
+        {
+          datasetId: 'ds_main',
+          fileName: 'battery-cycles.csv',
+          fileHandleToken: 'dataset.ds_main.source-file',
+          fileSize: validFile.size,
+          fileLastModified: validFile.lastModified,
+          fileSha256: 'digest-does-not-match-live-file',
+          handle: {
+            name: 'battery-cycles.csv',
+            async getFile() {
+              return validFile;
+            },
+            async createWritable() {
+              return {
+                async write() {},
+                async close() {},
+              };
+            },
+          },
+        },
+        {
+          datasetId: 'ds_extra',
+          fileName: 'extra.csv',
+          fileHandleToken: 'dataset.ds_extra.source-file',
+          fileSize: extraFile.size,
+          fileLastModified: extraFile.lastModified,
+          fileSha256: await sha256Hex(extraFile),
+          handle: {
+            name: 'extra.csv',
+            async getFile() {
+              extraHandleReadCount += 1;
+
+              return extraFile;
+            },
+            async createWritable() {
+              return {
+                async write() {},
+                async close() {},
+              };
+            },
+          },
+        },
+      ],
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const session = await reopenWorkspaceKernel({
+      repository: {
+        async loadWorkspaceRecord() {
+          return record;
+        },
+        async saveCanonicalWorkspace() {
+          throw new Error('Not used by reopen.');
+        },
+        async listWorkspaces() {
+          return [];
+        },
+      },
+      workspaceId: record.workspaceId,
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:32:29Z',
+      nowMs: () => 6180,
+    });
+
+    expect(extraHandleReadCount).toBe(0);
+    expect(session.kernelStore.getState().selectors.datasetFileHandles()).toEqual([]);
+    expect(session.report.snapshot.datasets[0]).not.toHaveProperty('sourceFile');
+    expect(session.kernelStore.getState().selectors.persistedWorkspace().datasets[0]).not.toHaveProperty('sourceFile');
+    expect(session.report.localizedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.dataset.missing-file-handle',
+          source: expect.objectContaining({
+            entityType: 'dataset',
+            entityId: 'ds_main',
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('drops malformed persisted dataset-handle entries during direct reopen filtering', async () => {
+    const validFile = new File(['live'], 'battery-cycles.csv', {
+      lastModified: 1713830400000,
+    });
+    const record: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:32:29Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [
+          {
+            ...structuredClone(workspaceSnapshotFixture.datasets[0]),
+            sourceFile: {
+              fileName: 'battery-cycles.csv',
+              fileHandleToken: 'dataset.ds_main.source-file',
+            },
+          },
+        ],
+      },
+      datasetFileHandles: [
+        {
+          datasetId: 'ds_main',
+          fileName: 'battery-cycles.csv',
+          fileHandleToken: 'dataset.ds_main.source-file',
+          fileSize: validFile.size,
+          fileLastModified: validFile.lastModified,
+          fileSha256: await sha256Hex(validFile),
+          handle: {
+            name: 'battery-cycles.csv',
+            async getFile() {
+              return validFile;
+            },
+            async createWritable() {
+              return {
+                async write() {},
+                async close() {},
+              };
+            },
+          },
+        },
+        {
+          datasetId: 'ds_main',
+          fileName: 42,
+          fileHandleToken: 'dataset.ds_main.source-file',
+          handle: null,
+        },
+      ],
+      ledger: structuredClone(workspaceLedgerFixture),
+    } as unknown as PersistedWorkspaceRecord;
+
+    const session = await reopenWorkspaceKernel({
+      repository: {
+        async loadWorkspaceRecord() {
+          return record;
+        },
+        async saveCanonicalWorkspace() {
+          throw new Error('Not used by reopen.');
+        },
+        async listWorkspaces() {
+          return [];
+        },
+      },
+      workspaceId: record.workspaceId,
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:32:29Z',
+      nowMs: () => 6180,
+    });
+
+    expect(session.kernelStore.getState().selectors.datasetFileHandles()).toEqual([
+      expect.objectContaining({
+        datasetId: 'ds_main',
+        fileName: 'battery-cycles.csv',
+      }),
+    ]);
+  });
+
+  it('rejects invalid direct reopen records before reading persisted file handles', async () => {
+    const file = new File(['live'], 'battery-cycles.csv', {
+      lastModified: 1713830400000,
+    });
+    let handleReadCount = 0;
+    const record = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:32:29Z',
+      snapshot: {
+        workspaceId: workspaceSnapshotFixture.workspaceId,
+        workspaceFormatVersion: 'not-semver',
+      },
+      datasetFileHandles: [
+        {
+          datasetId: 'ds_main',
+          fileName: 'battery-cycles.csv',
+          fileHandleToken: 'dataset.ds_main.source-file',
+          fileSize: file.size,
+          fileLastModified: file.lastModified,
+          fileSha256: await sha256Hex(file),
+          handle: {
+            name: 'battery-cycles.csv',
+            async getFile() {
+              handleReadCount += 1;
+
+              return file;
+            },
+            async createWritable() {
+              return {
+                async write() {},
+                async close() {},
+              };
+            },
+          },
+        },
+      ],
+      ledger: structuredClone(workspaceLedgerFixture),
+    } as unknown as PersistedWorkspaceRecord;
+
+    await expect(reopenWorkspaceKernel({
+      repository: {
+        async loadWorkspaceRecord() {
+          return record;
+        },
+        async saveCanonicalWorkspace() {
+          throw new Error('Not used by reopen.');
+        },
+        async listWorkspaces() {
+          return [];
+        },
+      },
+      workspaceId: record.workspaceId,
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:32:29Z',
+      nowMs: () => 6180,
+    })).rejects.toThrow();
+
+    expect(handleReadCount).toBe(0);
   });
 
   it('sanitizes invalid localized entity ids before creating reopen issue records', () => {

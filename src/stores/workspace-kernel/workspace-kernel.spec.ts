@@ -567,6 +567,28 @@ describe('WorkspaceKernel', () => {
     ]);
   });
 
+  it('clears stale source metadata when no persisted dataset file handle remains', () => {
+    const store = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [
+          {
+            ...structuredClone(workspaceSnapshotFixture.datasets[0]!),
+            sourceFile: {
+              fileName: 'battery-cycles.csv',
+              fileHandleToken: 'dataset.ds_main.source-file',
+            },
+          },
+        ],
+      },
+      ledger: workspaceLedgerFixture,
+    });
+
+    store.getState().commands.replaceDatasetFileHandles([]);
+
+    expect(store.getState().selectors.persistedWorkspace().datasets[0]).not.toHaveProperty('sourceFile');
+  });
+
   it('rejects ledgers whose workspace versions move backwards', () => {
     const invalidLedger = [
       workspaceLedgerFixture[0]!,
