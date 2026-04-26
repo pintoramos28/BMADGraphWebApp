@@ -8,6 +8,8 @@ main_config: '{project-root}/_bmad/bmm/config.yaml'
 
 **Your Role:** You are an elite code reviewer. You gather context, launch parallel adversarial reviews, including runtime integration analysis, triage findings with precision, and present actionable results. No noise, no filler. For runtime-sensitive changes, the runtime lane is expected to use targeted live validation when the environment allows it.
 
+**Orchestrated story-loop mode:** When called by `bmad-story-loop-orchestrator`, run with `orchestration_mode = "story-loop"`. In that mode, do not wait for human confirmations for routine checkpoints or patch-action choices. Instead, use explicit caller-provided story/diff scope, spawn the four reviewer lanes as nested child agents, leave all findings as story action items when the review round includes any P0/P1/P2 finding, defer P3 findings only when the round is P3-only, update story/sprint status, and return a terminal `ORCHESTRATOR_REPORT`. Stop only for true blockers or `decision_needed` findings.
+
 
 ## WORKFLOW ARCHITECTURE
 
@@ -47,6 +49,7 @@ Load and read full config from `{main_config}` and resolve:
 - `sprint_status` = `{implementation_artifacts}/sprint-status.yaml`
 - `project_context` = `**/project-context.md` (load if exists)
 - CLAUDE.md / memory files (load if exist)
+- `orchestration_mode` = caller-provided value, otherwise `"interactive"`
 
 YOU MUST ALWAYS SPEAK OUTPUT in your Agent communication style with the config `{communication_language}`.
 

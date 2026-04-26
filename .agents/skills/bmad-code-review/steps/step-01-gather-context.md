@@ -3,6 +3,7 @@ diff_output: '' # set at runtime
 spec_file: '' # set at runtime (path or empty)
 review_mode: '' # set at runtime: "full" or "no-spec"
 story_key: '' # set at runtime when discovered from sprint status
+orchestration_mode: '' # set at workflow entry; step files must preserve caller-provided "story-loop"
 ---
 
 # Step 1: Gather Context
@@ -47,7 +48,7 @@ story_key: '' # set at runtime when discovered from sprint status
 
    Never ask extra questions beyond what the cascade prescribes. If a tier above already identified the target, skip the remaining tiers and proceed to instruction 3 (construct diff).
 
-2. HALT. Ask the user: **What do you want to review?** Present these options:
+2. If `{orchestration_mode}` = `"story-loop"` and no review target has been identified, return a schema-valid terminal `ORCHESTRATOR_REPORT` with `result: blocked`, `summary: "Missing review target for orchestrated BMAD review"`, every required fanout layer set to `blocked`, and no findings instead of asking the user. Otherwise, HALT. Ask the user: **What do you want to review?** Present these options:
    - **Uncommitted changes** (staged + unstaged)
    - **Staged changes only**
    - **Branch diff** vs a base branch (ask which base branch)
@@ -60,11 +61,12 @@ story_key: '' # set at runtime when discovered from sprint status
    - For **branch diff**: verify the base branch exists before running `git diff`. If it does not exist, HALT and ask the user for a valid branch.
    - For **commit range**: verify the range resolves. If it does not, HALT and ask the user for a valid range.
    - For **provided diff**: validate the content is non-empty and parseable as a unified diff. If it is not parseable, HALT and ask the user to provide a valid diff.
-   - For **file list**: validate each path exists in the working tree. Construct `{diff_output}` by running `git diff HEAD -- <path1> <path2> ...`. If any paths are untracked (new files not yet staged), use `git diff --no-index /dev/null <path>` to include them. If the diff is empty (files have no uncommitted changes and are not untracked), ask the user whether to review the full file contents or to specify a different baseline.
+   - For **file list**: validate each tracked path exists in the working tree. Construct `{diff_output}` by running `git diff HEAD -- <path1> <path2> ...`. Include untracked files in the requested story scope by appending either a synthetic unified diff (`git diff --no-index /dev/null <path>`) or direct full-file inspection notes for each untracked path. If the diff is empty (files have no uncommitted changes and are not untracked), ask the user whether to review the full file contents or to specify a different baseline.
    - After constructing `{diff_output}`, verify it is non-empty regardless of source type. If empty, HALT and tell the user there is nothing to review.
 
 4. **Set the spec context.**
    - If `{spec_file}` is already set (from Tier 1 or Tier 2): verify the file exists and is readable, then set `{review_mode}` = `"full"`.
+   - If `{orchestration_mode}` = `"story-loop"` and no spec/story file is available, return a schema-valid terminal `ORCHESTRATOR_REPORT` with `result: blocked`, `summary: "Missing story/spec context for orchestrated BMAD review"`, every required fanout layer set to `blocked`, and no findings.
    - Otherwise, ask the user: **Is there a spec or story file that provides context for these changes?**
      - If yes: set `{spec_file}` to the path provided, verify the file exists and is readable, then set `{review_mode}` = `"full"`.
      - If no: set `{review_mode}` = `"no-spec"`.
@@ -72,12 +74,13 @@ story_key: '' # set at runtime when discovered from sprint status
 5. If `{review_mode}` = `"full"` and the file at `{spec_file}` has a `context` field in its frontmatter listing additional docs, load each referenced document. Warn the user about any docs that cannot be found.
 
 6. Sanity check: if `{diff_output}` exceeds approximately 3000 lines, warn the user and offer to chunk the review by file group.
+   - If `{orchestration_mode}` = `"story-loop"`, do not offer interactive chunking and do not wait for a human chunking decision. Proceed with the full scope unless platform limits prevent review; if platform limits do prevent review, return a schema-valid `ORCHESTRATOR_REPORT` with `result: blocked` and a summary that names the oversized scope.
    - If the user opts to chunk: agree on the first group, narrow `{diff_output}` accordingly, and list the remaining groups for the user to note for follow-up runs.
    - If the user declines: proceed as-is with the full diff.
 
 ### CHECKPOINT
 
-Present a summary before proceeding: diff stats (files changed, lines added/removed), `{review_mode}`, and loaded spec/context docs (if any). HALT and wait for user confirmation to proceed.
+Present a summary before proceeding: diff stats (files changed, lines added/removed), `{review_mode}`, and loaded spec/context docs (if any). If `{orchestration_mode}` = `"story-loop"`, continue without waiting for confirmation. Otherwise HALT and wait for user confirmation to proceed.
 
 
 ## NEXT

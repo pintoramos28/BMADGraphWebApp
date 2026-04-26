@@ -1,0 +1,16 @@
+{
+  "module-code": "bmm",
+  "capabilities": [
+    {
+      "name": "story-loop",
+      "menu-code": "SL",
+      "description": "Orchestrates BMAD story implementation/review loops with fresh workers, nested review fan-out, polling, and status gates.",
+      "supports-headless": false,
+      "phase-name": "4-implementation",
+      "after": ["create-story", "sprint-status"],
+      "before": ["retrospective"],
+      "is-required": false,
+      "output-location": "{implementation_artifacts}"
+    }
+  ]
+}

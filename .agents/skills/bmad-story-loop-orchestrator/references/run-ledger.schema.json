@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bmad.local/schemas/story-loop/run-ledger.schema.json",
+  "title": "BMAD Story Loop Run Ledger",
+  "oneOf": [
+    { "$ref": "#/$defs/ledger_event" },
+    { "$ref": "#/$defs/active_run_snapshot" }
+  ],
+  "$defs": {
+    "phase": {
+      "type": ["string", "null"],
+      "enum": [null, "startup", "selection", "implementation", "review", "transition", "complete", "blocked"]
+    },
+    "run_state": {
+      "type": "string",
+      "enum": ["starting", "running", "waiting", "blocked", "completed", "abandoned", "failed"]
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "run_started",
+        "story_selected",
+        "phase_started",
+        "worker_spawned",
+        "heartbeat",
+        "worker_report_received",
+        "status_reread",
+        "transition_decided",
+        "story_completed",
+        "worker_lost",
+        "run_blocked",
+        "run_completed",
+        "run_abandoned"
+      ]
+    },
+    "ledger_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "run_id", "timestamp", "sequence", "event_type", "story_key", "phase", "data"],
+      "properties": {
+        "schema_version": { "type": "string", "const": "1.0" },
+        "run_id": { "type": "string", "minLength": 1 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "event_type": { "$ref": "#/$defs/event_type" },
+        "story_key": { "type": ["string", "null"] },
+        "phase": { "$ref": "#/$defs/phase" },
+        "data": {
+          "type": "object"
+        }
+      }
+    },
+    "active_run_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "run_id", "ledger_file", "current_story_key", "phase", "worker_handle", "state", "updated_at", "last_sequence"],
+      "properties": {
+        "schema_version": { "type": "string", "const": "1.0" },
+        "run_id": { "type": "string", "minLength": 1 },
+        "ledger_file": { "type": "string", "minLength": 1 },
+        "current_story_key": { "type": ["string", "null"] },
+        "phase": { "$ref": "#/$defs/phase" },
+        "worker_handle": { "type": ["string", "null"] },
+        "state": { "$ref": "#/$defs/run_state" },
+        "updated_at": { "type": "string", "format": "date-time" },
+        "last_sequence": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

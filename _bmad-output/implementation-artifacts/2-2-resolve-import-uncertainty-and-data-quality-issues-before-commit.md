@@ -233,12 +233,25 @@ GPT-5 Codex
 - Added focused regressions for the new cache, normalization, persisted-handle, and reopen-save-reopen paths, then revalidated with targeted Vitest, full typecheck, full Vitest, lint, and the import Playwright suite.
 - Left the story status `in-progress` for this implementation-only pass because the non-blocking R4 P3 follow-ups remain open and this worker was scoped only to the blocking findings.
 - Revalidated the completion-path workflow without additional code changes, confirmed the latest R4 section leaves only non-blocking P3 follow-ups open, and advanced the story status back to `review`.
+- Closed the R6 implementation pass by hardening story-loop review-scope extraction, schema-valid blocker/completion report contracts, failed-lane gating, gating-priority deferral rules, acceptance source normalization, story-loop mode preservation, and decision-needed status validation.
+- Preserved the import preview boundary by keeping CSV and workbook preview parsing on bounded sample rows until explicit confirm-time materialization, while retaining full confirmed-dataset materialization only for confirmation.
+- Applied the user decisions by failing closed on stale local-file provenance before confirm/save and failing closed on persisted hydration load/parse failures before exposing a writable workspace route.
+- Restored source-backed repair visibility by sanitizing persisted file handles before reopen issue localization, clearing stale dataset `sourceFile` metadata when no usable handle survives save/reopen, and pruning stale preview replay contexts.
+- Revalidated the R6 pass with focused regressions, `bash ./scripts/with-node.sh npm run typecheck`, `bash ./scripts/with-node.sh npm test`, and `bash ./scripts/with-node.sh npm run lint`; all passed.
+- Closed the R7 gating findings by comparing source handles to previewed file bytes before confirmation, preserving actionable stale-source errors, surfacing confirm-time materialization blockers as updated repair-card preview issues, limiting story-loop review scope to story-listed files, persisting explicit empty dataset-file-handle lists when save sanitation drops every handle, bounding workbook preview-only row metadata collection, and rejecting blocked/failed review reports that claim done status.
+- Revalidated the R7 pass with focused regressions plus full typecheck, full Vitest, and lint; all passed. The story is back in `review` with only non-gating P3 follow-up disposition remaining.
 
 ### File List
 
 - `src/app/router/shell-routes.tsx`
 - `src/app/router/shell-routes.spec.tsx`
 - `src/app/router/shell-routes-hydration.spec.ts`
+- `.agents/skills/bmad-code-review/steps/step-01-gather-context.md`
+- `.agents/skills/bmad-code-review/steps/step-02-review.md`
+- `.agents/skills/bmad-code-review/steps/step-03-triage.md`
+- `.agents/skills/bmad-code-review/steps/step-04-present.md`
+- `.agents/skills/bmad-story-loop-orchestrator/scripts/validate_story_loop_json.py`
+- `.story-loop/adapter.sh`
 - `_bmad-output/benchmarks/benchmark_set_dirty/README.md`
 - `_bmad-output/benchmarks/benchmark_set_dirty/csv/import.dirty.delimiter-repair.csv`
 - `_bmad-output/benchmarks/benchmark_set_dirty/csv/import.dirty.delimiter-repair.md`
@@ -275,6 +288,7 @@ GPT-5 Codex
 - `src/schemas/worker/import-preview.spec.ts`
 - `src/schemas/worker/import-preview.ts`
 - `src/stores/workspace-kernel/bootstrap.ts`
+- `src/stores/workspace-kernel/dataset-file-handle-metadata.ts`
 - `src/stores/workspace-kernel/index.ts`
 - `src/stores/workspace-kernel/reducers.ts`
 - `src/stores/workspace-kernel/store.ts`
@@ -306,6 +320,8 @@ GPT-5 Codex
 - 2026-04-23: Closed the remaining replay-source, confirm-materialization, concurrent-rollback, workspace-cache dirty-guard, and persisted-file-handle sanitation findings; reran focused regressions, full typecheck, full Vitest, lint, and the import Playwright suite; and returned the story to review.
 - 2026-04-23: Review pass R4 revalidated the full uncommitted Story 2.2 tree plus targeted runtime probes, resolved the prior governance questions by user clarification, left four P2 and two P3 action items open, and returned the story to in-progress.
 - 2026-04-23: Ran the completion-path workflow pass with full validation, confirmed the R4 P0/P1/P2 items are closed and only the two non-blocking P3 follow-ups remain, and advanced the story back to review.
+- 2026-04-25: Closed the R6 story-loop contract, preview-boundary, fail-closed provenance/hydration, persisted-handle warning, stale source metadata, and replay-context pruning findings; reran typecheck, full Vitest, and lint; advanced the story back to review.
+- 2026-04-25: Closed the R7 P1/P2 gating findings for byte-identity source validation, confirm-time repair surfacing, story-loop scope, explicit empty handle persistence, bounded workbook preview metadata, and blocked/failed report validation; reran focused regressions, typecheck, full Vitest, and lint; advanced the story back to review.
 
 ### Review Findings
 
@@ -401,12 +417,12 @@ GPT-5 Codex
 
 - [x] [Review][Decision] Story 2.2 is formally allowed to include router and persistence-layer changes — resolved by user clarification on 2026-04-23 for this review pass.
 - [x] [Review][Decision] Repo-wide serial Playwright execution is acceptable for Story 2.2 — resolved by user clarification on 2026-04-23 for this review pass.
-- [ ] [Review][Patch] [P1] Restored previews can lose their replay source and later repairs can reparse the wrong file [src/features/import/workspace-import-route.tsx:1217]
-- [ ] [Review][Patch] [P2] Restored previews can inherit a failed import's file-handle provenance into a later confirm [src/features/import/workspace-import-route.tsx:1271]
-- [ ] [Review][Patch] [P1] Preview parsing still materializes the full confirmed dataset before confirm, regressing the preview boundary for large inputs [src/features/import/parse-import-preview.ts:309]
-- [ ] [Review][Patch] [P2] Failed confirm rollback replaces the whole kernel snapshot and can erase concurrent workspace mutations [src/features/import/workspace-import-route.tsx:129]
-- [ ] [Review][Patch] [P2] LRU eviction drops live workspace kernel stores without any dirty-state guard [src/app/router/shell-routes.tsx:355]
-- [ ] [Review][Patch] [P2] Reopen sanitation still trusts a mismatched persisted file handle object when its metadata matches the dataset [src/features/workspace-persistence/persisted-dataset-file-handles.ts:8]
+- [x] [Review][Patch] [P1] Restored previews can lose their replay source and later repairs can reparse the wrong file [src/features/import/workspace-import-route.tsx:1217]
+- [x] [Review][Patch] [P2] Restored previews can inherit a failed import's file-handle provenance into a later confirm [src/features/import/workspace-import-route.tsx:1271]
+- [x] [Review][Patch] [P1] Preview parsing still materializes the full confirmed dataset before confirm, regressing the preview boundary for large inputs [src/features/import/parse-import-preview.ts:309]
+- [x] [Review][Patch] [P2] Failed confirm rollback replaces the whole kernel snapshot and can erase concurrent workspace mutations [src/features/import/workspace-import-route.tsx:129]
+- [x] [Review][Patch] [P2] LRU eviction drops live workspace kernel stores without any dirty-state guard [src/app/router/shell-routes.tsx:355]
+- [x] [Review][Patch] [P2] Reopen sanitation still trusts a mismatched persisted file handle object when its metadata matches the dataset [src/features/workspace-persistence/persisted-dataset-file-handles.ts:8]
 
 ### Follow-up Review (R4)
 
@@ -468,13 +484,95 @@ Blocked - Decision Needed
 
 #### Decision Needed
 
-- [ ] [Review][Decision] [P1] Decide whether confirm/save must fail closed or strip local-file provenance when the live handle no longer matches the previewed bytes, because `confirmImport()` currently reuses any same-name pending handle for a preview that is replayed from the older captured `File` object [src/features/import/workspace-import-route.tsx:1727]
-- [ ] [Review][Decision] [P1] Decide whether hydration failure must fail closed or may fall back to bootstrap only if confirm/save is blocked until hydration succeeds, because `hydrateWorkspaceKernelStore()` currently returns a writable bootstrap store after transient load or parse failures [src/app/router/shell-routes.tsx:427]
+- [x] [Review][Decision] [P1] Decide whether confirm/save must fail closed or strip local-file provenance when the live handle no longer matches the previewed bytes, because `confirmImport()` currently reuses any same-name pending handle for a preview that is replayed from the older captured `File` object [src/features/import/workspace-import-route.tsx:1727]
+- [x] [Review][Decision] [P1] Decide whether hydration failure must fail closed or may fall back to bootstrap only if confirm/save is blocked until hydration succeeds, because `hydrateWorkspaceKernelStore()` currently returns a writable bootstrap store after transient load or parse failures [src/app/router/shell-routes.tsx:427]
 
 #### Action Items
 
-- [ ] [Review][Patch] [P2] Preview parsing still materializes full-source row data before confirm for both CSV and workbook sources once the preview boundary is exceeded, which keeps the preview path on the full-dataset memory and latency path this story is supposed to defer to confirmation [src/features/import/parse-import-preview.ts:390]
-- [ ] [Review][Patch] [P2] Reopened datasets can silently lose source-backed repair capability because hydration deduplicates persisted handles by raw handle object while missing-handle localization still inspects the unsanitized persisted entries, so repeated imports of the same local file can drop the live handle without emitting the warning issue [src/features/workspace-persistence/persisted-dataset-file-handles.ts:98]
-- [ ] [Review][Patch] [P2] Saving after a handle drop can persist orphaned `sourceFile` metadata because the save path only rewrites dataset source metadata when at least one prepared handle survives and otherwise leaves stale `sourceFile` fields intact in the snapshot being written [src/features/workspace-persistence/save-workspace.ts:21]
-- [ ] [Review][Patch] [P3] Preview replay contexts still accumulate indefinitely across repeated previews and rejects because every resolved preview is cached in `previewReplayContextRef` and nothing prunes stale entries [src/features/import/workspace-import-route.tsx:1231]
-- [ ] [Review][Patch] [P3] The story artifact remains internally inconsistent about review state because the story header still says `Status: review` while unresolved decision blockers and action items remain open in the review history [/home/pinto/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/2-2-resolve-import-uncertainty-and-data-quality-issues-before-commit.md:3]
+- [x] [Review][Patch] [P2] Preview parsing still materializes full-source row data before confirm for both CSV and workbook sources once the preview boundary is exceeded, which keeps the preview path on the full-dataset memory and latency path this story is supposed to defer to confirmation [src/features/import/parse-import-preview.ts:390]
+- [x] [Review][Patch] [P2] Reopened datasets can silently lose source-backed repair capability because hydration deduplicates persisted handles by raw handle object while missing-handle localization still inspects the unsanitized persisted entries, so repeated imports of the same local file can drop the live handle without emitting the warning issue [src/features/workspace-persistence/persisted-dataset-file-handles.ts:98]
+- [x] [Review][Patch] [P2] Saving after a handle drop can persist orphaned `sourceFile` metadata because the save path only rewrites dataset source metadata when at least one prepared handle survives and otherwise leaves stale `sourceFile` fields intact in the snapshot being written [src/features/workspace-persistence/save-workspace.ts:21]
+- [x] [Review][Patch] [P3] Preview replay contexts still accumulate indefinitely across repeated previews and rejects because every resolved preview is cached in `previewReplayContextRef` and nothing prunes stale entries [src/features/import/workspace-import-route.tsx:1231]
+- [x] [Review][Patch] [P3] The story artifact remains internally inconsistent about review state because the story header still says `Status: review` while unresolved decision blockers and action items remain open in the review history [/home/pinto/repo/BMADGraphWebApp/_bmad-output/implementation-artifacts/2-2-resolve-import-uncertainty-and-data-quality-issues-before-commit.md:3]
+
+### Follow-up Review (R6)
+
+#### Review Date
+
+2026-04-25
+
+#### Outcome
+
+Blocked - Decision Needed
+
+#### Summary
+
+- Ran Blind Hunter, Edge Case Hunter, Runtime Integration Auditor, and Acceptance Auditor as fresh nested OpenCode reviewer lanes in story-loop mode.
+- Reviewed the full uncommitted diff versus `HEAD`, relevant untracked files, the Story 2.2 story/spec context, and every Story 2.2 File List entry, including files absent from the default diff.
+- Runtime Integration Auditor ran targeted live probes, including focused import/persistence Vitest coverage and story-loop report validation probes.
+
+#### Severity Breakdown
+
+- P0: 0
+- P1: 5
+- P2: 10
+- P3: 3
+- Decision Needed: 2
+
+#### Decision Needed
+
+- [x] [Review][Decision] [P1] Decide whether confirm/save must fail closed, strip local-file provenance, or require source reselection when the live handle no longer matches the previewed bytes, because `confirmImport()` can reuse same-name pending handle provenance for a preview materialized from an older captured `File` object [src/features/import/workspace-import-route.tsx:1727]
+- [x] [Review][Decision] [P1] Decide whether persisted hydration failures must fail closed or may fall back to bootstrap only with confirm/save blocked until hydration succeeds, because `hydrateWorkspaceKernelStore()` currently exposes a writable bootstrap store after transient load or parse/install failures [src/app/router/shell-routes.tsx:426]
+
+#### Action Items
+
+- [x] [Review][Patch][P1] Fix story-loop adapter review-scope extraction so Story File List parsing stops before review history and reports real scoped changed/untracked files instead of nonpath bullets [`.story-loop/adapter.sh:165-213`] - current Story 2.2 review-scope output contains review-history text and reports empty tracked/untracked scope despite the live uncommitted diff.
+- [x] [Review][Patch][P1] Gate story-loop completion on all required reviewer lanes completing successfully [`.agents/skills/bmad-code-review/steps/step-02-review.md:34`, `.agents/skills/bmad-story-loop-orchestrator/scripts/validate_story_loop_json.py:292`] - failed or empty lanes can still produce a clean/done report, leaving required review coverage incomplete.
+- [x] [Review][Patch][P1] Prevent P0/P1/P2 findings from being deferred or converted into a done story-loop outcome [`.agents/skills/bmad-code-review/steps/step-04-present.md:21`] - the current defer path checks off findings by category without explicitly forbidding gating-priority deferral.
+- [x] [Review][Patch][P2] Emit schema-valid `ORCHESTRATOR_REPORT` blocks for story-loop blocker paths [`.agents/skills/bmad-code-review/steps/step-01-gather-context.md:51`, `.agents/skills/bmad-code-review/steps/step-02-review.md:23`] - missing target/spec/fanout blocker halts can otherwise leave the orchestrator without a parseable terminal report.
+- [x] [Review][Patch][P2] Specify and validate the nested `ORCHESTRATOR_REPORT` shapes used by story-loop review workers [`.agents/skills/bmad-code-review/steps/step-04-present.md:136`] - the workflow lists top-level fields but not required nested object shapes or enum values, increasing schema-invalid terminal report risk.
+- [x] [Review][Patch][P2] Include synthetic diffs or direct scoped inspection for untracked files in orchestrated reviews [`.agents/skills/bmad-code-review/steps/step-01-gather-context.md:58`] - untracked story files can be omitted from reviewer lanes even when they are part of the requested scope.
+- [x] [Review][Patch][P2] Map Acceptance Auditor findings to the report schema source value `acceptance` instead of internal `auditor` naming [`.agents/skills/bmad-code-review/steps/step-03-triage.md:21`] - strict story-loop report validation rejects unsupported finding source enums.
+- [x] [Review][Patch][P2] Preserve caller-provided `orchestration_mode` across step files instead of reinitializing `interactive` defaults per step [`.agents/skills/bmad-code-review/steps/step-01-gather-context.md:6`, `.agents/skills/bmad-code-review/steps/step-02-review.md:3`, `.agents/skills/bmad-code-review/steps/step-04-present.md:3`] - story-loop safeguards can silently disable if step frontmatter resets runtime state.
+- [x] [Review][Patch][P2] Require decision-needed reports to sync story and sprint status to `in-progress` [`.agents/skills/bmad-story-loop-orchestrator/scripts/validate_story_loop_json.py:307`] - validator currently accepts `decision_needed` reports that leave status as `review`, causing repeated blocked review selection.
+- [x] [Review][Patch][P2] Keep preview parsing bounded until explicit confirmation for both CSV and workbook sources [src/features/import/parse-import-preview.ts:310, src/features/import/parse-import-preview.ts:623, src/features/import/normalize-preview.ts:1063] - preview paths still materialize full-source confirmed rows before confirm when the preview boundary is exceeded.
+- [x] [Review][Patch][P2] Ensure missing or invalid persisted file handles generate source-handle recovery issues after hydration sanitation [src/features/workspace-persistence/reopen-workspace.ts:558, src/features/workspace-persistence/persisted-dataset-file-handles.ts:96] - unsanitized compatible entries can suppress the warning even when live handle validation fails.
+- [x] [Review][Patch][P2] Strip stale `sourceFile` metadata when save/reopen handle preparation drops all usable handles [src/features/workspace-persistence/save-workspace.ts:21, src/features/workspace-persistence/reopen-workspace.ts:560] - datasets can remain marked source-backed after the source handle is unavailable.
+- [x] [Review][Patch][P3] Clarify non-interactive large-diff handling for story-loop mode [`.agents/skills/bmad-code-review/steps/step-01-gather-context.md:76`] - the primary wording still says to offer chunking even though story-loop must not wait for human chunking decisions.
+- [x] [Review][Patch][P3] Synthesize missing priority rationales during triage when reviewer lanes omit them [`.agents/skills/bmad-code-review/steps/step-03-triage.md:21`] - the workflow requires priority rationale in persisted findings but does not say how to handle missing lane rationales.
+- [x] [Review][Patch][P3] Prune stale preview replay contexts across repeated previews and rejects [src/features/import/workspace-import-route.tsx:1223] - the route retains per-preview replay contexts in an unbounded map until unmount; non-gating because it is session-scoped and does not directly violate acceptance criteria.
+
+### Follow-up Review (R7)
+
+#### Review Date
+
+2026-04-25
+
+#### Outcome
+
+Changes Requested
+
+#### Summary
+
+- Ran fresh nested Blind Hunter, Edge Case Hunter, Runtime Integration Auditor, and Acceptance Auditor lanes in story-loop mode against the scoped uncommitted Story 2.2 diff and Story File List.
+- Blind, Runtime, and Acceptance lanes completed; the Edge Case Hunter lane returned an empty result and was treated as a failed lane.
+- Runtime probes included the story-loop adapter review-scope command, focused import/router/kernel Vitest coverage, and story-loop report validator probes. The review worker also ran the required validation commands: `bash ./scripts/with-node.sh npm run typecheck`, `bash ./scripts/with-node.sh npm test`, `bash ./scripts/with-node.sh npm run lint`, and `bash ./scripts/with-node.sh npm run build`; all passed.
+
+#### Severity Breakdown
+
+- P0: 0
+- P1: 3
+- P2: 4
+- P3: 1
+- Decision Needed: 0
+
+#### Action Items
+
+- [x] [Review][Patch][P1] Verify local-file handle provenance by byte identity before confirming or persisting source-backed imports [src/features/import/workspace-import-route.tsx:251] — metadata-only name/size/mtime checks can accept same-name files whose bytes changed, preserving stale provenance for a dataset materialized from older preview bytes.
+- [x] [Review][Patch][P1] Surface confirm-time materialization blocking issues as repairable preview issues instead of generic persistence failure [src/features/import/workspace-import-route.tsx:1778] — late full-dataset missing/malformed/type/schema issues can be discovered after the visible preview check, then `confirmImportReducer()` rejects them while the route only shows a storage-oriented error, violating the repair-choice flow.
+- [x] [Review][Patch][P1] Keep story-loop adapter `scope` limited to story-scoped files instead of re-adding all repository changes [`.story-loop/adapter.sh:225`] — the consumer-facing scope currently includes unrelated tracked/untracked/deleted paths after computing filtered fields, which can invalidate automated story-scoped review results.
+- [x] [Review][Patch][P2] Preserve stale-source validation error messages separately from persistence failures during Confirm Import [src/features/import/workspace-import-route.tsx:1795] — actionable reselect/source-changed failures are masked as “Restore local workspace storage,” sending users to the wrong recovery path.
+- [x] [Review][Patch][P2] Persist an explicit empty `datasetFileHandles` list when save preparation drops all handles [src/features/workspace-persistence/save-workspace.ts:26] — omitting the field after sanitizing handles to `[]` can leave stale persisted handle records instead of clearing them.
+- [x] [Review][Patch][P2] Keep workbook preview parsing bounded before confirm instead of scanning all populated worksheet row metadata [src/features/import/parse-import-preview.ts:564] — `listPopulatedWorksheetRows(sheet)` still walks full workbook rows/cells before the preview boundary, preserving large-workbook latency and memory risk.
+- [x] [Review][Patch][P2] Reject blocked or failed story-loop review reports that mark story or sprint status done [`.agents/skills/bmad-story-loop-orchestrator/scripts/validate_story_loop_json.py:303`] — validator invariants cover clean, P3-only, changes-requested, and decision-needed outcomes but still accept inconsistent blocked/failed completion statuses.
+- [ ] [Review][Patch][P3] Clarify P3 disposition rules for decision-needed-only review rounds [`.agents/skills/bmad-story-loop-orchestrator/scripts/validate_story_loop_json.py:329`] — current validation only permits P3 action items when gating findings exist, while workflow text does not clearly define whether decision-needed-only rounds must defer or action-item P3 findings.

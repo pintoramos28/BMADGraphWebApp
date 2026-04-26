@@ -11,19 +11,21 @@
 ## INSTRUCTIONS
 
 1. **Normalize** findings into a common format. Expected input formats:
-   - Adversarial (Blind Hunter): markdown list of descriptions
-   - Edge Case Hunter: JSON array with `location`, `trigger_condition`, `guard_snippet`, `potential_consequence` fields
-   - Runtime Integration Auditor: JSON array with `location`, `runtime_surface`, `failure_mode`, `required_probe`, `potential_user_effect` fields
-   - Acceptance Auditor: markdown list with title, AC/constraint reference, and evidence
+   - Adversarial (Blind Hunter): markdown list of descriptions, ideally with P0/P1/P2/P3 priority
+   - Edge Case Hunter: JSON array with `location`, `trigger_condition`, `guard_snippet`, `potential_consequence`, and optional `priority` fields
+   - Runtime Integration Auditor: JSON array with `location`, `runtime_surface`, `failure_mode`, `required_probe`, `potential_user_effect`, and optional `priority` fields
+   - Acceptance Auditor: markdown list with title, priority, AC/constraint reference, and evidence
 
    If a layer's output does not match its expected format, attempt best-effort parsing. Note any parsing issues for the user.
 
    Convert all to a unified list where each finding has:
    - `id` -- sequential integer
-   - `source` -- `blind`, `edge`, `runtime`, `auditor`, or merged sources (e.g., `blind+runtime`)
+   - `source` -- `blind`, `edge`, `runtime`, `acceptance`, or merged sources (e.g., `blind+runtime`); normalize Acceptance Auditor findings to `acceptance` for the story-loop report schema.
    - `title` -- one-line summary
    - `detail` -- full description
    - `location` -- file and line reference (if available)
+   - `priority` -- P0, P1, P2, or P3
+   - `priority_rationale` -- one-line reason. If a reviewer lane omitted the rationale, synthesize the shortest conservative rationale from impact, acceptance-criteria risk, data-integrity risk, or runtime evidence before persisting the finding.
 
 2. **Deduplicate.** If two or more findings describe the same issue, merge them into one:
    - Use the most specific finding as the base (prefer structured JSON with location and concrete runtime or guard detail over adversarial prose).
@@ -37,6 +39,14 @@
    - **dismiss** -- Noise, false positive, or handled elsewhere.
 
    If `{review_mode}` = `"no-spec"` and a finding would otherwise be `decision_needed`, reclassify it as `patch` (if the fix is unambiguous) or `defer` (if not).
+
+   Also assign or verify priority:
+   - **P0:** catastrophic correctness, security, data-loss, deployment, or system-wide failure.
+   - **P1:** major accepted flow broken, important regression, or high-confidence runtime failure.
+   - **P2:** correctness, edge-case, test, or integration issue likely to affect users or acceptance criteria.
+   - **P3:** low-risk polish, maintainability, minor coverage, documentation, or pre-existing/deferred work that does not violate acceptance criteria and does not create security, data-integrity, or runtime-failure risk.
+
+   Promote any P3 to P2 if it threatens an acceptance criterion, security, data integrity, critical accessibility, or user-visible runtime correctness. When unsure, prefer the higher priority.
 
 4. **Drop** all `dismiss` findings. Record the dismiss count for the summary.
 
