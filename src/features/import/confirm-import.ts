@@ -18,6 +18,7 @@ export function createImportedDatasetFromPreview(
   return {
     datasetId,
     displayName: preview.source.fileName ?? preview.source.sourceLabel,
+    datasetContext: null,
     sourceKind: preview.source.sourceKind,
     fingerprint: confirmedDataset.fingerprint,
     rowCount: confirmedDataset.rowCount,
@@ -25,11 +26,14 @@ export function createImportedDatasetFromPreview(
     columns: confirmedDataset.columns.map((column) => ({
       columnId: column.columnId,
       sourceName: column.sourceName,
+      label: column.sourceName,
       dataType: column.dataType,
     })).map((column) => ({
       ...column,
       semanticRole: 'unassigned',
       unit: null,
+      measurementContext: null,
+      description: null,
       status: 'confirmed',
     })),
     rows: confirmedDataset.rows,

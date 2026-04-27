@@ -91,6 +91,33 @@ describe('contract invariants', () => {
     expect(workspaceSnapshotSchema.safeParse(candidate).success).toBe(false);
   });
 
+  it('requires editable semantic fields on canonical dataset columns and dataset context', () => {
+    const candidate = structuredClone(workspaceSnapshotFixture) as any;
+
+    delete candidate.datasets[0].columns[0].label;
+    expect(workspaceSnapshotSchema.safeParse(candidate).success).toBe(false);
+
+    candidate.datasets[0].columns[0].label = 'Cycle Number';
+    candidate.datasets[0].columns[0].semanticRole = 'measure';
+    expect(workspaceSnapshotSchema.safeParse(candidate).success).toBe(false);
+
+    candidate.datasets[0].columns[0].semanticRole = 'x';
+    candidate.datasets[0].datasetContext = null;
+    candidate.datasets[0].columns[0].measurementContext = null;
+    expect(workspaceSnapshotSchema.parse(candidate)).toEqual(candidate);
+  });
+
+  it('rejects empty semantic context objects so missing-context readiness stays visible', () => {
+    const candidate = structuredClone(workspaceSnapshotFixture) as any;
+
+    candidate.datasets[0].datasetContext = {};
+    expect(workspaceSnapshotSchema.safeParse(candidate).success).toBe(false);
+
+    candidate.datasets[0].datasetContext = null;
+    candidate.datasets[0].columns[0].measurementContext = {};
+    expect(workspaceSnapshotSchema.safeParse(candidate).success).toBe(false);
+  });
+
   it('rejects ledger entries without causality metadata', () => {
     const candidate = structuredClone(workspaceLedgerFixture[0]) as any;
     delete candidate.correlationId;

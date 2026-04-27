@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { selectCompatibilityState } from '../../domain/trust';
+import type { WorkspaceSnapshot } from '../../schemas/workspace';
 import type { PersistedWorkspaceRecord } from '../../services/persistence';
 import { graphDefinitionFixture } from '../../test/fixtures/workspace/graph-definition.fixture';
 import { workspaceLedgerFixture } from '../../test/fixtures/workspace/workspace-ledger.fixture';
 import { workspaceSnapshotFixture } from '../../test/fixtures/workspace/workspace-snapshot.fixture';
+import { createImportWorkspaceSnapshot } from '../../stores/workspace-kernel/bootstrap';
 import {
   collectAvailableFormulaDependencyIds,
   reopenPersistedWorkspaceRecord,
@@ -86,6 +88,890 @@ describe('reopenPersistedWorkspaceRecord', () => {
       migrationApplied: false,
       issueCount: 2,
     });
+  });
+
+  it('normalizes legacy unsupported semantic role strings during dataset backfill', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:31:00Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [
+          {
+            ...structuredClone(workspaceSnapshotFixture.datasets[0]!),
+            columns: workspaceSnapshotFixture.datasets[0]!.columns.map((column, index) => index === 0
+              ? {
+                  ...structuredClone(column),
+                  semanticRole: 'measure',
+                }
+              : structuredClone(column)),
+            columnCount: workspaceSnapshotFixture.datasets[0]!.columns.length,
+          },
+        ],
+        graphDefinitions: [
+          {
+            ...structuredClone(graphDefinitionFixture),
+            issueIds: [],
+            evidenceIds: [],
+          },
+        ],
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:31:05Z',
+      nowMs: () => 5500,
+    });
+
+    expect(reopened.snapshot.datasets[0]?.columns[0]).toMatchObject({
+      columnId: 'cycleIndex',
+      semanticRole: 'unassigned',
+    });
+    expect(reopened.snapshot.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'semantics.column.missing-role',
+          source: expect.objectContaining({
+            entityType: 'dataset-column',
+            entityId: 'cycleIndex',
+          }),
+        }),
+        expect.objectContaining({
+          kind: 'semantics.graph.composition-invalid',
+          severity: 'blocking',
+          diagnostics: expect.objectContaining({
+            affectedColumnIds: expect.arrayContaining(['cycleIndex']),
+          }),
+        }),
+      ]),
+    );
+    expect(reopened.snapshot.readiness.blockingIssueIds).toEqual(
+      expect.arrayContaining(['semantics.p7:ds_main.p19:graph_capacity_fade.p13:graph-invalid']),
+    );
+    expect(reopened.localizedIssues).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.dataset.invalid-contract',
+        }),
+      ]),
+    );
+  });
+
+  it('regenerates data-type graph catalog failures as semantic graph issues during reopen', () => {
+    const semanticGraphIssueId = 'semantics.p7:ds_main.p19:graph_capacity_fade.p13:graph-invalid';
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:31:08Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [
+          {
+            ...structuredClone(workspaceSnapshotFixture.datasets[0]),
+            columns: workspaceSnapshotFixture.datasets[0]!.columns.map((column) => column.columnId === 'capacityRetention'
+              ? {
+                  ...structuredClone(column),
+                  dataType: 'string',
+                }
+              : structuredClone(column)),
+          },
+        ],
+        graphDefinitions: [
+          {
+            ...structuredClone(graphDefinitionFixture),
+            issueIds: [],
+            evidenceIds: [],
+          },
+        ],
+        issues: [
+          {
+            issueId: semanticGraphIssueId,
+            kind: 'semantics.graph.composition-invalid',
+            severity: 'blocking',
+            status: 'deferred',
+            detectedAt: '2026-04-16T18:20:00Z',
+            source: {
+              module: 'workspace-kernel',
+              entityType: 'graph',
+              entityId: 'graph_capacity_fade',
+            },
+            title: 'Graph composition needs semantic review',
+            detail: 'Old graph semantic issue pointed at another column.',
+            userMessage: 'A graph that uses this dataset no longer matches the active semantic choices.',
+            contextRef: {
+              routeKey: 'workspaceDetail',
+              workspaceId: workspaceSnapshotFixture.workspaceId,
+              graphId: 'graph_capacity_fade',
+              panel: 'semantics',
+            },
+            repairActions: [],
+            diagnostics: {
+              datasetId: 'ds_main',
+              graphId: 'graph_capacity_fade',
+              blockedReasons: ['Old reason'],
+              affectedColumnIds: ['temperatureBand'],
+            },
+          },
+        ],
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:31:09Z',
+      nowMs: () => 5575,
+    });
+
+    expect(reopened.localizedIssues).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.graph.incompatible-composition',
+        }),
+      ]),
+    );
+    expect(reopened.snapshot.graphDefinitions[0]).toMatchObject({
+      issueIds: expect.arrayContaining([semanticGraphIssueId]),
+    });
+    expect(reopened.snapshot.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          issueId: semanticGraphIssueId,
+          kind: 'semantics.graph.composition-invalid',
+          status: 'open',
+          detectedAt: '2026-04-16T18:31:09Z',
+          detail: expect.stringContaining('Scatter compositions require quantitative columns for x and y roles.'),
+          diagnostics: expect.objectContaining({
+            affectedColumnIds: expect.arrayContaining(['capacityRetention']),
+          }),
+          repairActions: expect.arrayContaining([
+            expect.objectContaining({
+              command: 'repair.focusSemanticField',
+              args: expect.objectContaining({
+                datasetId: 'ds_main',
+                columnId: 'capacityRetention',
+              }),
+            }),
+          ]),
+        }),
+      ]),
+    );
+    expect(reopened.snapshot.readiness.blockingIssueIds).toContain(semanticGraphIssueId);
+  });
+
+  it('restores stale graph status after orphan nonsemantic issue ids are filtered on reopen', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:31:08Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        graphDefinitions: [
+          {
+            ...structuredClone(graphDefinitionFixture),
+            status: 'reference',
+            issueIds: [],
+            evidenceIds: [],
+          },
+          {
+            ...structuredClone(graphDefinitionFixture),
+            graphId: 'graph_orphan_semantic_clear',
+            title: 'Graph With Orphaned Cleared Issues',
+            status: 'stale',
+            roleAssignments: {
+              ...structuredClone(graphDefinitionFixture.roleAssignments),
+              facetColumn: [],
+            },
+            issueIds: ['semantics.legacy.graph-clear', 'workspace.reopen.legacy-orphan'],
+            evidenceIds: [],
+          },
+        ],
+        activeGraphId: 'graph_orphan_semantic_clear',
+        referenceGraphId: graphDefinitionFixture.graphId,
+        issues: [],
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:31:09Z',
+      nowMs: () => 5575,
+    });
+
+    expect(reopened.snapshot.graphDefinitions.find((graph) => graph.graphId === 'graph_orphan_semantic_clear')).toMatchObject({
+      status: 'candidate',
+      issueIds: [],
+    });
+    expect(reopened.snapshot.issues.map((issue) => issue.issueId)).not.toContain('workspace.reopen.legacy-orphan');
+  });
+
+  it('preserves nonsemantic catalog diagnostics when reopen has mixed graph failures', () => {
+    const semanticGraphIssueId = 'semantics.p7:ds_main.p19:graph_capacity_fade.p13:graph-invalid';
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:31:09Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [
+          {
+            ...structuredClone(workspaceSnapshotFixture.datasets[0]),
+            columns: workspaceSnapshotFixture.datasets[0]!.columns.map((column) => column.columnId === 'capacityRetention'
+              ? {
+                  ...structuredClone(column),
+                  dataType: 'string',
+                }
+              : structuredClone(column)),
+          },
+        ],
+        graphDefinitions: [
+          {
+            ...structuredClone(graphDefinitionFixture),
+            marks: ['point', 'bar'],
+            issueIds: [],
+            evidenceIds: [],
+          },
+        ],
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:31:10Z',
+      nowMs: () => 5580,
+    });
+
+    expect(reopened.snapshot.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          issueId: semanticGraphIssueId,
+          kind: 'semantics.graph.composition-invalid',
+          diagnostics: expect.objectContaining({
+            blockedReasons: expect.arrayContaining(['Scatter compositions require quantitative columns for x and y roles.']),
+            affectedColumnIds: expect.arrayContaining(['capacityRetention']),
+          }),
+        }),
+        expect.objectContaining({
+          kind: 'workspace.reopen.graph.incompatible-composition',
+          diagnostics: expect.objectContaining({
+            blockedReasons: expect.arrayContaining(['Marks point, bar are not allowed for graph family "scatter".']),
+          }),
+        }),
+      ]),
+    );
+    const catalogIssue = reopened.snapshot.issues.find((issue) => issue.kind === 'workspace.reopen.graph.incompatible-composition');
+
+    expect(reopened.snapshot.graphDefinitions[0]?.issueIds).toEqual(
+      expect.arrayContaining([semanticGraphIssueId, catalogIssue?.issueId]),
+    );
+  });
+
+  it('skips semantic reopen issue generation for import-preview placeholder datasets', () => {
+    const placeholderSnapshot = createImportWorkspaceSnapshot(workspaceSnapshotFixture.workspaceId);
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: placeholderSnapshot.workspaceId,
+      savedAt: '2026-04-16T18:31:09Z',
+      snapshot: {
+        ...placeholderSnapshot,
+        datasets: [
+          {
+            ...placeholderSnapshot.datasets[0]!,
+            columnCount: 1,
+            columns: [
+              {
+                columnId: 'preview_value',
+                sourceName: 'Preview Value',
+                label: 'Preview Value',
+                dataType: 'number',
+                semanticRole: 'unassigned',
+                unit: null,
+                measurementContext: null,
+                description: null,
+                status: 'inferred',
+              },
+            ],
+          },
+        ],
+        graphDefinitions: placeholderSnapshot.graphDefinitions.map((graph) => ({
+          ...graph,
+          roleAssignments: {
+            ...graph.roleAssignments,
+            x: ['preview_value'],
+            y: ['preview_value'],
+          },
+        })),
+      },
+      ledger: [],
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:31:11Z',
+      nowMs: () => 5585,
+    });
+
+    expect(reopened.snapshot.datasets[0]).toMatchObject({
+      datasetId: 'dataset_import_placeholder',
+      sourceKind: 'import-preview',
+    });
+    expect(reopened.snapshot.issues.filter((issue) => issue.kind.startsWith('semantics.'))).toEqual([]);
+    expect(reopened.snapshot.graphDefinitions[0]?.issueIds).not.toEqual(
+      expect.arrayContaining([expect.stringContaining('semantics.')]),
+    );
+    expect(reopened.snapshot.readiness.warningIssueIds).not.toEqual(
+      expect.arrayContaining([expect.stringContaining('semantics.')]),
+    );
+  });
+
+  it('skips semantic reopen issue generation for recovery placeholder datasets', () => {
+    const snapshot: WorkspaceSnapshot = {
+      ...structuredClone(workspaceSnapshotFixture),
+      datasets: [
+        {
+          ...structuredClone(workspaceSnapshotFixture.datasets[0]!),
+          sourceKind: 'recovery',
+          datasetContext: null,
+          columns: workspaceSnapshotFixture.datasets[0]!.columns.map((column) => ({
+            ...structuredClone(column),
+            semanticRole: 'unassigned' as const,
+            measurementContext: null,
+          })),
+        },
+      ],
+      issues: [
+        {
+          issueId: 'semantics.p7:ds_main.p19:graph_capacity_fade.p13:graph-invalid',
+          kind: 'semantics.graph.composition-invalid',
+          severity: 'blocking' as const,
+          status: 'open' as const,
+          detectedAt: '2026-04-16T18:31:09Z',
+          source: { module: 'workspace-kernel', entityType: 'graph', entityId: 'graph_capacity_fade' },
+          title: 'Graph composition needs semantic review',
+          detail: 'Old recovery semantic issue.',
+          userMessage: 'Old recovery semantic issue.',
+          contextRef: { routeKey: 'workspaceDetail', workspaceId: workspaceSnapshotFixture.workspaceId, panel: 'semantics' },
+          repairActions: [],
+          diagnostics: { datasetId: 'ds_main', graphId: 'graph_capacity_fade' },
+        },
+      ],
+    };
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: snapshot.workspaceId,
+      savedAt: '2026-04-16T18:31:13Z',
+      snapshot,
+      ledger: [],
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:31:14Z',
+      nowMs: () => 5590,
+    });
+
+    expect(reopened.snapshot.datasets[0]).toMatchObject({
+      datasetId: 'ds_main',
+      sourceKind: 'recovery',
+    });
+    expect(reopened.snapshot.issues.filter((issue) => issue.kind.startsWith('semantics.'))).toEqual([]);
+    expect(reopened.snapshot.graphDefinitions[0]?.issueIds).not.toEqual(
+      expect.arrayContaining([expect.stringContaining('semantics.')]),
+    );
+    expect(reopened.snapshot.readiness.warningIssueIds).not.toEqual(
+      expect.arrayContaining([expect.stringContaining('semantics.')]),
+    );
+    expect(reopened.snapshot.readiness.blockingIssueIds).not.toEqual(
+      expect.arrayContaining([expect.stringContaining('semantics.')]),
+    );
+  });
+
+  it('restores reopened stale candidate graphs when cleared semantic issues were the stale reason', () => {
+    const semanticGraphIssueId = 'semantics.p7:ds_main.p24:graph_semantic_recovered.p13:graph-invalid';
+    const secondaryGraph = {
+      ...structuredClone(graphDefinitionFixture),
+      graphId: 'graph_semantic_recovered',
+      title: 'Recovered Semantic Candidate',
+      status: 'stale' as const,
+      roleAssignments: {
+        ...structuredClone(graphDefinitionFixture.roleAssignments),
+        facetColumn: [],
+      },
+      issueIds: [semanticGraphIssueId],
+      evidenceIds: [],
+    };
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:31:14Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        graphDefinitions: [
+          structuredClone(graphDefinitionFixture),
+          secondaryGraph,
+        ],
+        activeGraphId: secondaryGraph.graphId,
+        referenceGraphId: graphDefinitionFixture.graphId,
+        issues: [
+          {
+            issueId: semanticGraphIssueId,
+            kind: 'semantics.graph.composition-invalid',
+            severity: 'blocking' as const,
+            status: 'open' as const,
+            detectedAt: '2026-04-16T18:31:09Z',
+            source: { module: 'workspace-kernel', entityType: 'graph', entityId: secondaryGraph.graphId },
+            title: 'Graph composition needs semantic review',
+            detail: 'Old semantic graph conflict that is no longer current.',
+            userMessage: 'A graph that uses this dataset no longer matches the active semantic choices.',
+            contextRef: {
+              routeKey: 'workspaceDetail' as const,
+              workspaceId: workspaceSnapshotFixture.workspaceId,
+              graphId: secondaryGraph.graphId,
+              panel: 'semantics',
+            },
+            repairActions: [],
+            diagnostics: { datasetId: 'ds_main', graphId: secondaryGraph.graphId },
+          },
+        ],
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:31:15Z',
+      nowMs: () => 5595,
+    });
+    const reopenedGraph = reopened.snapshot.graphDefinitions.find((graph) => graph.graphId === secondaryGraph.graphId);
+
+    expect(reopenedGraph).toMatchObject({
+      status: 'candidate',
+      issueIds: [],
+    });
+    expect(reopened.snapshot.issues.find((issue) => issue.issueId === semanticGraphIssueId)).toBeUndefined();
+  });
+
+  it('preserves a generic reopen repair issue for import-preview graph catalog failures', () => {
+    const placeholderSnapshot = createImportWorkspaceSnapshot(workspaceSnapshotFixture.workspaceId);
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: placeholderSnapshot.workspaceId,
+      savedAt: '2026-04-16T18:31:10Z',
+      snapshot: {
+        ...placeholderSnapshot,
+        datasets: [
+          {
+            ...placeholderSnapshot.datasets[0]!,
+            columnCount: 1,
+            columns: [
+              {
+                columnId: 'preview_category',
+                sourceName: 'Preview Category',
+                label: 'Preview Category',
+                dataType: 'string',
+                semanticRole: 'unassigned',
+                unit: null,
+                measurementContext: null,
+                description: null,
+                status: 'inferred',
+              },
+            ],
+          },
+        ],
+        graphDefinitions: placeholderSnapshot.graphDefinitions.map((graph) => ({
+          ...graph,
+          family: 'scatter' as const,
+          templateId: 'tpl_scatter_regression' as const,
+          roleAssignments: {
+            ...graph.roleAssignments,
+            x: ['preview_category'],
+            y: ['preview_category'],
+          },
+        })),
+      },
+      ledger: [],
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:31:12Z',
+      nowMs: () => 5588,
+    });
+    const catalogIssue = reopened.snapshot.issues.find((issue) => issue.kind === 'workspace.reopen.graph.incompatible-composition');
+
+    expect(reopened.snapshot.issues.filter((issue) => issue.kind.startsWith('semantics.'))).toEqual([]);
+    expect(catalogIssue).toMatchObject({
+      severity: 'blocking',
+      source: expect.objectContaining({
+        entityType: 'graph',
+        entityId: 'graph_import_placeholder',
+      }),
+      diagnostics: expect.objectContaining({
+        datasetId: 'dataset_import_placeholder',
+        blockedReasons: expect.arrayContaining(['Scatter compositions require quantitative columns for x and y roles.']),
+        affectedColumnIds: expect.arrayContaining(['preview_category']),
+      }),
+    });
+    expect(reopened.snapshot.graphDefinitions[0]).toMatchObject({
+      graphId: 'graph_import_placeholder',
+      status: 'stale',
+      issueIds: expect.arrayContaining([catalogIssue?.issueId]),
+    });
+    expect(reopened.snapshot.readiness.blockingIssueIds).toContain(catalogIssue?.issueId);
+  });
+
+  it('preserves a generic reopen repair issue for recovery-dataset graph catalog failures', () => {
+    const snapshot: WorkspaceSnapshot = {
+      ...structuredClone(workspaceSnapshotFixture),
+      datasets: [
+        {
+          ...structuredClone(workspaceSnapshotFixture.datasets[0]!),
+          sourceKind: 'recovery',
+          columns: workspaceSnapshotFixture.datasets[0]!.columns.map((column) => column.columnId === 'capacityRetention'
+            ? {
+                ...structuredClone(column),
+                dataType: 'string' as const,
+              }
+            : structuredClone(column)),
+        },
+      ],
+      graphDefinitions: [
+        {
+          ...structuredClone(graphDefinitionFixture),
+          issueIds: [],
+        },
+      ],
+      issues: [],
+    };
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: snapshot.workspaceId,
+      savedAt: '2026-04-16T18:31:16Z',
+      snapshot,
+      ledger: [],
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:31:17Z',
+      nowMs: () => 5598,
+    });
+    const catalogIssue = reopened.snapshot.issues.find((issue) => issue.kind === 'workspace.reopen.graph.incompatible-composition');
+
+    expect(reopened.snapshot.issues.filter((issue) => issue.kind.startsWith('semantics.'))).toEqual([]);
+    expect(catalogIssue).toMatchObject({
+      severity: 'blocking',
+      source: expect.objectContaining({
+        entityType: 'graph',
+        entityId: 'graph_capacity_fade',
+      }),
+      diagnostics: expect.objectContaining({
+        datasetId: 'ds_main',
+        blockedReasons: expect.arrayContaining(['Scatter compositions require quantitative columns for x and y roles.']),
+        affectedColumnIds: expect.arrayContaining(['capacityRetention']),
+      }),
+    });
+    expect(reopened.snapshot.graphDefinitions[0]).toMatchObject({
+      graphId: 'graph_capacity_fade',
+      status: 'stale',
+      issueIds: expect.arrayContaining([catalogIssue?.issueId]),
+    });
+    expect(reopened.snapshot.readiness.blockingIssueIds).toContain(catalogIssue?.issueId);
+  });
+
+  it('surfaces missing optional semantic context as warning-level readiness feedback on reopen', () => {
+    const columnMissingContextIssueId = 'semantics.p7:ds_main.p10:cycleIndex.p15:missing-context';
+    const datasetMissingContextIssueId = 'semantics.p7:ds_main.p23:missing-dataset-context';
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:31:12Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [
+          {
+            ...structuredClone(workspaceSnapshotFixture.datasets[0]),
+            datasetContext: null,
+            columns: workspaceSnapshotFixture.datasets[0]!.columns.map((column) => column.columnId === 'cycleIndex'
+              ? {
+                  ...structuredClone(column),
+                  measurementContext: null,
+                }
+              : structuredClone(column)),
+          },
+        ],
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:31:13Z',
+      nowMs: () => 5590,
+    });
+
+    expect(reopened.snapshot.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          issueId: columnMissingContextIssueId,
+          kind: 'semantics.column.missing-context',
+          severity: 'warning',
+        }),
+        expect.objectContaining({
+          issueId: datasetMissingContextIssueId,
+          kind: 'semantics.dataset.missing-context',
+          severity: 'warning',
+        }),
+      ]),
+    );
+    expect(reopened.snapshot.readiness.warningIssueIds).toEqual(
+      expect.arrayContaining([columnMissingContextIssueId, datasetMissingContextIssueId]),
+    );
+    expect(reopened.snapshot.readiness.blockingIssueIds).not.toEqual(
+      expect.arrayContaining([columnMissingContextIssueId, datasetMissingContextIssueId]),
+    );
+  });
+
+  it('regenerates reopen semantic issues instead of preserving stale or resolved persisted semantic issues', () => {
+    const currentMissingRoleIssueId = 'semantics.p7:ds_main.p17:capacityRetention.p12:missing-role';
+    const staleOldFormatIssueId = 'semantics.ds_main.capacityRetention.missing-role';
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:31:10Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [
+          {
+            ...structuredClone(workspaceSnapshotFixture.datasets[0]),
+            columns: workspaceSnapshotFixture.datasets[0]!.columns.map((column) => column.columnId === 'capacityRetention'
+              ? {
+                  ...structuredClone(column),
+                  semanticRole: 'unassigned',
+                }
+              : structuredClone(column)),
+          },
+        ],
+        issues: [
+          {
+            issueId: currentMissingRoleIssueId,
+            kind: 'semantics.column.missing-role',
+            severity: 'warning',
+            status: 'resolved',
+            detectedAt: '2026-04-16T18:30:00Z',
+            source: {
+              module: 'workspace-kernel',
+              entityType: 'dataset-column',
+              entityId: 'capacityRetention',
+            },
+            title: 'Resolved stale semantic issue',
+            detail: 'This stale persisted issue was resolved before the current reopen gap returned.',
+            userMessage: 'Resolved stale semantic issue.',
+            contextRef: {
+              routeKey: 'workspaceDetail',
+              workspaceId: workspaceSnapshotFixture.workspaceId,
+              panel: 'semantics',
+            },
+            repairActions: [],
+            diagnostics: {
+              datasetId: 'ds_main',
+              columnId: 'capacityRetention',
+              field: 'semanticRole',
+            },
+          },
+          {
+            issueId: staleOldFormatIssueId,
+            kind: 'semantics.column.missing-role',
+            severity: 'warning',
+            status: 'open',
+            detectedAt: '2026-04-16T18:29:00Z',
+            source: {
+              module: 'workspace-kernel',
+              entityType: 'dataset-column',
+              entityId: 'capacityRetention',
+            },
+            title: 'Old semantic issue id shape',
+            detail: 'This stale persisted issue uses the pre-migration issue id shape.',
+            userMessage: 'Old semantic issue id shape.',
+            contextRef: {
+              routeKey: 'workspaceDetail',
+              workspaceId: workspaceSnapshotFixture.workspaceId,
+              panel: 'semantics',
+            },
+            repairActions: [],
+            diagnostics: {
+              datasetId: 'ds_main',
+              columnId: 'capacityRetention',
+              field: 'semanticRole',
+            },
+          },
+        ],
+        readiness: {
+          ...workspaceSnapshotFixture.readiness,
+          warningIssueIds: [staleOldFormatIssueId, currentMissingRoleIssueId],
+        },
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:31:15Z',
+      nowMs: () => 5600,
+    });
+
+    expect(reopened.snapshot.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          issueId: currentMissingRoleIssueId,
+          kind: 'semantics.column.missing-role',
+          status: 'open',
+          detectedAt: '2026-04-16T18:31:15Z',
+        }),
+      ]),
+    );
+    expect(reopened.snapshot.issues.map((issue) => issue.issueId)).not.toContain(staleOldFormatIssueId);
+    expect(reopened.snapshot.readiness.warningIssueIds).toContain(currentMissingRoleIssueId);
+    expect(reopened.snapshot.readiness.warningIssueIds).not.toContain(staleOldFormatIssueId);
+  });
+
+  it('preserves unresolved semantic issue repair state for still-current issues on reopen', () => {
+    const currentMissingRoleIssueId = 'semantics.p7:ds_main.p17:capacityRetention.p12:missing-role';
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:31:20Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [
+          {
+            ...structuredClone(workspaceSnapshotFixture.datasets[0]),
+            columns: workspaceSnapshotFixture.datasets[0]!.columns.map((column) => column.columnId === 'capacityRetention'
+              ? {
+                  ...structuredClone(column),
+                  semanticRole: 'unassigned',
+                }
+              : structuredClone(column)),
+          },
+        ],
+        issues: [
+          {
+            issueId: currentMissingRoleIssueId,
+            kind: 'semantics.column.missing-role',
+            severity: 'warning',
+            status: 'deferred',
+            detectedAt: '2026-04-16T18:20:00Z',
+            source: {
+              module: 'workspace-kernel',
+              entityType: 'dataset-column',
+              entityId: 'capacityRetention',
+            },
+            title: 'Column semantic role is not assigned',
+            detail: 'Existing current issue state should be preserved.',
+            userMessage: 'Assign an analytical role later.',
+            contextRef: {
+              routeKey: 'workspaceDetail',
+              workspaceId: workspaceSnapshotFixture.workspaceId,
+              panel: 'semantics',
+            },
+            repairActions: [],
+            diagnostics: {
+              datasetId: 'ds_main',
+              columnId: 'capacityRetention',
+              field: 'semanticRole',
+            },
+          },
+        ],
+        readiness: {
+          ...workspaceSnapshotFixture.readiness,
+          warningIssueIds: [currentMissingRoleIssueId],
+        },
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:31:25Z',
+      nowMs: () => 5650,
+    });
+
+    expect(reopened.snapshot.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          issueId: currentMissingRoleIssueId,
+          kind: 'semantics.column.missing-role',
+          status: 'deferred',
+          detectedAt: '2026-04-16T18:20:00Z',
+        }),
+      ]),
+    );
+    expect(reopened.snapshot.readiness.warningIssueIds).toContain(currentMissingRoleIssueId);
+  });
+
+  it('normalizes legacy semantic context shapes before strict dataset validation', () => {
+    const rawRecord: PersistedWorkspaceRecord = {
+      workspaceId: workspaceSnapshotFixture.workspaceId,
+      savedAt: '2026-04-16T18:31:30Z',
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [
+          {
+            ...structuredClone(workspaceSnapshotFixture.datasets[0]),
+            datasetContext: {
+              description: '  Battery lab export  ',
+              legacySource: 'unsupported legacy value',
+            },
+            columns: [
+              {
+                ...structuredClone(workspaceSnapshotFixture.datasets[0]!.columns[0]),
+                measurementContext: {
+                  notes: '  Captured at intake  ',
+                  legacyLabel: 'unsupported legacy value',
+                },
+              },
+              {
+                ...structuredClone(workspaceSnapshotFixture.datasets[0]!.columns[1]),
+                measurementContext: {
+                  legacyOnly: 'unsupported legacy value',
+                },
+              },
+            ],
+            columnCount: 2,
+          },
+        ],
+        graphDefinitions: [
+          {
+            ...structuredClone(graphDefinitionFixture),
+            roleAssignments: {
+              x: [],
+              y: [],
+              color: [],
+              size: [],
+              facetRow: [],
+              facetColumn: [],
+            },
+            issueIds: [],
+            evidenceIds: [],
+          },
+        ],
+      },
+      ledger: structuredClone(workspaceLedgerFixture),
+    };
+
+    const reopened = reopenPersistedWorkspaceRecord(rawRecord, {
+      compatibilityEnvelope,
+      now: () => '2026-04-16T18:31:35Z',
+      nowMs: () => 5750,
+    });
+
+    expect(reopened.snapshot.datasets[0]?.datasetContext).toEqual({
+      description: 'Battery lab export',
+    });
+    expect(reopened.snapshot.datasets[0]?.columns[0]?.measurementContext).toEqual({
+      notes: 'Captured at intake',
+    });
+    expect(reopened.snapshot.datasets[0]?.columns[1]?.measurementContext).toBeNull();
+    expect(reopened.localizedIssues).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'workspace.reopen.dataset.invalid-contract',
+        }),
+      ]),
+    );
   });
 
   it('drops stale transforms, formulas, and evidence while preserving unaffected state', () => {
@@ -546,8 +1432,18 @@ describe('reopenPersistedWorkspaceRecord', () => {
 
     expect(extraHandleReadCount).toBe(0);
     expect(session.kernelStore.getState().selectors.datasetFileHandles()).toEqual([]);
-    expect(session.report.snapshot.datasets[0]).not.toHaveProperty('sourceFile');
-    expect(session.kernelStore.getState().selectors.persistedWorkspace().datasets[0]).not.toHaveProperty('sourceFile');
+    expect(session.report.snapshot.datasets[0]).toMatchObject({
+      sourceFile: {
+        fileName: 'battery-cycles.csv',
+        fileHandleToken: 'dataset.ds_main.source-file',
+      },
+    });
+    expect(session.kernelStore.getState().selectors.persistedWorkspace().datasets[0]).toMatchObject({
+      sourceFile: {
+        fileName: 'battery-cycles.csv',
+        fileHandleToken: 'dataset.ds_main.source-file',
+      },
+    });
     expect(session.report.localizedIssues).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1776,7 +2672,7 @@ describe('reopenPersistedWorkspaceRecord', () => {
 
     expect(reopened.snapshot.readiness).toEqual({
       status: 'blocked',
-      blockingIssueIds: ['repair.blocked.externally'],
+      blockingIssueIds: expect.arrayContaining(['repair.blocked.externally']),
       warningIssueIds: ['issue_missing_reviewer_note'],
       provenanceCompleteness: 'complete',
     });
@@ -1836,8 +2732,8 @@ describe('reopenPersistedWorkspaceRecord', () => {
       ]),
     );
     expect(reopened.snapshot.readiness).toEqual({
-      status: 'warning',
-      blockingIssueIds: [],
+      status: 'blocked',
+      blockingIssueIds: expect.arrayContaining(['semantics.p7:ds_main.p19:graph_capacity_fade.p13:graph-invalid']),
       warningIssueIds: ['issue_missing_reviewer_note', 'workspace.reopen.001'],
       provenanceCompleteness: 'complete',
     });

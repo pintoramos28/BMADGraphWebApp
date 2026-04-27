@@ -42,6 +42,8 @@ export interface RepairEntryPointSummary {
 
 const scopeLabelByEntityType: Record<string, string> = {
   dataset: 'Dataset',
+  'dataset-column': 'Dataset column',
+  'dataset-context': 'Dataset context',
   evidence: 'Evidence',
   formula: 'Formula',
   graph: 'Graph',

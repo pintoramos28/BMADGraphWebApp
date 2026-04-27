@@ -1,8 +1,17 @@
-import type { PersistedDatasetFileHandle, WorkspaceRepository } from '../../services/persistence';
+import {
+  IndexedDbWorkspaceStorage,
+  createWorkspaceRepository,
+  type PersistedDatasetFileHandle,
+  type WorkspaceRepository,
+} from '../../services/persistence';
+import { workspaceSnapshotSchema } from '../../schemas/workspace';
 import type { WorkspaceKernelStore } from '../../stores/workspace-kernel';
-import { synchronizeDatasetSourceFileMetadata } from '../../stores/workspace-kernel/dataset-file-handle-metadata';
 import { preparePersistedDatasetFileHandlesForSave } from './persisted-dataset-file-handles';
-import { markWorkspaceKernelStorePersisted } from './workspace-kernel-persistence-state';
+import {
+  WORKSPACE_PENDING_SEMANTIC_SAVE_MESSAGE,
+  getPendingSemanticWorkspaceSave,
+  markWorkspaceKernelStorePersisted,
+} from './workspace-kernel-persistence-state';
 
 interface SaveWorkspaceKernelInput {
   repository: WorkspaceRepository;
@@ -13,9 +22,13 @@ interface SaveWorkspaceKernelInput {
   requiredDatasetFileHandleDatasetIds?: string[];
   benchmarkKey?: string;
   persistenceTimeoutMs?: number;
+  semanticSaveCorrelationId?: string;
 }
 
 export const WORKSPACE_SAVE_PERSISTENCE_TIMEOUT_MS = 30_000;
+export const WORKSPACE_INDEXEDDB_UNAVAILABLE_MESSAGE =
+  'Durable workspace persistence is unavailable in this browser session. Semantic changes were not saved.';
+export { WORKSPACE_PENDING_SEMANTIC_SAVE_MESSAGE } from './workspace-kernel-persistence-state';
 
 const datasetFileHandleObjectIdentities = new WeakMap<object, number>();
 let nextDatasetFileHandleObjectIdentity = 1;
@@ -168,9 +181,65 @@ function retainDatasetFileHandlesForSaveSnapshot(
   });
 }
 
+function synchronizeDatasetSourceFileMetadataForSave(
+  snapshot: ReturnType<WorkspaceKernelStore['getState']>['snapshot'],
+  datasetFileHandles: PersistedDatasetFileHandle[],
+) {
+  const sourceFilesByDatasetId = new Map(
+    datasetFileHandles.map((entry) => [
+      entry.datasetId,
+      {
+        fileName: entry.fileName,
+        fileHandleToken: entry.fileHandleToken,
+      },
+    ]),
+  );
+  let snapshotChanged = false;
+  const datasets = snapshot.datasets.map((dataset) => {
+    const sourceFile = sourceFilesByDatasetId.get(dataset.datasetId);
+
+    if (!sourceFile) {
+      return dataset;
+    }
+
+    if (
+      dataset.sourceFile?.fileName === sourceFile.fileName
+      && dataset.sourceFile?.fileHandleToken === sourceFile.fileHandleToken
+    ) {
+      return dataset;
+    }
+
+    snapshotChanged = true;
+
+    return {
+      ...dataset,
+      sourceFile,
+    };
+  });
+
+  return snapshotChanged
+    ? workspaceSnapshotSchema.parse({
+        ...snapshot,
+        datasets,
+      })
+    : snapshot;
+}
+
 export async function saveWorkspaceKernel(input: SaveWorkspaceKernelInput) {
   const state = input.kernelStore.getState();
   const workspaceVersion = state.workspaceVersion;
+  const pendingSemanticSave = getPendingSemanticWorkspaceSave(input.kernelStore);
+
+  if (pendingSemanticSave) {
+    const isOwningSemanticSave = input.semanticSaveCorrelationId === pendingSemanticSave.correlationId;
+
+    if (!isOwningSemanticSave || pendingSemanticSave.workspaceVersion !== workspaceVersion) {
+      throw new Error(WORKSPACE_PENDING_SEMANTIC_SAVE_MESSAGE);
+    }
+  } else if (input.semanticSaveCorrelationId) {
+    throw new Error('Semantic save ownership could not be verified. Save the workspace again.');
+  }
+
   const liveDatasetFileHandles = state.selectors.datasetFileHandles();
   const datasetFileHandles = input.datasetFileHandles ?? liveDatasetFileHandles;
   const liveDatasetFileHandleSignature = datasetFileHandleConcurrencySignature(liveDatasetFileHandles);
@@ -235,7 +304,7 @@ export async function saveWorkspaceKernel(input: SaveWorkspaceKernelInput) {
       throw new Error('Source file provenance could not be verified for this workspace save. Reselect the source file and confirm again.');
     }
 
-    const snapshotToSave = synchronizeDatasetSourceFileMetadata(snapshot, preparedDatasetFileHandles);
+    const snapshotToSave = synchronizeDatasetSourceFileMetadataForSave(snapshot, preparedDatasetFileHandles);
     const saveResult = await awaitSaveWithAbort(input.repository.saveCanonicalWorkspace({
       snapshot: snapshotToSave,
       ledger,
@@ -302,4 +371,16 @@ export async function saveWorkspaceKernel(input: SaveWorkspaceKernelInput) {
     }
     unsubscribe();
   }
+}
+
+export async function saveWorkspaceKernelToIndexedDb(
+  kernelStore: WorkspaceKernelStore,
+  input: Pick<SaveWorkspaceKernelInput, 'semanticSaveCorrelationId'> = {},
+) {
+  if (typeof indexedDB === 'undefined') {
+    throw new Error(WORKSPACE_INDEXEDDB_UNAVAILABLE_MESSAGE);
+  }
+
+  const repository = createWorkspaceRepository(new IndexedDbWorkspaceStorage());
+  await saveWorkspaceKernel({ repository, kernelStore, ...input });
 }

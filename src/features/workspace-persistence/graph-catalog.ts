@@ -39,8 +39,26 @@ const allowedMarksByFamily: Record<GraphFamily, string[]> = {
   boxplot: ['box', 'boxplot'],
 };
 
+interface GraphCompositionBlockedDiagnostic {
+  reason: string;
+  affectedColumnIds: string[];
+  semanticCatalogReason: boolean;
+}
+
 function isQuantitative(dataType: WorkspaceSnapshot['datasets'][number]['columns'][number]['dataType']) {
   return dataType === 'number' || dataType === 'integer';
+}
+
+function isTemporalOrQuantitative(dataType: WorkspaceSnapshot['datasets'][number]['columns'][number]['dataType']) {
+  return isQuantitative(dataType) || dataType === 'date' || dataType === 'datetime';
+}
+
+function assignedColumnsForRole(
+  graph: GraphDefinition,
+  role: keyof GraphDefinition['roleAssignments'],
+  columnById: Map<string, WorkspaceSnapshot['datasets'][number]['columns'][number]>,
+) {
+  return graph.roleAssignments[role].map((columnId) => columnById.get(columnId)).filter(Boolean);
 }
 
 function normalizeCatalogOverlayId(overlay: GraphOverlay): GraphCatalogOverlayId | null {
@@ -153,32 +171,74 @@ export function validateGraphComposition(input: {
 }) {
   const graph = normalizeGraphCatalogMetadata(input.graph);
   const blockedReasons: string[] = [];
+  const blockedDiagnostics: GraphCompositionBlockedDiagnostic[] = [];
+  const affectedColumnIds = new Set<string>();
   const family = graph.family;
   const columnById = new Map(input.dataset.columns.map((column) => [column.columnId, column]));
   const assignedColumnIds = Object.values(graph.roleAssignments).flat();
 
+  const flagAssignedColumns = (columnIds: string[]) => {
+    columnIds.forEach((columnId) => {
+      if (columnById.has(columnId)) {
+        affectedColumnIds.add(columnId);
+      }
+    });
+  };
+
+  const existingColumnIds = (columnIds: string[]) => columnIds.filter((columnId) => columnById.has(columnId));
+
+  const addBlockedReason = (reason: string, reasonAffectedColumnIds: string[] = [], semanticCatalogReason = false) => {
+    blockedReasons.push(reason);
+    reasonAffectedColumnIds.forEach((columnId) => {
+      if (columnById.has(columnId)) {
+        affectedColumnIds.add(columnId);
+      }
+    });
+    blockedDiagnostics.push({
+      reason,
+      affectedColumnIds: existingColumnIds(reasonAffectedColumnIds),
+      semanticCatalogReason,
+    });
+  };
+
+  const flagColumnsMatching = (
+    role: keyof GraphDefinition['roleAssignments'],
+    predicate: (column: WorkspaceSnapshot['datasets'][number]['columns'][number]) => boolean,
+  ) => {
+    graph.roleAssignments[role].forEach((columnId) => {
+      const column = columnById.get(columnId);
+
+      if (column && predicate(column)) {
+        affectedColumnIds.add(columnId);
+      }
+    });
+  };
+
   if (!family) {
-    blockedReasons.push('Saved graph family could not be matched to the locked MVP graph catalog.');
+    addBlockedReason('Saved graph family could not be matched to the locked MVP graph catalog.');
   }
 
   if (family && graph.templateId && familyByTemplateId[graph.templateId] !== family) {
-    blockedReasons.push(
+    addBlockedReason(
       `Template "${graph.templateId}" is not allowed for graph family "${family}".`,
     );
   }
 
   if (family && graph.marks.some((mark) => !allowedMarksByFamily[family].includes(mark))) {
-    blockedReasons.push(
+    addBlockedReason(
       `Marks ${graph.marks.join(', ')} are not allowed for graph family "${family}".`,
+      assignedColumnIds,
     );
+    flagAssignedColumns(assignedColumnIds);
   }
 
   if (assignedColumnIds.length > 4) {
-    blockedReasons.push('Locked MVP graph compositions cannot exceed four assigned analytical variables.');
+    addBlockedReason('Locked MVP graph compositions cannot exceed four assigned analytical variables.');
   }
 
   if (family && family !== 'scatter' && graph.roleAssignments.size.length > 0) {
-    blockedReasons.push(`Size encoding is not allowed for graph family "${family}".`);
+    addBlockedReason(`Size encoding is not allowed for graph family "${family}".`, graph.roleAssignments.size);
+    flagAssignedColumns(graph.roleAssignments.size);
   }
 
   const overlayIds = graph.overlays.map((overlay) => ({
@@ -188,20 +248,98 @@ export function validateGraphComposition(input: {
 
   overlayIds.forEach(({ overlay, overlayId }) => {
     if (!overlayId) {
-      blockedReasons.push(
+      addBlockedReason(
         `Overlay "${overlay.overlayId}" could not be matched to the locked MVP overlay catalog.`,
       );
       return;
     }
 
     if (family && !allowedOverlayIdsByFamily[family].includes(overlayId)) {
-      blockedReasons.push(`Overlay "${overlayId}" is not allowed for graph family "${family}".`);
+      addBlockedReason(`Overlay "${overlayId}" is not allowed for graph family "${family}".`);
     }
   });
 
   if (family === 'scatter' || family === 'line' || family === 'bar') {
     if (graph.roleAssignments.x.length === 0 || graph.roleAssignments.y.length === 0) {
-      blockedReasons.push(`Graph family "${family}" requires both x and y role assignments.`);
+      addBlockedReason(`Graph family "${family}" requires both x and y role assignments.`);
+    }
+  }
+
+  if (family === 'scatter') {
+    const xColumns = assignedColumnsForRole(graph, 'x', columnById);
+    const yColumns = assignedColumnsForRole(graph, 'y', columnById);
+    const sizeColumns = assignedColumnsForRole(graph, 'size', columnById);
+
+    if (![...xColumns, ...yColumns].every((column) => column && isQuantitative(column.dataType))) {
+      const reasonAffectedColumnIds = [
+        ...graph.roleAssignments.x.filter((columnId) => {
+          const column = columnById.get(columnId);
+
+          return column && !isQuantitative(column.dataType);
+        }),
+        ...graph.roleAssignments.y.filter((columnId) => {
+          const column = columnById.get(columnId);
+
+          return column && !isQuantitative(column.dataType);
+        }),
+      ];
+
+      addBlockedReason('Scatter compositions require quantitative columns for x and y roles.', reasonAffectedColumnIds, true);
+      flagColumnsMatching('x', (column) => !isQuantitative(column.dataType));
+      flagColumnsMatching('y', (column) => !isQuantitative(column.dataType));
+    }
+
+    if (sizeColumns.length > 0 && !sizeColumns.every((column) => column && isQuantitative(column.dataType))) {
+      const reasonAffectedColumnIds = graph.roleAssignments.size.filter((columnId) => {
+        const column = columnById.get(columnId);
+
+        return column && !isQuantitative(column.dataType);
+      });
+
+      addBlockedReason('Scatter size encodings require quantitative columns.', reasonAffectedColumnIds, true);
+      flagColumnsMatching('size', (column) => !isQuantitative(column.dataType));
+    }
+  }
+
+  if (family === 'line') {
+    const xColumns = assignedColumnsForRole(graph, 'x', columnById);
+    const yColumns = assignedColumnsForRole(graph, 'y', columnById);
+
+    if (!xColumns.every((column) => column && isTemporalOrQuantitative(column.dataType))) {
+      const reasonAffectedColumnIds = graph.roleAssignments.x.filter((columnId) => {
+        const column = columnById.get(columnId);
+
+        return column && !isTemporalOrQuantitative(column.dataType);
+      });
+
+      addBlockedReason('Line compositions require temporal or quantitative columns for the x role.', reasonAffectedColumnIds, true);
+      flagColumnsMatching('x', (column) => !isTemporalOrQuantitative(column.dataType));
+    }
+
+    if (!yColumns.every((column) => column && isQuantitative(column.dataType))) {
+      const reasonAffectedColumnIds = graph.roleAssignments.y.filter((columnId) => {
+        const column = columnById.get(columnId);
+
+        return column && !isQuantitative(column.dataType);
+      });
+
+      addBlockedReason('Line compositions require quantitative columns for the y role.', reasonAffectedColumnIds, true);
+      flagColumnsMatching('y', (column) => !isQuantitative(column.dataType));
+    }
+  }
+
+  if (family === 'bar') {
+    const yColumns = assignedColumnsForRole(graph, 'y', columnById);
+
+    if (!yColumns.every((column) => column && isQuantitative(column.dataType))) {
+      const reasonAffectedColumnIds = graph.roleAssignments.y.filter((columnId) => {
+        const column = columnById.get(columnId);
+
+        return column && !isQuantitative(column.dataType);
+      });
+
+      addBlockedReason('Bar compositions require quantitative columns for the y role.', reasonAffectedColumnIds, true);
+      flagColumnsMatching('y', (column) => !isQuantitative(column.dataType));
     }
   }
 
@@ -213,17 +351,34 @@ export function validateGraphComposition(input: {
       || (graph.roleAssignments.y.length > 0 && graph.roleAssignments.x.length === 0);
 
     if (graph.roleAssignments.facetRow.length > 0 || graph.roleAssignments.facetColumn.length > 0) {
-      blockedReasons.push(
+      addBlockedReason(
         'Histogram compositions cannot use row or column faceting in the locked MVP catalog.',
+        [...graph.roleAssignments.facetRow, ...graph.roleAssignments.facetColumn],
       );
+      flagAssignedColumns([...graph.roleAssignments.facetRow, ...graph.roleAssignments.facetColumn]);
     }
 
     if (!singleAxisAssigned) {
-      blockedReasons.push('Histogram compositions must assign exactly one quantitative measure to x or y.');
+      addBlockedReason('Histogram compositions must assign exactly one quantitative measure to x or y.');
     }
 
     if (![...xColumns, ...yColumns].every((column) => column && isQuantitative(column.dataType))) {
-      blockedReasons.push('Histogram compositions require quantitative columns on the populated axis.');
+      const reasonAffectedColumnIds = [
+        ...graph.roleAssignments.x.filter((columnId) => {
+          const column = columnById.get(columnId);
+
+          return column && !isQuantitative(column.dataType);
+        }),
+        ...graph.roleAssignments.y.filter((columnId) => {
+          const column = columnById.get(columnId);
+
+          return column && !isQuantitative(column.dataType);
+        }),
+      ];
+
+      addBlockedReason('Histogram compositions require quantitative columns on the populated axis.', reasonAffectedColumnIds, true);
+      flagColumnsMatching('x', (column) => !isQuantitative(column.dataType));
+      flagColumnsMatching('y', (column) => !isQuantitative(column.dataType));
     }
   }
 
@@ -235,12 +390,24 @@ export function validateGraphComposition(input: {
     const groupingCount = assignedColumns.length - quantitativeCount;
 
     if (quantitativeCount === 0 || groupingCount === 0) {
-      blockedReasons.push('Boxplot compositions require both a quantitative measure and a grouping field.');
+      addBlockedReason('Boxplot compositions require both a quantitative measure and a grouping field.', assignedColumnIds, true);
+      flagAssignedColumns(assignedColumnIds);
     }
   }
 
   return {
     graph,
     blockedReasons,
+    affectedColumnIds: [...affectedColumnIds],
+    blockedDiagnostics,
+  };
+}
+
+export function selectSemanticGraphCatalogDiagnostics(validation: ReturnType<typeof validateGraphComposition>) {
+  const semanticDiagnostics = validation.blockedDiagnostics.filter((diagnostic) => diagnostic.semanticCatalogReason);
+
+  return {
+    blockedReasons: semanticDiagnostics.map((diagnostic) => diagnostic.reason),
+    affectedColumnIds: [...new Set(semanticDiagnostics.flatMap((diagnostic) => diagnostic.affectedColumnIds))],
   };
 }

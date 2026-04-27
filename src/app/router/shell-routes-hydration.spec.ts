@@ -467,7 +467,7 @@ describe('resolveWorkspaceKernelStore hydration', () => {
     expect(loadWorkspaceRecord).toHaveBeenCalledTimes(2);
   });
 
-  it('emits recovery issues and clears source metadata when live handle validation drops a persisted handle', async () => {
+  it('emits recovery issues and preserves source metadata when live handle validation drops a persisted handle', async () => {
     const workspaceId = 'workspace_demo_stale_handle';
     const store = await resolveWorkspaceKernelStore(workspaceId, {
       loadWorkspaceRecord: async () => ({
@@ -509,7 +509,12 @@ describe('resolveWorkspaceKernelStore hydration', () => {
     });
 
     expect(store.getState().selectors.datasetFileHandles()).toEqual([]);
-    expect(store.getState().snapshot.datasets[0]).not.toHaveProperty('sourceFile');
+    expect(store.getState().snapshot.datasets[0]).toMatchObject({
+      sourceFile: {
+        fileName: 'live.csv',
+        fileHandleToken: 'live_token',
+      },
+    });
     expect(store.getState().snapshot.issues).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

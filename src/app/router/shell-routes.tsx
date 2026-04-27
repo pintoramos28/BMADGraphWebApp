@@ -5,6 +5,7 @@ import { useStore } from 'zustand';
 
 import { routePath, ROUTES } from './routes';
 import { WorkspaceImportRoute } from '../../features/import';
+import { WorkspaceSemanticsPanel } from '../../features/semantics';
 import {
   parsePersistedDatasetFileHandles,
   retainDatasetFileHandlesForSnapshot,
@@ -784,7 +785,12 @@ function ShellWorkspaceRoute({ workspaceId }: { workspaceId?: string | undefined
     );
   }
 
-  return <WorkspaceImportRoute key={resolvedWorkspaceId} workspaceId={resolvedWorkspaceId} kernelStore={kernelStore} />;
+  return (
+    <>
+      <WorkspaceImportRoute key={resolvedWorkspaceId} workspaceId={resolvedWorkspaceId} kernelStore={kernelStore} />
+      <WorkspaceSemanticsPanel workspaceId={resolvedWorkspaceId} kernelStore={kernelStore} />
+    </>
+  );
 }
 
 function ShellReviewRoute({ workspaceId }: { workspaceId: string | undefined }) {

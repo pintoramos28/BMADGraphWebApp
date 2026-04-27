@@ -786,4 +786,34 @@ test.describe('import preview workspace', () => {
     await expectAc3Outcome(page);
     await expect(page.locator('article').filter({ hasText: 'Canonical datasets' })).toContainText('1');
   });
+
+  test('persists semantic edits and updates the graph-ready summary without re-import', async ({ page }) => {
+    await disableNativeFilePicker(page);
+    await page.goto(workspacePreviewRoute);
+    await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
+
+    await chooseCsvFixture(page, csvFixture);
+
+    await expectAc3Outcome(page);
+    await page.getByRole('button', { name: 'Confirm Import' }).click();
+    await expect(page.getByText(previewConfirmedMessage)).toBeVisible();
+
+    await expect(page.getByRole('region', { name: 'Workspace semantics' })).toBeVisible();
+    await page.getByLabel('Semantic role for Reading').selectOption('y');
+    await page.getByLabel('Unit for Reading').fill('ms');
+    await page.getByLabel('Measurement context for Reading').fill('Instrument reading captured after stabilization.');
+    await page.getByLabel('Label for Reading').fill('Observed Reading');
+    await page.getByRole('button', { name: 'Save semantics for Observed Reading' }).click();
+
+    await expect(page.getByText('Saved semantic choices for Observed Reading.')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Graph-ready semantic summary' })).toBeVisible();
+    await expect(page.getByText('y: Observed Reading')).toBeVisible();
+
+    await page.reload();
+
+    await expect(page.getByRole('heading', { name: 'Import preview workspace' })).toBeVisible();
+    await expect(page.getByLabel('Label for Observed Reading')).toHaveValue('Observed Reading');
+    await expect(page.getByText('y: Observed Reading')).toBeVisible();
+    await expect(page.getByText('Confirm or reject this import')).toHaveCount(0);
+  });
 });

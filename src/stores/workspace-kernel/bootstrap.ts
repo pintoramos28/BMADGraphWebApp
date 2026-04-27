@@ -21,6 +21,7 @@ export function createImportWorkspaceSnapshot(workspaceId: string): WorkspaceSna
       {
         datasetId: IMPORT_BOOTSTRAP_DATASET_ID,
         displayName: 'Import preview placeholder dataset',
+        datasetContext: null,
         sourceKind: 'import-preview',
         fingerprint: `preview:${workspaceId}:bootstrap`,
         rowCount: 0,

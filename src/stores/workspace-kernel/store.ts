@@ -10,10 +10,15 @@ import {
   replaceIssuesReducer,
   rollbackConfirmedImportReducer,
   replaceSnapshotReducer,
+  updateColumnSemanticsReducer,
+  updateDatasetContextReducer,
   updateTelemetrySnapshotReducer,
 } from './reducers';
 import {
+  selectActiveDataset,
+  selectActiveDatasetColumns,
   selectActiveGraphId,
+  selectGraphReadySemanticSummary,
   selectKernelCompatibilityState,
   selectPersistedDatasetFileHandles,
   selectKernelIssueState,
@@ -80,6 +85,12 @@ export function createWorkspaceKernelStore(options: WorkspaceKernelStoreOptions)
       confirmImport(input) {
         set((state) => confirmImportReducer(toKernelData(state), input));
       },
+      updateColumnSemantics(input) {
+        set((state) => updateColumnSemanticsReducer(toKernelData(state), input));
+      },
+      updateDatasetContext(input) {
+        set((state) => updateDatasetContextReducer(toKernelData(state), input));
+      },
       rollbackConfirmedImport(input) {
         set((state) => rollbackConfirmedImportReducer(toKernelData(state), input));
       },
@@ -123,6 +134,15 @@ export function createWorkspaceKernelStore(options: WorkspaceKernelStoreOptions)
       },
       compatibilityState() {
         return selectKernelCompatibilityState(toKernelData(get()));
+      },
+      activeDataset() {
+        return structuredClone(selectActiveDataset(toKernelData(get())));
+      },
+      activeDatasetColumns() {
+        return selectActiveDatasetColumns(toKernelData(get()));
+      },
+      graphReadySemanticSummary() {
+        return selectGraphReadySemanticSummary(toKernelData(get()));
       },
       persistedWorkspace() {
         return selectPersistedWorkspace(toKernelData(get()));

@@ -567,7 +567,779 @@ describe('WorkspaceKernel', () => {
     ]);
   });
 
-  it('clears stale source metadata when no persisted dataset file handle remains', () => {
+  it('updates one column semantics through a ledgered kernel command while preserving source provenance', () => {
+    const sourceHandle = {
+      name: 'battery-cycles.csv',
+      async getFile() {
+        return { name: 'battery-cycles.csv' } as File;
+      },
+      async createWritable() {
+        return { async write() {}, async close() {} };
+      },
+    };
+    const store = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [
+          {
+            ...structuredClone(workspaceSnapshotFixture.datasets[0]!),
+            sourceFile: {
+              fileName: 'battery-cycles.csv',
+              fileHandleToken: 'dataset.ds_main.source-file',
+            },
+          },
+        ],
+      },
+      ledger: workspaceLedgerFixture,
+      datasetFileHandles: [
+        {
+          datasetId: 'ds_main',
+          fileName: 'battery-cycles.csv',
+          fileHandleToken: 'dataset.ds_main.source-file',
+          handle: sourceHandle,
+        },
+      ],
+    });
+
+    store.getState().commands.updateColumnSemantics({
+      datasetId: 'ds_main',
+      columnId: 'capacityRetention',
+      label: 'Capacity Retention',
+      dataType: 'number',
+      semanticRole: 'y',
+      unit: 'percent',
+      measurementContext: { notes: 'Measured after each cycle.' },
+      description: 'Normalized retention ratio.',
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_001',
+      occurredAt: '2026-04-22T15:00:00Z',
+    });
+
+    const dataset = store.getState().snapshot.datasets[0]!;
+
+    expect(dataset.rows).toBeUndefined();
+    expect(dataset.sourceFile).toEqual({
+      fileName: 'battery-cycles.csv',
+      fileHandleToken: 'dataset.ds_main.source-file',
+    });
+    expect(store.getState().selectors.datasetFileHandles()).toEqual([
+      expect.objectContaining({ handle: sourceHandle }),
+    ]);
+    expect(dataset.columns.find((column) => column.columnId === 'capacityRetention')).toMatchObject({
+      sourceName: 'CapacityRetentionPct',
+      label: 'Capacity Retention',
+      unit: 'percent',
+      measurementContext: { notes: 'Measured after each cycle.' },
+      description: 'Normalized retention ratio.',
+    });
+    expect(dataset.columns.find((column) => column.columnId === 'cycleIndex')).toMatchObject({
+      label: 'Cycle',
+      semanticRole: 'x',
+    });
+    expect(store.getState().ledger.at(-1)).toMatchObject({
+      type: 'dataset.column-semantics.updated',
+      correlationId: 'cmd_semantics_001',
+      entityRefs: {
+        datasetId: 'ds_main',
+        columnId: 'capacityRetention',
+      },
+    });
+  });
+
+  it('rejects semantic column and dataset-context commands for placeholder datasets', () => {
+    const previewDataset = {
+      ...structuredClone(workspaceSnapshotFixture.datasets[0]!),
+      sourceKind: 'import-preview',
+    } satisfies WorkspaceSnapshot['datasets'][number];
+    const store = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [previewDataset],
+      },
+      ledger: [],
+    });
+    const initialWorkspaceVersion = store.getState().workspaceVersion;
+
+    expect(() => store.getState().commands.updateColumnSemantics({
+      datasetId: 'ds_main',
+      columnId: 'capacityRetention',
+      label: 'Should not stick',
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_preview_column',
+      occurredAt: '2026-04-27T10:05:00Z',
+    })).toThrow('Semantic edits require a confirmed dataset.');
+
+    expect(() => store.getState().commands.updateDatasetContext({
+      datasetId: 'ds_main',
+      datasetContext: { description: 'Should not stick' },
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_preview_context',
+      occurredAt: '2026-04-27T10:06:00Z',
+    })).toThrow('Semantic edits require a confirmed dataset.');
+
+    expect(store.getState().workspaceVersion).toBe(initialWorkspaceVersion);
+    expect(store.getState().snapshot.datasets[0]?.columns.find((column) => column.columnId === 'capacityRetention')).toMatchObject({
+      label: 'Capacity Retention %',
+    });
+    expect(store.getState().snapshot.datasets[0]?.datasetContext).toEqual(previewDataset.datasetContext);
+
+    const recoveryDataset = {
+      ...structuredClone(workspaceSnapshotFixture.datasets[0]!),
+      sourceKind: 'recovery',
+    } satisfies WorkspaceSnapshot['datasets'][number];
+    const recoveryStore = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [recoveryDataset],
+      },
+      ledger: [],
+    });
+    const initialRecoveryWorkspaceVersion = recoveryStore.getState().workspaceVersion;
+
+    expect(() => recoveryStore.getState().commands.updateColumnSemantics({
+      datasetId: 'ds_main',
+      columnId: 'capacityRetention',
+      label: 'Should not stick',
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_recovery_column',
+      occurredAt: '2026-04-27T10:07:00Z',
+    })).toThrow('Semantic edits require a confirmed dataset.');
+
+    expect(() => recoveryStore.getState().commands.updateDatasetContext({
+      datasetId: 'ds_main',
+      datasetContext: { description: 'Should not stick' },
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_recovery_context',
+      occurredAt: '2026-04-27T10:08:00Z',
+    })).toThrow('Semantic edits require a confirmed dataset.');
+
+    expect(recoveryStore.getState().workspaceVersion).toBe(initialRecoveryWorkspaceVersion);
+  });
+
+  it('scopes graph-ready semantic summaries to confirmed datasets', () => {
+    const placeholderDataset = {
+      ...structuredClone(workspaceSnapshotFixture.datasets[0]!),
+      sourceKind: 'recovery',
+    } satisfies WorkspaceSnapshot['datasets'][number];
+    const store = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [placeholderDataset],
+      },
+      ledger: [],
+    });
+
+    expect(store.getState().selectors.activeDataset()?.sourceKind).toBe('recovery');
+    expect(store.getState().selectors.graphReadySemanticSummary()).toBeNull();
+  });
+
+  it('reconciles only semantic issues for the targeted dataset and exposes the graph-ready summary', () => {
+    const store = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        issues: [issueRecordFixture],
+      },
+      ledger: [],
+    });
+
+    store.getState().commands.updateColumnSemantics({
+      datasetId: 'ds_main',
+      columnId: 'capacityRetention',
+      semanticRole: 'unassigned',
+      measurementContext: null,
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_002',
+      occurredAt: '2026-04-22T15:02:00Z',
+    });
+
+    expect(store.getState().snapshot.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ issueId: issueRecordFixture.issueId }),
+        expect.objectContaining({
+          kind: 'semantics.column.missing-role',
+          source: expect.objectContaining({ entityType: 'dataset-column', entityId: 'capacityRetention' }),
+          diagnostics: expect.objectContaining({ datasetId: 'ds_main', columnId: 'capacityRetention' }),
+        }),
+        expect.objectContaining({
+          kind: 'semantics.graph.composition-invalid',
+          severity: 'blocking',
+        }),
+      ]),
+    );
+    expect(store.getState().selectors.graphReadySemanticSummary()).toMatchObject({
+      datasetId: 'ds_main',
+      missingRoleColumnIds: ['capacityRetention'],
+      missingContextColumnIds: ['capacityRetention'],
+    });
+    expect(store.getState().selectors.readinessSummary()).toMatchObject({
+      status: 'blocked',
+    });
+  });
+
+  it('invalidates graph assignments when a column semantic role no longer matches its assigned graph role', () => {
+    const store = createWorkspaceKernelStore({
+      snapshot: structuredClone(workspaceSnapshotFixture),
+      ledger: [],
+    });
+
+    store.getState().commands.updateColumnSemantics({
+      datasetId: 'ds_main',
+      columnId: 'capacityRetention',
+      semanticRole: 'x',
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_role_conflict',
+      occurredAt: '2026-04-22T15:03:00Z',
+    });
+
+    expect(store.getState().snapshot.graphDefinitions[0]).toMatchObject({
+      issueIds: expect.arrayContaining(['semantics.p7:ds_main.p19:graph_capacity_fade.p13:graph-invalid']),
+    });
+    expect(store.getState().snapshot.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'semantics.graph.composition-invalid',
+          detail: expect.stringContaining('assigned to conflicting graph role "y" but its active semantic role is "x"'),
+          repairActions: expect.arrayContaining([
+            expect.objectContaining({
+              command: 'repair.focusSemanticField',
+              label: 'Edit column semantics',
+              args: expect.objectContaining({
+                datasetId: 'ds_main',
+                columnId: 'capacityRetention',
+              }),
+            }),
+            expect.objectContaining({
+              command: 'repair.focusGraph',
+              args: expect.objectContaining({
+                graphId: 'graph_capacity_fade',
+              }),
+            }),
+          ]),
+          diagnostics: expect.objectContaining({
+            affectedColumnIds: expect.arrayContaining(['capacityRetention']),
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('restores graph status when semantic graph conflicts are cleared', () => {
+    const candidateGraph = {
+      ...structuredClone(workspaceSnapshotFixture.graphDefinitions[0]!),
+      status: 'candidate' as const,
+      roleAssignments: {
+        ...structuredClone(workspaceSnapshotFixture.graphDefinitions[0]!.roleAssignments),
+        facetColumn: [],
+      },
+      issueIds: [],
+    } satisfies GraphDefinition;
+    const store = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        graphDefinitions: [candidateGraph],
+        referenceGraphId: candidateGraph.graphId,
+        issues: [],
+      },
+      ledger: [],
+    });
+
+    store.getState().commands.updateColumnSemantics({
+      datasetId: 'ds_main',
+      columnId: 'capacityRetention',
+      semanticRole: 'x',
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_status_conflict',
+      occurredAt: '2026-04-22T15:03:05Z',
+    });
+
+    expect(store.getState().snapshot.graphDefinitions[0]).toMatchObject({
+      status: 'stale',
+      issueIds: expect.arrayContaining(['semantics.p7:ds_main.p19:graph_capacity_fade.p13:graph-invalid']),
+    });
+
+    store.getState().commands.updateColumnSemantics({
+      datasetId: 'ds_main',
+      columnId: 'capacityRetention',
+      semanticRole: 'y',
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_status_restored',
+      occurredAt: '2026-04-22T15:03:06Z',
+    });
+
+    expect(store.getState().snapshot.graphDefinitions[0]).toMatchObject({
+      status: 'reference',
+      issueIds: [],
+    });
+    expect(store.getState().snapshot.issues.find((issue) => issue.kind === 'semantics.graph.composition-invalid')).toBeUndefined();
+  });
+
+  it('does not promote issue-free stale graphs that were not stale because of semantic issues', () => {
+    const externallyStaleGraph = {
+      ...structuredClone(workspaceSnapshotFixture.graphDefinitions[0]!),
+      status: 'stale' as const,
+      roleAssignments: {
+        ...structuredClone(workspaceSnapshotFixture.graphDefinitions[0]!.roleAssignments),
+        facetColumn: [],
+      },
+      issueIds: [],
+    } satisfies GraphDefinition;
+    const store = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        graphDefinitions: [externallyStaleGraph],
+        referenceGraphId: externallyStaleGraph.graphId,
+        issues: [],
+      },
+      ledger: [],
+    });
+
+    store.getState().commands.updateColumnSemantics({
+      datasetId: 'ds_main',
+      columnId: 'capacityRetention',
+      label: 'Capacity Retention Confirmed',
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_unrelated_stale_graph',
+      occurredAt: '2026-04-22T15:03:07Z',
+    });
+
+    expect(store.getState().snapshot.graphDefinitions[0]).toMatchObject({
+      status: 'stale',
+      issueIds: [],
+    });
+    expect(store.getState().snapshot.issues.find((issue) => issue.kind === 'semantics.graph.composition-invalid')).toBeUndefined();
+  });
+
+  it('flags conflicting roles when the same column is assigned to multiple graph roles', () => {
+    const store = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        graphDefinitions: workspaceSnapshotFixture.graphDefinitions.map((graph) => ({
+          ...structuredClone(graph),
+          roleAssignments: {
+            ...structuredClone(graph.roleAssignments),
+            x: ['capacityRetention'],
+            y: ['capacityRetention'],
+          },
+          issueIds: [],
+        })),
+        issues: [],
+      },
+      ledger: [],
+    });
+
+    store.getState().commands.updateColumnSemantics({
+      datasetId: 'ds_main',
+      columnId: 'capacityRetention',
+      semanticRole: 'y',
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_multi_role_conflict',
+      occurredAt: '2026-04-22T15:03:15Z',
+    });
+
+    expect(store.getState().snapshot.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'semantics.graph.composition-invalid',
+          detail: expect.stringContaining('conflicting graph role "x"'),
+          diagnostics: expect.objectContaining({
+            affectedColumnIds: expect.arrayContaining(['capacityRetention']),
+          }),
+          repairActions: expect.arrayContaining([
+            expect.objectContaining({
+              command: 'repair.focusSemanticField',
+              args: expect.objectContaining({
+                columnId: 'capacityRetention',
+              }),
+            }),
+          ]),
+        }),
+      ]),
+    );
+  });
+
+  it('invalidates graph assignments when a quantitative graph column changes to a string data type', () => {
+    const store = createWorkspaceKernelStore({
+      snapshot: structuredClone(workspaceSnapshotFixture),
+      ledger: [],
+    });
+
+    store.getState().commands.updateColumnSemantics({
+      datasetId: 'ds_main',
+      columnId: 'capacityRetention',
+      dataType: 'string',
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_data_type_conflict',
+      occurredAt: '2026-04-22T15:03:30Z',
+    });
+
+    expect(store.getState().snapshot.graphDefinitions[0]).toMatchObject({
+      status: 'reference',
+      issueIds: expect.arrayContaining(['semantics.p7:ds_main.p19:graph_capacity_fade.p13:graph-invalid']),
+    });
+    expect(store.getState().snapshot.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'semantics.graph.composition-invalid',
+          severity: 'blocking',
+          detail: expect.stringContaining('Scatter compositions require quantitative columns for x and y roles.'),
+          diagnostics: expect.objectContaining({
+            datasetId: 'ds_main',
+            graphId: 'graph_capacity_fade',
+            affectedColumnIds: expect.arrayContaining(['capacityRetention']),
+          }),
+          repairActions: expect.arrayContaining([
+            expect.objectContaining({
+              command: 'repair.focusSemanticField',
+              args: expect.objectContaining({
+                datasetId: 'ds_main',
+                columnId: 'capacityRetention',
+              }),
+            }),
+          ]),
+        }),
+      ]),
+    );
+    expect(store.getState().selectors.readinessSummary()).toMatchObject({
+      status: 'blocked',
+    });
+  });
+
+  it('keeps nonsemantic graph catalog failures out of semantic graph issue regeneration', () => {
+    const store = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        graphDefinitions: workspaceSnapshotFixture.graphDefinitions.map((graph) => ({
+          ...structuredClone(graph),
+          marks: ['point', 'bar'],
+          issueIds: [],
+        })),
+        issues: [],
+      },
+      ledger: [],
+    });
+
+    store.getState().commands.updateColumnSemantics({
+      datasetId: 'ds_main',
+      columnId: 'capacityRetention',
+      dataType: 'string',
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_mixed_catalog_conflict',
+      occurredAt: '2026-04-22T15:03:45Z',
+    });
+
+    const semanticGraphIssue = store.getState().snapshot.issues.find(
+      (issue) => issue.kind === 'semantics.graph.composition-invalid',
+    );
+
+    expect(semanticGraphIssue).toMatchObject({
+      detail: expect.stringContaining('Scatter compositions require quantitative columns for x and y roles.'),
+      diagnostics: expect.objectContaining({
+        blockedReasons: expect.arrayContaining(['Scatter compositions require quantitative columns for x and y roles.']),
+        affectedColumnIds: expect.arrayContaining(['capacityRetention']),
+      }),
+    });
+    expect(semanticGraphIssue?.detail).not.toContain('Marks point, bar are not allowed');
+    expect((semanticGraphIssue?.diagnostics as { blockedReasons?: string[] }).blockedReasons).not.toEqual(
+      expect.arrayContaining(['Marks point, bar are not allowed for graph family "scatter".']),
+    );
+  });
+
+  it('reopens regenerated graph semantic issues when blocking reasons change', () => {
+    const initialStore = createWorkspaceKernelStore({
+      snapshot: structuredClone(workspaceSnapshotFixture),
+      ledger: [],
+    });
+
+    initialStore.getState().commands.updateColumnSemantics({
+      datasetId: 'ds_main',
+      columnId: 'capacityRetention',
+      semanticRole: 'x',
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_initial_graph_conflict',
+      occurredAt: '2026-04-22T15:03:00Z',
+    });
+
+    const graphIssue = initialStore.getState().snapshot.issues.find(
+      (issue) => issue.kind === 'semantics.graph.composition-invalid',
+    );
+
+    expect(graphIssue).toBeDefined();
+
+    const deferredSnapshot: WorkspaceSnapshot = {
+      ...initialStore.getState().snapshot,
+      issues: initialStore.getState().snapshot.issues.map((issue) => (
+        issue.issueId === graphIssue?.issueId
+          ? {
+              ...issue,
+              status: 'deferred' as const,
+              detectedAt: '2026-04-22T15:03:00Z',
+            }
+          : issue
+      )),
+    };
+    const store = createWorkspaceKernelStore({
+      snapshot: deferredSnapshot,
+      ledger: [],
+    });
+
+    store.getState().commands.updateColumnSemantics({
+      datasetId: 'ds_main',
+      columnId: 'capacityRetention',
+      semanticRole: 'unassigned',
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_changed_graph_conflict',
+      occurredAt: '2026-04-22T15:04:00Z',
+    });
+
+    expect(store.getState().snapshot.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          issueId: graphIssue?.issueId,
+          kind: 'semantics.graph.composition-invalid',
+          status: 'open',
+          detectedAt: '2026-04-22T15:04:00Z',
+          detail: expect.stringContaining('has no active semantic role'),
+        }),
+      ]),
+    );
+  });
+
+  it('reopens regenerated graph semantic issues when affected columns change', () => {
+    const graphIssueId = 'semantics.p7:ds_main.p19:graph_capacity_fade.p13:graph-invalid';
+    const deferredGraphIssue = {
+      issueId: graphIssueId,
+      kind: 'semantics.graph.composition-invalid',
+      severity: 'blocking' as const,
+      status: 'deferred' as const,
+      detectedAt: '2026-04-22T15:03:00Z',
+      source: {
+        module: 'workspace-kernel',
+        entityType: 'graph',
+        entityId: 'graph_capacity_fade',
+      },
+      title: 'Graph composition needs semantic review',
+      detail: 'Scatter compositions require quantitative columns for x and y roles.',
+      userMessage: 'A graph that uses this dataset no longer matches the active semantic choices.',
+      contextRef: {
+        routeKey: 'workspaceDetail' as const,
+        workspaceId: workspaceSnapshotFixture.workspaceId,
+        graphId: 'graph_capacity_fade',
+        panel: 'semantics',
+      },
+      repairActions: [],
+      diagnostics: {
+        datasetId: 'ds_main',
+        graphId: 'graph_capacity_fade',
+        blockedReasons: ['Scatter compositions require quantitative columns for x and y roles.'],
+        affectedColumnIds: ['temperatureBand'],
+      },
+    } satisfies WorkspaceSnapshot['issues'][number];
+    const store = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        issues: [deferredGraphIssue],
+      },
+      ledger: [],
+    });
+
+    store.getState().commands.updateColumnSemantics({
+      datasetId: 'ds_main',
+      columnId: 'capacityRetention',
+      dataType: 'string',
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_changed_graph_target',
+      occurredAt: '2026-04-22T15:04:30Z',
+    });
+
+    expect(store.getState().snapshot.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          issueId: graphIssueId,
+          kind: 'semantics.graph.composition-invalid',
+          status: 'open',
+          detectedAt: '2026-04-22T15:04:30Z',
+          diagnostics: expect.objectContaining({
+            affectedColumnIds: expect.arrayContaining(['capacityRetention']),
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('generates unambiguous semantic issue ids for dotted dataset and column identifiers', () => {
+    const baseDataset = workspaceSnapshotFixture.datasets[0]!;
+    const firstDataset = {
+      ...structuredClone(baseDataset),
+      datasetId: 'a.b',
+      columns: [
+        {
+          ...structuredClone(baseDataset.columns[0]!),
+          columnId: 'c',
+          semanticRole: 'x' as const,
+        },
+      ],
+      columnCount: 1,
+    };
+    const secondDataset = {
+      ...structuredClone(baseDataset),
+      datasetId: 'a',
+      columns: [
+        {
+          ...structuredClone(baseDataset.columns[0]!),
+          columnId: 'b.c',
+          semanticRole: 'x' as const,
+        },
+      ],
+      columnCount: 1,
+    };
+    const store = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        datasets: [firstDataset, secondDataset],
+        graphDefinitions: workspaceSnapshotFixture.graphDefinitions.map((graph) => ({
+          ...structuredClone(graph),
+          datasetId: 'a.b',
+          roleAssignments: {
+            x: [],
+            y: [],
+            color: [],
+            size: [],
+            facetRow: [],
+            facetColumn: [],
+          },
+          issueIds: [],
+        })),
+        issues: [],
+        readiness: {
+          status: 'ready',
+          blockingIssueIds: [],
+          warningIssueIds: [],
+          provenanceCompleteness: 'complete',
+        },
+      },
+      ledger: [],
+    });
+
+    store.getState().commands.updateColumnSemantics({
+      datasetId: 'a.b',
+      columnId: 'c',
+      semanticRole: 'unassigned',
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_dotted_first',
+      occurredAt: '2026-04-22T15:06:00Z',
+    });
+    store.getState().commands.updateColumnSemantics({
+      datasetId: 'a',
+      columnId: 'b.c',
+      semanticRole: 'unassigned',
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_dotted_second',
+      occurredAt: '2026-04-22T15:07:00Z',
+    });
+
+    const missingRoleIssueIds = store.getState().snapshot.issues
+      .filter((issue) => issue.kind === 'semantics.column.missing-role')
+      .map((issue) => issue.issueId);
+
+    expect(missingRoleIssueIds).toHaveLength(2);
+    expect(new Set(missingRoleIssueIds).size).toBe(2);
+    expect(missingRoleIssueIds).not.toContain('semantics.a.b.c.missing-role');
+  });
+
+  it('preserves unrelated semantic issue repair state when reconciling one edited column', () => {
+    const unrelatedSemanticIssue = {
+      issueId: 'semantics.ds_main.temperatureBand.missing-context',
+      kind: 'semantics.column.missing-context',
+      severity: 'info' as const,
+      status: 'deferred' as const,
+      detectedAt: '2026-04-20T10:00:00Z',
+      source: {
+        module: 'workspace-kernel',
+        entityType: 'dataset-column',
+        entityId: 'temperatureBand',
+      },
+      title: 'Column measurement context is missing',
+      detail: 'Temperature context was deferred.',
+      userMessage: 'Add context later.',
+      contextRef: {
+        routeKey: 'workspaceDetail' as const,
+        workspaceId: workspaceSnapshotFixture.workspaceId,
+        panel: 'semantics',
+      },
+      repairActions: [],
+      diagnostics: {
+        datasetId: 'ds_main',
+        columnId: 'temperatureBand',
+        field: 'measurementContext',
+      },
+    } satisfies WorkspaceSnapshot['issues'][number];
+    const store = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        issues: [unrelatedSemanticIssue],
+      },
+      ledger: [],
+    });
+
+    store.getState().commands.updateColumnSemantics({
+      datasetId: 'ds_main',
+      columnId: 'capacityRetention',
+      measurementContext: null,
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_target_only',
+      occurredAt: '2026-04-22T15:04:00Z',
+    });
+
+    expect(store.getState().snapshot.issues).toEqual(
+      expect.arrayContaining([
+        unrelatedSemanticIssue,
+        expect.objectContaining({
+          issueId: 'semantics.p7:ds_main.p17:capacityRetention.p15:missing-context',
+          severity: 'warning',
+          status: 'open',
+        }),
+      ]),
+    );
+    expect(store.getState().snapshot.readiness.warningIssueIds).toContain(
+      'semantics.p7:ds_main.p17:capacityRetention.p15:missing-context',
+    );
+  });
+
+  it('updates dataset context without changing imported rows or graph role assignments', () => {
+    const store = createWorkspaceKernelStore({
+      snapshot: structuredClone(workspaceSnapshotFixture),
+      ledger: [],
+    });
+    const originalRows = store.getState().snapshot.datasets[0]!.rows;
+    const originalRoleAssignments = structuredClone(store.getState().snapshot.graphDefinitions[0]!.roleAssignments);
+
+    store.getState().commands.updateDatasetContext({
+      datasetId: 'ds_main',
+      datasetContext: {
+        description: 'Updated context',
+        measurementNotes: 'Updated measurement notes',
+      },
+      actorId: 'local-user',
+      correlationId: 'cmd_semantics_003',
+      occurredAt: '2026-04-22T15:05:00Z',
+    });
+
+    expect(store.getState().snapshot.datasets[0]).toMatchObject({
+      displayName: 'battery-cycles.csv',
+      datasetContext: {
+        description: 'Updated context',
+        measurementNotes: 'Updated measurement notes',
+      },
+    });
+    expect(store.getState().snapshot.datasets[0]!.rows).toBe(originalRows);
+    expect(store.getState().snapshot.graphDefinitions[0]!.roleAssignments).toEqual(originalRoleAssignments);
+    expect(store.getState().ledger.at(-1)).toMatchObject({
+      type: 'dataset.context.updated',
+      correlationId: 'cmd_semantics_003',
+    });
+  });
+
+  it('preserves handleless source metadata when no persisted dataset file handle remains', () => {
     const store = createWorkspaceKernelStore({
       snapshot: {
         ...structuredClone(workspaceSnapshotFixture),
@@ -586,7 +1358,12 @@ describe('WorkspaceKernel', () => {
 
     store.getState().commands.replaceDatasetFileHandles([]);
 
-    expect(store.getState().selectors.persistedWorkspace().datasets[0]).not.toHaveProperty('sourceFile');
+    expect(store.getState().selectors.persistedWorkspace().datasets[0]).toMatchObject({
+      sourceFile: {
+        fileName: 'battery-cycles.csv',
+        fileHandleToken: 'dataset.ds_main.source-file',
+      },
+    });
   });
 
   it('rejects ledgers whose workspace versions move backwards', () => {
@@ -629,30 +1406,37 @@ describe('WorkspaceKernel', () => {
         },
         missingValuePolicy: 'mark-empty',
       },
-      dataset: {
-        datasetId: 'dataset_import_confirm_001',
-        displayName: 'dirty.csv',
-        sourceKind: 'csv-file',
+        dataset: {
+          datasetId: 'dataset_import_confirm_001',
+          displayName: 'dirty.csv',
+          datasetContext: null,
+          sourceKind: 'csv-file',
         fingerprint: 'preview:preview_csv',
         rowCount: 3,
         columnCount: 2,
         columns: [
-          {
-            columnId: 'col_1',
-            sourceName: 'Sample',
-            dataType: 'string',
-            semanticRole: 'unassigned',
-            unit: null,
-            status: 'confirmed',
-          },
-          {
-            columnId: 'col_2',
-            sourceName: 'Reading',
-            dataType: 'number',
-            semanticRole: 'unassigned',
-            unit: null,
-            status: 'confirmed',
-          },
+            {
+              columnId: 'col_1',
+              sourceName: 'Sample',
+              label: 'Sample',
+              dataType: 'string',
+              semanticRole: 'unassigned',
+              unit: null,
+              measurementContext: null,
+              description: null,
+              status: 'confirmed',
+            },
+            {
+              columnId: 'col_2',
+              sourceName: 'Reading',
+              label: 'Reading',
+              dataType: 'number',
+              semanticRole: 'unassigned',
+              unit: null,
+              measurementContext: null,
+              description: null,
+              status: 'confirmed',
+            },
         ],
       },
       issues: [
@@ -712,8 +1496,34 @@ describe('WorkspaceKernel', () => {
           }),
           repairActions: [],
         }),
+        expect.objectContaining({
+          issueId: 'semantics.p26:dataset_import_confirm_001.p5:col_1.p12:missing-role',
+          kind: 'semantics.column.missing-role',
+          source: expect.objectContaining({
+            entityType: 'dataset-column',
+            entityId: 'col_1',
+          }),
+        }),
+        expect.objectContaining({
+          issueId: 'semantics.p26:dataset_import_confirm_001.p23:missing-dataset-context',
+          kind: 'semantics.dataset.missing-context',
+          severity: 'warning',
+        }),
       ]),
     );
+    expect(store.getState().snapshot.readiness.warningIssueIds).toEqual(
+      expect.arrayContaining([
+        'semantics.p26:dataset_import_confirm_001.p5:col_1.p15:missing-context',
+        'semantics.p26:dataset_import_confirm_001.p5:col_2.p15:missing-context',
+        'semantics.p26:dataset_import_confirm_001.p23:missing-dataset-context',
+      ]),
+    );
+    expect(store.getState().selectors.graphReadySemanticSummary()).toMatchObject({
+      datasetId: 'dataset_import_confirm_001',
+      missingRoleColumnIds: ['col_1', 'col_2'],
+      missingContextColumnIds: ['col_1', 'col_2'],
+      datasetContextMissing: true,
+    });
     expect(store.getState().ledger.at(-1)).toMatchObject({
       type: 'import.confirmed',
       correlationId: 'confirm_preview_csv',
@@ -764,6 +1574,7 @@ describe('WorkspaceKernel', () => {
         dataset: {
           datasetId: 'dataset_import_blocked',
           displayName: 'blocked.csv',
+          datasetContext: null,
           sourceKind: 'csv-file',
           fingerprint: 'preview:preview_csv',
           rowCount: 1,
@@ -772,9 +1583,12 @@ describe('WorkspaceKernel', () => {
             {
               columnId: 'col_1',
               sourceName: 'Sample',
+              label: 'Sample',
               dataType: 'string',
               semanticRole: 'unassigned',
               unit: null,
+              measurementContext: null,
+              description: null,
               status: 'confirmed',
             },
           ],

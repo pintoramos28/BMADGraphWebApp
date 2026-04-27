@@ -58,6 +58,22 @@ export interface ConfirmImportInput extends KernelMutationMeta {
   issues: IssueRecord[];
 }
 
+export interface UpdateColumnSemanticsInput extends KernelMutationMeta {
+  datasetId: string;
+  columnId: string;
+  label?: string;
+  dataType?: WorkspaceSnapshot['datasets'][number]['columns'][number]['dataType'];
+  semanticRole?: WorkspaceSnapshot['datasets'][number]['columns'][number]['semanticRole'];
+  unit?: string | null;
+  measurementContext?: WorkspaceSnapshot['datasets'][number]['columns'][number]['measurementContext'];
+  description?: string | null;
+}
+
+export interface UpdateDatasetContextInput extends KernelMutationMeta {
+  datasetId: string;
+  datasetContext: WorkspaceSnapshot['datasets'][number]['datasetContext'];
+}
+
 export interface RollbackConfirmedImportInput extends KernelMutationMeta {
   datasetId: string;
   graphId: string;
@@ -92,6 +108,8 @@ export interface WorkspaceKernelCommands {
   replaceDatasetFileHandles(datasetFileHandles: PersistedDatasetFileHandle[]): void;
   promoteReferenceGraph(input: PromoteReferenceGraphInput): void;
   confirmImport(input: ConfirmImportInput): void;
+  updateColumnSemantics(input: UpdateColumnSemanticsInput): void;
+  updateDatasetContext(input: UpdateDatasetContextInput): void;
   rollbackConfirmedImport(input: RollbackConfirmedImportInput): void;
   replaceIssues(issues: IssueRecord[], meta?: KernelMutationMeta): void;
   updateTelemetrySnapshot(
@@ -114,6 +132,9 @@ export interface WorkspaceKernelSelectors {
   readinessSummary(): ReadinessSummary;
   telemetrySnapshot(): TelemetrySummary;
   compatibilityState(): CompatibilityState;
+  activeDataset(): WorkspaceSnapshot['datasets'][number] | null;
+  activeDatasetColumns(): WorkspaceSnapshot['datasets'][number]['columns'];
+  graphReadySemanticSummary(): import('../../features/semantics/semantic-model').GraphReadySemanticSummary | null;
   persistedWorkspace(): WorkspaceSnapshot;
 }
 

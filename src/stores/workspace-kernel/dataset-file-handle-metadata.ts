@@ -20,15 +20,7 @@ export function synchronizeDatasetSourceFileMetadata(
     const sourceFile = sourceFilesByDatasetId.get(dataset.datasetId);
 
     if (!sourceFile) {
-      if (!dataset.sourceFile) {
-        return dataset;
-      }
-
-      snapshotChanged = true;
-
-      const datasetWithoutSourceFile = { ...dataset };
-      delete datasetWithoutSourceFile.sourceFile;
-      return datasetWithoutSourceFile;
+      return dataset;
     }
 
     if (

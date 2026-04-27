@@ -1694,6 +1694,21 @@ describe('commitConfirmedImportToKernel', () => {
     expect(
       kernelStore.getState().snapshot.datasets.some((dataset) => dataset.datasetId === 'dataset_import_confirm_token_concurrent_rollback'),
     ).toBe(false);
+    expect(kernelStore.getState().snapshot.issues).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: expect.stringMatching(/^semantics\./),
+          diagnostics: expect.objectContaining({
+            datasetId: 'dataset_import_confirm_token_concurrent_rollback',
+          }),
+        }),
+      ]),
+    );
+    expect(kernelStore.getState().snapshot.readiness.warningIssueIds).not.toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('dataset_import_confirm_token_concurrent_rollback'),
+      ]),
+    );
     expect(kernelStore.getState().snapshot.telemetrySnapshot.lastGraphRenderMs).toBe(321);
     expect(kernelStore.getState().ledger.at(-1)).toEqual(
       expect.objectContaining({

@@ -542,8 +542,11 @@ describe('workspace reopen integration', () => {
     expect(record?.snapshot).toEqual(
       expect.objectContaining({
         datasets: [
-          expect.not.objectContaining({
-            sourceFile: expect.anything(),
+          expect.objectContaining({
+            sourceFile: {
+              fileName: 'battery-cycles.csv',
+              fileHandleToken: 'dataset.ds_main.source-file',
+            },
           }),
         ],
       }),
@@ -561,7 +564,7 @@ describe('workspace reopen integration', () => {
       })(),
     });
 
-    expect(reopenedAfterRelink.report.localizedIssues).not.toEqual(
+    expect(reopenedAfterRelink.report.localizedIssues).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           kind: 'workspace.reopen.dataset.missing-file-handle',
@@ -569,8 +572,11 @@ describe('workspace reopen integration', () => {
       ]),
     );
     expect(reopenedAfterRelink.kernelStore.getState().snapshot.datasets).toEqual([
-      expect.not.objectContaining({
-        sourceFile: expect.anything(),
+      expect.objectContaining({
+        sourceFile: {
+          fileName: 'battery-cycles.csv',
+          fileHandleToken: 'dataset.ds_main.source-file',
+        },
       }),
     ]);
     expect(reopenedAfterRelink.kernelStore.getState().selectors.datasetFileHandles()).toEqual([]);
@@ -678,8 +684,11 @@ describe('workspace reopen integration', () => {
     expect(record?.snapshot).toEqual(
       expect.objectContaining({
         datasets: [
-          expect.not.objectContaining({
-            sourceFile: expect.anything(),
+          expect.objectContaining({
+            sourceFile: {
+              fileName: 'battery-cycles.csv',
+              fileHandleToken: 'dataset.ds_main.source-file',
+            },
           }),
         ],
       }),
@@ -697,7 +706,7 @@ describe('workspace reopen integration', () => {
       })(),
     });
 
-    expect(reopenedAfterImplicitSave.report.localizedIssues).not.toEqual(
+    expect(reopenedAfterImplicitSave.report.localizedIssues).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           kind: 'workspace.reopen.dataset.missing-file-handle',
@@ -705,8 +714,11 @@ describe('workspace reopen integration', () => {
       ]),
     );
     expect(reopenedAfterImplicitSave.kernelStore.getState().snapshot.datasets).toEqual([
-      expect.not.objectContaining({
-        sourceFile: expect.anything(),
+      expect.objectContaining({
+        sourceFile: {
+          fileName: 'battery-cycles.csv',
+          fileHandleToken: 'dataset.ds_main.source-file',
+        },
       }),
     ]);
   });
@@ -1197,7 +1209,12 @@ describe('workspace reopen integration', () => {
         displayName: 'battery-cycles.csv',
       }),
     ]);
-    expect(reopened.kernelStore.getState().snapshot.datasets[0]).not.toHaveProperty('sourceFile');
+    expect(reopened.kernelStore.getState().snapshot.datasets[0]).toMatchObject({
+      sourceFile: {
+        fileName: 'battery-cycles.csv',
+        fileHandleToken: 'dataset.ds_main.source-file',
+      },
+    });
     expect(reopened.report.localizedIssues).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1221,7 +1238,7 @@ describe('workspace reopen integration', () => {
       ]),
     );
     expect(reopened.kernelStore.getState().selectors.readinessSummary()).toMatchObject({
-      status: 'warning',
+      status: 'blocked',
       warningIssueCount: expect.any(Number),
     });
   });
@@ -1372,7 +1389,7 @@ describe('workspace reopen integration', () => {
         }),
       ]),
     );
-    expect(reopenedAfterUpgrade.kernelStore.getState().selectors.readinessSummary().status).toBe('warning');
+    expect(reopenedAfterUpgrade.kernelStore.getState().selectors.readinessSummary().status).toBe('blocked');
     expect(reopenedAfterUpgrade.kernelStore.getState().selectors.compatibilityState()).toMatchObject({
       appBuildVersion: '0.2.0',
       isReadable: true,

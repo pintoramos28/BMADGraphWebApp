@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { compareSemver, matchesVersionRange } from '../../lib/semver';
-import { validateGraphComposition } from './graph-catalog';
+import { selectSemanticGraphCatalogDiagnostics, validateGraphComposition } from './graph-catalog';
 import {
   isCompatibleDatasetFileHandle,
   parsePersistedDatasetFileHandles,
@@ -263,6 +263,81 @@ function extractEntityId(value: unknown, key: string, fallback: string) {
   return normalizeEntityIdCandidate(candidate) ?? fallback;
 }
 
+function normalizeOptionalContextObject(value: unknown, supportedFields: readonly string[], legacyStringField: string) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    const trimmedValue = value.trim();
+
+    return trimmedValue.length > 0 ? { [legacyStringField]: trimmedValue } : null;
+  }
+
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const context = value as Record<string, unknown>;
+  const normalizedContext = Object.fromEntries(
+    supportedFields.flatMap((field) => {
+      const entry = context[field];
+
+      return typeof entry === 'string' && entry.trim().length > 0 ? [[field, entry.trim()]] : [];
+    }),
+  );
+  const hasMeaningfulContext = Object.keys(normalizedContext).length > 0;
+
+  return hasMeaningfulContext ? normalizedContext : null;
+}
+
+function backfillDatasetSemanticFields(value: unknown) {
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  const dataset = value as Record<string, unknown>;
+  const supportedSemanticRoles = new Set(['unassigned', 'x', 'y', 'color', 'size', 'facetRow', 'facetColumn']);
+  const columns = Array.isArray(dataset.columns)
+    ? dataset.columns.map((columnValue) => {
+        if (!columnValue || typeof columnValue !== 'object') {
+          return columnValue;
+        }
+
+        const column = columnValue as Record<string, unknown>;
+        const sourceName = typeof column.sourceName === 'string' && column.sourceName.trim().length > 0
+          ? column.sourceName
+          : typeof column.columnId === 'string' && column.columnId.trim().length > 0
+            ? column.columnId
+            : 'Column';
+
+        return {
+          ...column,
+          label: typeof column.label === 'string' && column.label.trim().length > 0 ? column.label : sourceName,
+          semanticRole: typeof column.semanticRole === 'string' && supportedSemanticRoles.has(column.semanticRole)
+            ? column.semanticRole
+            : 'unassigned',
+          measurementContext: normalizeOptionalContextObject(
+            column.measurementContext,
+            ['quantity', 'method', 'condition', 'notes'],
+            'notes',
+          ),
+          description: column.description === undefined ? null : column.description,
+        };
+      })
+    : dataset.columns;
+
+  return {
+    ...dataset,
+    datasetContext: normalizeOptionalContextObject(
+      dataset.datasetContext,
+      ['description', 'measurementNotes', 'sourceDescription'],
+      'description',
+    ),
+    columns,
+  };
+}
+
 function createGraphSelectionSource(selection: GraphSelectionSlot): IssueRecord['source'] {
   return {
     module: 'workspace-persistence',
@@ -388,6 +463,369 @@ function createRepairActions(input: {
   return repairActions;
 }
 
+function semanticIssueId(...parts: string[]) {
+  const sanitizedParts = parts.map((part) => part.trim().replace(/[^A-Za-z0-9._:-]+/g, '_')).filter(Boolean);
+  const [namespace, ...entityParts] = sanitizedParts;
+
+  return [
+    namespace,
+    ...entityParts.map((part) => `p${part.length}:${part}`),
+  ].filter(Boolean).join('.');
+}
+
+function hasMeaningfulSemanticContext(context: Record<string, string | undefined> | null | undefined) {
+  return Boolean(context && Object.values(context).some((value) => typeof value === 'string' && value.trim().length > 0));
+}
+
+function semanticGraphDiagnosticsMatch(existingIssue: IssueRecord, generatedIssue: IssueRecord) {
+  const existingDiagnostics = existingIssue.diagnostics as { affectedColumnIds?: unknown; blockedReasons?: unknown };
+  const generatedDiagnostics = generatedIssue.diagnostics as { affectedColumnIds?: unknown; blockedReasons?: unknown };
+  const existingBlockedReasons = Array.isArray(existingDiagnostics.blockedReasons)
+    ? existingDiagnostics.blockedReasons.filter((reason): reason is string => typeof reason === 'string')
+    : [];
+  const generatedBlockedReasons = Array.isArray(generatedDiagnostics.blockedReasons)
+    ? generatedDiagnostics.blockedReasons.filter((reason): reason is string => typeof reason === 'string')
+    : [];
+  const existingAffectedColumnIds = Array.isArray(existingDiagnostics.affectedColumnIds)
+    ? existingDiagnostics.affectedColumnIds.filter((columnId): columnId is string => typeof columnId === 'string')
+    : [];
+  const generatedAffectedColumnIds = Array.isArray(generatedDiagnostics.affectedColumnIds)
+    ? generatedDiagnostics.affectedColumnIds.filter((columnId): columnId is string => typeof columnId === 'string')
+    : [];
+
+  return existingBlockedReasons.length === generatedBlockedReasons.length
+    && existingBlockedReasons.every((reason, index) => reason === generatedBlockedReasons[index])
+    && existingAffectedColumnIds.length === generatedAffectedColumnIds.length
+    && existingAffectedColumnIds.every((columnId, index) => columnId === generatedAffectedColumnIds[index]);
+}
+
+function createReopenSemanticRepairActions(input: {
+  issueId: string;
+  workspaceId: string;
+  datasetId: string;
+  columnId?: string;
+}) {
+  return [
+    {
+      actionId: 'repair.focusSemanticField',
+      label: input.columnId ? 'Edit column semantics' : 'Edit dataset context',
+      command: 'repair.focusSemanticField',
+      args: {
+        issueId: input.issueId,
+        workspaceId: input.workspaceId,
+        datasetId: input.datasetId,
+        ...(input.columnId ? { columnId: input.columnId } : {}),
+      },
+    },
+  ] satisfies IssueRecord['repairActions'];
+}
+
+function createReopenGraphRepairAction(graphId: string) {
+  return {
+    actionId: 'repair.focusGraph',
+    label: 'Inspect graph',
+    command: 'repair.focusGraph',
+    args: {
+      graphId,
+    },
+  } satisfies IssueRecord['repairActions'][number];
+}
+
+function collectReopenGraphSemanticBlockedReasons(graph: GraphDefinition, dataset: WorkspaceSnapshot['datasets'][number]) {
+  const columnById = new Map(dataset.columns.map((column) => [column.columnId, column]));
+  const assignedRolesByColumnId = new Map<string, string[]>();
+  const blockedReasons: string[] = [];
+  const affectedColumnIds = new Set<string>();
+
+  Object.entries(graph.roleAssignments).forEach(([role, columnIds]) => {
+    columnIds.forEach((columnId) => {
+      assignedRolesByColumnId.set(columnId, [...(assignedRolesByColumnId.get(columnId) ?? []), role]);
+    });
+  });
+
+  assignedRolesByColumnId.forEach((assignedRoles, columnId) => {
+    const column = columnById.get(columnId);
+
+    if (!column) {
+      return;
+    }
+
+    if (column.semanticRole === 'unassigned') {
+      affectedColumnIds.add(column.columnId);
+      blockedReasons.push(
+        `Column "${column.label}" is assigned to graph role "${assignedRoles.join(', ')}" but has no active semantic role.`,
+      );
+      return;
+    }
+
+    const conflictingRoles = assignedRoles.filter((role) => role !== column.semanticRole);
+
+    if (conflictingRoles.length > 0) {
+      affectedColumnIds.add(column.columnId);
+      blockedReasons.push(
+        `Column "${column.label}" is assigned to conflicting graph role "${conflictingRoles.join(', ')}" but its active semantic role is "${column.semanticRole}".`,
+      );
+    }
+  });
+
+  return {
+    blockedReasons,
+    affectedColumnIds: [...affectedColumnIds],
+  };
+}
+
+function createReopenSemanticState(input: {
+  workspaceId: string;
+  referenceGraphId: string;
+  datasets: WorkspaceSnapshot['datasets'];
+  graphDefinitions: GraphDefinition[];
+  occurredAt: string;
+  existingIssues: IssueRecord[];
+}) {
+  const generatedIssueIds = new Set<string>();
+  const existingSemanticIssuesById = new Map(
+    input.existingIssues
+      .filter((issue) => issue.kind.startsWith('semantics.'))
+      .map((issue) => [issue.issueId, issue] as const),
+  );
+  const semanticIssues: IssueRecord[] = [];
+  const pushIssue = (issue: IssueRecord) => {
+    if (generatedIssueIds.has(issue.issueId)) {
+      return issue.issueId;
+    }
+
+    generatedIssueIds.add(issue.issueId);
+
+    const existingIssue = existingSemanticIssuesById.get(issue.issueId);
+
+    if (!existingIssue || existingIssue.status === 'resolved') {
+      semanticIssues.push(issue);
+      return issue.issueId;
+    }
+
+    if (issue.kind === 'semantics.graph.composition-invalid' && !semanticGraphDiagnosticsMatch(existingIssue, issue)) {
+      semanticIssues.push(issue);
+      return issue.issueId;
+    }
+
+    semanticIssues.push({
+      ...issue,
+      status: existingIssue.status,
+      detectedAt: existingIssue.detectedAt,
+    });
+
+    return issue.issueId;
+  };
+
+  const semanticDatasets = input.datasets.filter(
+    (dataset) => dataset.sourceKind !== 'import-preview' && dataset.sourceKind !== 'recovery',
+  );
+  const existingIssueIds = new Set(input.existingIssues.map((issue) => issue.issueId));
+  const restoreGraphStatusAfterSemanticClear = (graph: GraphDefinition, priorIssueIds: string[]) => {
+    const hadSemanticIssue = graph.issueIds.some((issueId) => issueId.startsWith('semantics.'));
+    const remainingNonSemanticIssueIds = priorIssueIds.filter((issueId) => existingIssueIds.has(issueId));
+
+    if (graph.status !== 'stale' || remainingNonSemanticIssueIds.length > 0 || !hadSemanticIssue) {
+      return graph.status;
+    }
+
+    return input.referenceGraphId === graph.graphId ? 'reference' : 'candidate';
+  };
+
+  semanticDatasets.forEach((dataset) => {
+    dataset.columns.forEach((column) => {
+      if (column.semanticRole === 'unassigned') {
+        const issueId = semanticIssueId('semantics', dataset.datasetId, column.columnId, 'missing-role');
+
+        pushIssue(issueRecordSchema.parse({
+          issueId,
+          kind: 'semantics.column.missing-role',
+          severity: 'warning',
+          status: 'open',
+          detectedAt: input.occurredAt,
+          source: {
+            module: 'workspace-kernel',
+            entityType: 'dataset-column',
+            entityId: column.columnId,
+          },
+          title: 'Column semantic role is not assigned',
+          detail: `Column "${column.label}" in dataset "${dataset.displayName}" is not assigned to an analytical role.`,
+          userMessage: `Assign an analytical role for "${column.label}" before graphing begins.`,
+          contextRef: {
+            routeKey: 'workspaceDetail',
+            workspaceId: input.workspaceId,
+            panel: 'semantics',
+          },
+          repairActions: createReopenSemanticRepairActions({
+            issueId,
+            workspaceId: input.workspaceId,
+            datasetId: dataset.datasetId,
+            columnId: column.columnId,
+          }),
+          diagnostics: {
+            datasetId: dataset.datasetId,
+            columnId: column.columnId,
+            field: 'semanticRole',
+          },
+        }));
+      }
+
+      if (!hasMeaningfulSemanticContext(column.measurementContext)) {
+        const issueId = semanticIssueId('semantics', dataset.datasetId, column.columnId, 'missing-context');
+
+        pushIssue(issueRecordSchema.parse({
+          issueId,
+          kind: 'semantics.column.missing-context',
+          severity: 'warning',
+          status: 'open',
+          detectedAt: input.occurredAt,
+          source: {
+            module: 'workspace-kernel',
+            entityType: 'dataset-column',
+            entityId: column.columnId,
+          },
+          title: 'Column measurement context is missing',
+          detail: `Column "${column.label}" does not yet describe how its measurement should be interpreted.`,
+          userMessage: `Add measurement context for "${column.label}" when this meaning should be defensible.`,
+          contextRef: {
+            routeKey: 'workspaceDetail',
+            workspaceId: input.workspaceId,
+            panel: 'semantics',
+          },
+          repairActions: createReopenSemanticRepairActions({
+            issueId,
+            workspaceId: input.workspaceId,
+            datasetId: dataset.datasetId,
+            columnId: column.columnId,
+          }),
+          diagnostics: {
+            datasetId: dataset.datasetId,
+            columnId: column.columnId,
+            field: 'measurementContext',
+          },
+        }));
+      }
+    });
+
+    if (!hasMeaningfulSemanticContext(dataset.datasetContext)) {
+      const issueId = semanticIssueId('semantics', dataset.datasetId, 'missing-dataset-context');
+
+      pushIssue(issueRecordSchema.parse({
+        issueId,
+        kind: 'semantics.dataset.missing-context',
+        severity: 'warning',
+        status: 'open',
+        detectedAt: input.occurredAt,
+        source: {
+          module: 'workspace-kernel',
+          entityType: 'dataset-context',
+          entityId: dataset.datasetId,
+        },
+        title: 'Dataset context is missing',
+        detail: `Dataset "${dataset.displayName}" does not yet have graph-ready context notes.`,
+        userMessage: `Add dataset context for "${dataset.displayName}" when graph readers need source or measurement notes.`,
+        contextRef: {
+          routeKey: 'workspaceDetail',
+          workspaceId: input.workspaceId,
+          panel: 'semantics',
+        },
+        repairActions: createReopenSemanticRepairActions({
+          issueId,
+          workspaceId: input.workspaceId,
+          datasetId: dataset.datasetId,
+        }),
+        diagnostics: {
+          datasetId: dataset.datasetId,
+          field: 'datasetContext',
+        },
+      }));
+    }
+  });
+
+  const datasetById = new Map(semanticDatasets.map((dataset) => [dataset.datasetId, dataset] as const));
+  const graphDefinitions = input.graphDefinitions.map((graph) => {
+    const priorIssueIds = graph.issueIds.filter((issueId) => !issueId.startsWith('semantics.'));
+    const dataset = datasetById.get(graph.datasetId);
+
+    if (!dataset) {
+      return {
+        ...graph,
+        issueIds: priorIssueIds,
+      } satisfies GraphDefinition;
+    }
+
+    const graphValidation = validateGraphComposition({ graph, dataset });
+    const semanticCatalogValidation = selectSemanticGraphCatalogDiagnostics(graphValidation);
+    const semanticGraphValidation = collectReopenGraphSemanticBlockedReasons(graphValidation.graph, dataset);
+    const blockedReasons = [
+      ...semanticCatalogValidation.blockedReasons,
+      ...semanticGraphValidation.blockedReasons,
+    ];
+    const affectedColumnIds = [...new Set([
+      ...semanticCatalogValidation.affectedColumnIds,
+      ...semanticGraphValidation.affectedColumnIds,
+    ])];
+
+    if (blockedReasons.length === 0) {
+      return {
+        ...graphValidation.graph,
+        status: restoreGraphStatusAfterSemanticClear(graph, priorIssueIds),
+        issueIds: priorIssueIds,
+      } satisfies GraphDefinition;
+    }
+
+    const issueId = semanticIssueId('semantics', dataset.datasetId, graph.graphId, 'graph-invalid');
+
+    pushIssue(issueRecordSchema.parse({
+      issueId,
+      kind: 'semantics.graph.composition-invalid',
+      severity: 'blocking',
+      status: 'open',
+      detectedAt: input.occurredAt,
+      source: {
+        module: 'workspace-kernel',
+        entityType: 'graph',
+        entityId: graph.graphId,
+      },
+      title: 'Graph composition needs semantic review',
+      detail: blockedReasons.join(' '),
+      userMessage: 'A graph that uses this dataset no longer matches the active semantic choices.',
+      contextRef: {
+        routeKey: 'workspaceDetail',
+        workspaceId: input.workspaceId,
+        graphId: graph.graphId,
+        panel: 'semantics',
+      },
+      repairActions: [
+        ...affectedColumnIds.flatMap((columnId) => createReopenSemanticRepairActions({
+          issueId,
+          workspaceId: input.workspaceId,
+          datasetId: dataset.datasetId,
+          columnId,
+        })),
+        createReopenGraphRepairAction(graph.graphId),
+      ],
+      diagnostics: {
+        datasetId: dataset.datasetId,
+        graphId: graph.graphId,
+        blockedReasons,
+        affectedColumnIds,
+      },
+    }));
+
+    return {
+      ...graphValidation.graph,
+      status: graphValidation.graph.status === 'reference' ? 'reference' : 'stale',
+      issueIds: [...new Set([...priorIssueIds, issueId])],
+    } satisfies GraphDefinition;
+  });
+
+  return {
+    graphDefinitions,
+    issues: semanticIssues,
+  };
+}
+
 function resolveGraphId(
   requestedGraphId: string,
   validGraphIds: string[],
@@ -418,6 +856,7 @@ function createRecoveryDataset(workspaceId: string): WorkspaceSnapshot['datasets
   return datasetSchema.parse({
     datasetId: createRecoveryDatasetId(workspaceId),
     displayName: 'Recovery Workspace',
+    datasetContext: null,
     sourceKind: 'recovery',
     fingerprint: `sha256:${'0'.repeat(64)}`,
     rowCount: 0,
@@ -534,10 +973,10 @@ export function reopenPersistedWorkspaceRecord(
       .map((issue) => [buildPersistentReopenIssueKey(issue), issue]),
   );
   const basePersistedIssues = parsedPersistedIssues.filter(
-    (issue) => !isTransientReopenIssue(issue) && !isPersistentReopenIssue(issue),
+    (issue) => !isTransientReopenIssue(issue) && !isPersistentReopenIssue(issue) && !issue.kind.startsWith('semantics.'),
   );
 
-  let datasets = parseCollection(snapshotInput.datasets, datasetSchema, (index, error, value) => {
+  let datasets = parseCollection(snapshotInput.datasets.map(backfillDatasetSemanticFields), datasetSchema, (index, error, value) => {
     invalidDatasetCount += 1;
     createIssue({
       kind: 'workspace.reopen.dataset.invalid-contract',
@@ -918,6 +1357,56 @@ export function reopenPersistedWorkspaceRecord(
     });
 
     if (graphValidation.blockedReasons.length > 0) {
+      const semanticGraphCatalogDiagnostics = selectSemanticGraphCatalogDiagnostics(graphValidation);
+      const semanticGraphCatalogBlockedReasons = semanticGraphCatalogDiagnostics.blockedReasons;
+      const nonSemanticGraphCatalogBlockedReasons = graphValidation.blockedReasons.filter(
+        (reason) => !semanticGraphCatalogBlockedReasons.includes(reason),
+      );
+
+      if (
+        dataset.sourceKind !== 'import-preview'
+        && dataset.sourceKind !== 'recovery'
+        &&
+        graphValidation.affectedColumnIds.length > 0
+        && semanticGraphCatalogBlockedReasons.length > 0
+      ) {
+        const catalogIssue = nonSemanticGraphCatalogBlockedReasons.length > 0
+          ? createIssue({
+              kind: 'workspace.reopen.graph.incompatible-composition',
+              severity: 'blocking',
+              source: {
+                module: 'workspace-persistence',
+                entityType: 'graph',
+                entityId: graph.graphId,
+              },
+              title: 'A reopened graph is incompatible with the locked graph catalog',
+              detail: `Graph "${graph.title}" violates the locked graph catalog or current analytical context and was retained as a stale repair scope during reopen.`,
+              userMessage:
+                'One saved graph is incompatible with the current analytical context. It remains available as a stale repair scope while valid graphs stay usable.',
+              graphId: graph.graphId,
+              diagnostics: {
+                datasetId: graph.datasetId,
+                family: graphValidation.graph.family ?? null,
+                templateId: graphValidation.graph.templateId ?? null,
+                blockedReasons: nonSemanticGraphCatalogBlockedReasons,
+                affectedColumnIds: graphValidation.affectedColumnIds.filter(
+                  (columnId) => !semanticGraphCatalogDiagnostics.affectedColumnIds.includes(columnId),
+                ),
+              },
+            })
+          : null;
+
+        state.graphDefinitions.push({
+          ...graphValidation.graph,
+          status: graphValidation.graph.status === 'reference' ? 'reference' : 'stale',
+          issueIds: [
+            ...graphValidation.graph.issueIds.filter((issueId) => !issueId.startsWith('semantics.')),
+            ...(catalogIssue ? [catalogIssue.issueId] : []),
+          ],
+        });
+        return state;
+      }
+
       const issue = createIssue({
         kind: 'workspace.reopen.graph.incompatible-composition',
         severity: 'blocking',
@@ -936,6 +1425,7 @@ export function reopenPersistedWorkspaceRecord(
           family: graphValidation.graph.family ?? null,
           templateId: graphValidation.graph.templateId ?? null,
           blockedReasons: graphValidation.blockedReasons,
+          affectedColumnIds: graphValidation.affectedColumnIds,
         },
       });
       state.graphDefinitions.push({
@@ -1278,7 +1768,16 @@ export function reopenPersistedWorkspaceRecord(
   const unmatchedPersistentIssues = [...persistentIssueMatches.values()].filter(
     (issue) => issue.status === 'open' || issue.status === 'deferred',
   );
-  const allIssues = [...basePersistedIssues, ...unmatchedPersistentIssues, ...localizedIssues];
+  const reopenSemanticState = createReopenSemanticState({
+    workspaceId: snapshotInput.workspaceId,
+    referenceGraphId,
+    datasets,
+    graphDefinitions,
+    occurredAt: startedAt,
+    existingIssues: [...parsedPersistedIssues, ...basePersistedIssues, ...unmatchedPersistentIssues, ...localizedIssues],
+  });
+  graphDefinitions = reopenSemanticState.graphDefinitions;
+  const allIssues = [...basePersistedIssues, ...unmatchedPersistentIssues, ...localizedIssues, ...reopenSemanticState.issues];
   const previousIssueIds = collectExistingIssueIds(snapshotInput.issues);
   const hasPreviousBlockingIssue =
     baseReadiness.blockingIssueIds.some((issueId) => previousIssueIds.has(issueId)) ||
@@ -1419,16 +1918,7 @@ function synchronizeSnapshotSourceFileMetadata(
     const sourceFile = sourceFilesByDatasetId.get(dataset.datasetId);
 
     if (!sourceFile) {
-      if (!dataset.sourceFile) {
-        return dataset;
-      }
-
-      changed = true;
-
-      const datasetWithoutSourceFile = { ...dataset };
-      delete datasetWithoutSourceFile.sourceFile;
-
-      return datasetWithoutSourceFile;
+      return dataset;
     }
 
     if (

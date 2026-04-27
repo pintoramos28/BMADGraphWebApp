@@ -1,5 +1,6 @@
 import type { PersistedDatasetFileHandle } from '../../services/persistence';
 import { selectReadinessSummary } from '../../domain/readiness';
+import { createSemanticSummary, isConfirmedSemanticDataset } from '../../features/semantics/semantic-model';
 import {
   selectCompatibilityState,
   selectIssueState,
@@ -20,6 +21,23 @@ export function selectActiveGraphId(data: WorkspaceKernelData) {
 
 export function selectReferenceGraphId(data: WorkspaceKernelData) {
   return data.snapshot.referenceGraphId;
+}
+
+export function selectActiveDataset(data: WorkspaceKernelData) {
+  const activeGraph = data.snapshot.graphDefinitions.find((graph) => graph.graphId === data.snapshot.activeGraphId);
+  const datasetId = activeGraph?.datasetId ?? data.snapshot.datasets[0]?.datasetId;
+
+  return data.snapshot.datasets.find((dataset) => dataset.datasetId === datasetId) ?? null;
+}
+
+export function selectActiveDatasetColumns(data: WorkspaceKernelData) {
+  return structuredClone(selectActiveDataset(data)?.columns ?? []);
+}
+
+export function selectGraphReadySemanticSummary(data: WorkspaceKernelData) {
+  const activeDataset = selectActiveDataset(data);
+
+  return createSemanticSummary(isConfirmedSemanticDataset(activeDataset) ? activeDataset : null, data.snapshot.issues);
 }
 
 export function selectPersistedDatasetFileHandles(data: WorkspaceKernelData) {

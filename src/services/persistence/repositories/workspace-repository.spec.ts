@@ -180,7 +180,12 @@ describe('WorkspaceRepository', () => {
     const record = await repository.loadWorkspaceRecord(workspaceSnapshotFixture.workspaceId);
 
     expect(record?.datasetFileHandles).toEqual([]);
-    expect((record?.snapshot as WorkspaceSnapshot | undefined)?.datasets[0]).not.toHaveProperty('sourceFile');
+    expect((record?.snapshot as WorkspaceSnapshot | undefined)?.datasets[0]).toMatchObject({
+      sourceFile: {
+        fileName: 'battery-cycles.csv',
+        fileHandleToken: 'dataset.ds_main.source-file',
+      },
+    });
   });
 
   it('serializes final dataset file-handle verification reads', async () => {
@@ -477,9 +482,19 @@ describe('WorkspaceRepository', () => {
     const record = await repository.loadWorkspaceRecord(snapshot.workspaceId);
 
     expect(result.datasetFileHandles).toEqual([]);
-    expect(result.snapshot.datasets[0]).not.toHaveProperty('sourceFile');
+    expect(result.snapshot.datasets[0]).toMatchObject({
+      sourceFile: {
+        fileName: 'expected.csv',
+        fileHandleToken: 'expected_token',
+      },
+    });
     expect(record?.datasetFileHandles).toEqual([]);
-    expect((record?.snapshot as WorkspaceSnapshot | undefined)?.datasets[0]).not.toHaveProperty('sourceFile');
+    expect((record?.snapshot as WorkspaceSnapshot | undefined)?.datasets[0]).toMatchObject({
+      sourceFile: {
+        fileName: 'expected.csv',
+        fileHandleToken: 'expected_token',
+      },
+    });
   });
 
   it('does not reattach stale dataset file-handle provenance to handleless datasets', async () => {

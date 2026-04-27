@@ -14,12 +14,43 @@ import {
   versionRangeSchema,
 } from '../validation';
 
+export const datasetDataTypeSchema = z.enum(['string', 'number', 'integer', 'boolean', 'date', 'datetime']);
+export const datasetSemanticRoleSchema = z.enum([
+  'unassigned',
+  'x',
+  'y',
+  'color',
+  'size',
+  'facetRow',
+  'facetColumn',
+]);
+
+export const measurementContextSchema = strictObject({
+  quantity: nonEmptyStringSchema.optional(),
+  method: nonEmptyStringSchema.optional(),
+  condition: nonEmptyStringSchema.optional(),
+  notes: nonEmptyStringSchema.optional(),
+}).refine((context) => Object.values(context).some((value) => typeof value === 'string' && value.trim().length > 0), {
+  message: 'measurementContext must include at least one meaningful context field when provided.',
+});
+
+export const datasetContextSchema = strictObject({
+  description: nonEmptyStringSchema.optional(),
+  measurementNotes: nonEmptyStringSchema.optional(),
+  sourceDescription: nonEmptyStringSchema.optional(),
+}).refine((context) => Object.values(context).some((value) => typeof value === 'string' && value.trim().length > 0), {
+  message: 'datasetContext must include at least one meaningful context field when provided.',
+}).nullable();
+
 export const datasetColumnSchema = strictObject({
   columnId: identifierSchema,
   sourceName: nonEmptyStringSchema,
-  dataType: z.enum(['string', 'number', 'integer', 'boolean', 'date', 'datetime']),
-  semanticRole: nonEmptyStringSchema,
+  label: nonEmptyStringSchema,
+  dataType: datasetDataTypeSchema,
+  semanticRole: datasetSemanticRoleSchema,
   unit: z.string().nullable(),
+  measurementContext: measurementContextSchema.nullable(),
+  description: z.string().nullable().optional(),
   status: z.enum(['inferred', 'confirmed', 'rejected']),
 });
 
@@ -33,6 +64,7 @@ export const datasetRowSchema = z.record(identifierSchema, z.string());
 export const datasetSchema = strictObject({
   datasetId: identifierSchema,
   displayName: nonEmptyStringSchema,
+  datasetContext: datasetContextSchema,
   sourceKind: nonEmptyStringSchema,
   fingerprint: nonEmptyStringSchema,
   rowCount: nonNegativeIntegerSchema,

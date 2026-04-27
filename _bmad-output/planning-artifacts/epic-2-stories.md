@@ -46,8 +46,9 @@ Requirements: FR8-FR14, FR58, NFR11-NFR14
 **Acceptance Criteria**
 
 1. Given an imported dataset is active, when the user inspects a column, then type, role, label, units, and measurement context are visible and editable.
-2. Given a semantic edit is committed, when downstream analytical state recalculates, then active graph and summary consumers use the updated semantics without requiring re-import.
-3. Given the dataset is graph-ready, when the user views the working context, then the active semantic choices are summarized clearly before graphing begins.
+2. Given the user selects or changes a column data type after import, when the semantic edit is validated, then the selected type is checked against the column's actual committed values and incompatible selections are surfaced as issue-backed semantic validation feedback before the choice is treated as graph-ready.
+3. Given a semantic edit is committed, when downstream analytical state recalculates, then active graph and summary consumers use the updated semantics without requiring re-import.
+4. Given the dataset is graph-ready, when the user views the working context, then the active semantic choices are summarized clearly before graphing begins.
 
 ## Story 2.4: Deliver Guided Onboarding and Recovery Through Intake
 

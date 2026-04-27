@@ -7,9 +7,20 @@ import {
 } from '../../services/persistence';
 import type { WorkspaceFileHandle } from '../../services/persistence/fs-access/portable-workspace-files';
 import { createImportWorkspaceSnapshot, createWorkspaceKernelStore } from '../../stores/workspace-kernel';
+import { workspaceSnapshotFixture } from '../../test/fixtures/workspace/workspace-snapshot.fixture';
 import { preparePersistedDatasetFileHandlesForSave } from './persisted-dataset-file-handles';
-import { saveWorkspaceKernel } from './save-workspace';
-import { getPersistedWorkspaceKernelVersion, markWorkspaceKernelStorePersisted } from './workspace-kernel-persistence-state';
+import {
+  WORKSPACE_INDEXEDDB_UNAVAILABLE_MESSAGE,
+  saveWorkspaceKernel,
+  saveWorkspaceKernelToIndexedDb,
+} from './save-workspace';
+import {
+  clearSemanticWorkspaceSavePending,
+  getPendingSemanticWorkspaceSave,
+  getPersistedWorkspaceKernelVersion,
+  markSemanticWorkspaceSavePending,
+  markWorkspaceKernelStorePersisted,
+} from './workspace-kernel-persistence-state';
 
 async function sha256Hex(file: File) {
   const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
@@ -20,6 +31,148 @@ async function sha256Hex(file: File) {
 describe('saveWorkspaceKernel', () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('reports failure when IndexedDB-backed durable persistence is unavailable', async () => {
+    const kernelStore = createWorkspaceKernelStore({
+      snapshot: createImportWorkspaceSnapshot('workspace_save_indexeddb_unavailable'),
+      ledger: [],
+    });
+
+    vi.stubGlobal('indexedDB', undefined);
+
+    await expect(saveWorkspaceKernelToIndexedDb(kernelStore)).rejects.toThrow(WORKSPACE_INDEXEDDB_UNAVAILABLE_MESSAGE);
+  });
+
+  it('blocks non-semantic saves while an optimistic semantic save is pending', async () => {
+    const kernelStore = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        workspaceId: 'workspace_save_pending_semantic_guard',
+      },
+      ledger: [],
+    });
+    const semanticCorrelationId = 'cmd_semantic_pending_guard';
+    const saveCanonicalWorkspace = vi.fn(async (input) => ({
+      workspaceId: input.snapshot.workspaceId,
+      savedAt: input.savedAt,
+      datasetCount: input.snapshot.datasets.length,
+      graphCount: input.snapshot.graphDefinitions.length,
+      snapshot: input.snapshot,
+    }));
+
+    kernelStore.getState().commands.updateDatasetContext({
+      datasetId: 'ds_main',
+      datasetContext: { description: 'Optimistic semantic context.' },
+      actorId: 'workspace-semantics-panel',
+      correlationId: semanticCorrelationId,
+      occurredAt: '2026-04-27T10:00:00.000Z',
+    });
+    markSemanticWorkspaceSavePending(kernelStore, {
+      correlationId: semanticCorrelationId,
+      workspaceVersion: kernelStore.getState().workspaceVersion,
+    });
+
+    await expect(saveWorkspaceKernel({
+      repository: {
+        saveCanonicalWorkspace,
+        async loadWorkspaceRecord() {
+          return null;
+        },
+        async listWorkspaces() {
+          return [];
+        },
+      },
+      kernelStore,
+    })).rejects.toThrow('Workspace save is waiting for an in-progress semantic save to finish.');
+
+    expect(saveCanonicalWorkspace).not.toHaveBeenCalled();
+
+    clearSemanticWorkspaceSavePending(kernelStore, semanticCorrelationId);
+  });
+
+  it('allows the owning semantic save to persist its pending optimistic mutation', async () => {
+    const kernelStore = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        workspaceId: 'workspace_save_pending_semantic_owner',
+      },
+      ledger: [],
+    });
+    const semanticCorrelationId = 'cmd_semantic_pending_owner';
+    const repository = createWorkspaceRepository(new InMemoryWorkspaceStorage());
+
+    kernelStore.getState().commands.updateDatasetContext({
+      datasetId: 'ds_main',
+      datasetContext: { description: 'Durable semantic context.' },
+      actorId: 'workspace-semantics-panel',
+      correlationId: semanticCorrelationId,
+      occurredAt: '2026-04-27T10:01:00.000Z',
+    });
+    markSemanticWorkspaceSavePending(kernelStore, {
+      correlationId: semanticCorrelationId,
+      workspaceVersion: kernelStore.getState().workspaceVersion,
+    });
+
+    await expect(saveWorkspaceKernel({
+      repository,
+      kernelStore,
+      semanticSaveCorrelationId: semanticCorrelationId,
+    })).resolves.toMatchObject({
+      workspaceId: 'workspace_save_pending_semantic_owner',
+    });
+
+    clearSemanticWorkspaceSavePending(kernelStore, semanticCorrelationId);
+  });
+
+  it('does not let a second semantic owner replace the pending save guard', async () => {
+    const kernelStore = createWorkspaceKernelStore({
+      snapshot: {
+        ...structuredClone(workspaceSnapshotFixture),
+        workspaceId: 'workspace_save_overlapping_semantic_owner_guard',
+      },
+      ledger: [],
+    });
+    const firstSemanticCorrelationId = 'cmd_semantic_pending_first_owner';
+    const secondSemanticCorrelationId = 'cmd_semantic_pending_second_owner';
+    const repository = createWorkspaceRepository(new InMemoryWorkspaceStorage());
+
+    kernelStore.getState().commands.updateDatasetContext({
+      datasetId: 'ds_main',
+      datasetContext: { description: 'First optimistic semantic context.' },
+      actorId: 'workspace-semantics-panel',
+      correlationId: firstSemanticCorrelationId,
+      occurredAt: '2026-04-27T10:02:00.000Z',
+    });
+    markSemanticWorkspaceSavePending(kernelStore, {
+      correlationId: firstSemanticCorrelationId,
+      workspaceVersion: kernelStore.getState().workspaceVersion,
+    });
+
+    expect(() => markSemanticWorkspaceSavePending(kernelStore, {
+      correlationId: secondSemanticCorrelationId,
+      workspaceVersion: kernelStore.getState().workspaceVersion + 1,
+    })).toThrow('Workspace save is waiting for an in-progress semantic save to finish.');
+    expect(getPendingSemanticWorkspaceSave(kernelStore)).toMatchObject({
+      correlationId: firstSemanticCorrelationId,
+    });
+
+    await expect(saveWorkspaceKernel({
+      repository,
+      kernelStore,
+      semanticSaveCorrelationId: secondSemanticCorrelationId,
+    })).rejects.toThrow('Workspace save is waiting for an in-progress semantic save to finish.');
+
+    await expect(saveWorkspaceKernel({
+      repository,
+      kernelStore,
+      semanticSaveCorrelationId: firstSemanticCorrelationId,
+    })).resolves.toMatchObject({
+      workspaceId: 'workspace_save_overlapping_semantic_owner_guard',
+    });
+
+    clearSemanticWorkspaceSavePending(kernelStore, firstSemanticCorrelationId);
   });
 
   it('stops before repository persistence when the kernel changes during source-handle preparation', async () => {
@@ -616,8 +769,12 @@ describe('saveWorkspaceKernel', () => {
       }),
     ]);
     expect((record?.snapshot as { datasets: unknown[] } | undefined)?.datasets).toEqual([
-      expect.not.objectContaining({
-        sourceFile: expect.anything(),
+      expect.objectContaining({
+        datasetId: 'dataset_old',
+        sourceFile: {
+          fileName: 'old.csv',
+          fileHandleToken: 'old_token',
+        },
       }),
       expect.objectContaining({
         datasetId: 'dataset_new',
@@ -745,9 +902,17 @@ describe('saveWorkspaceKernel', () => {
     const record = await storage.getRecord(workspaceId);
 
     expect(record?.datasetFileHandles).toEqual([]);
-    expect((record?.snapshot as { datasets: Array<{ sourceFile?: unknown }> } | undefined)?.datasets[0]).not.toHaveProperty('sourceFile');
+    expect((record?.snapshot as { datasets: Array<{ sourceFile?: unknown }> } | undefined)?.datasets[0]?.sourceFile).toEqual({
+      fileName: 'expected.csv',
+      fileHandleToken: 'expected_token',
+    });
     expect(kernelStore.getState().selectors.datasetFileHandles()).toEqual([]);
-    expect(kernelStore.getState().selectors.persistedWorkspace().datasets[0]).not.toHaveProperty('sourceFile');
+    expect(kernelStore.getState().selectors.persistedWorkspace().datasets[0]).toMatchObject({
+      sourceFile: {
+        fileName: 'expected.csv',
+        fileHandleToken: 'expected_token',
+      },
+    });
   });
 
   it('preserves required source provenance when a later same-dataset handle is foreign', async () => {
@@ -901,8 +1066,8 @@ describe('saveWorkspaceKernel', () => {
     expect(kernelStore.getState().selectors.persistedWorkspace().datasets[0]).not.toHaveProperty('sourceFile');
   });
 
-  it('strips stale source-file metadata from the live kernel when no handle survives save sanitation', async () => {
-    const workspaceId = 'workspace_save_strips_live_stale_source_metadata';
+  it('preserves source-file provenance when saving without live persisted handles', async () => {
+    const workspaceId = 'workspace_save_preserves_handleless_source_metadata';
     const bootstrapSnapshot = createImportWorkspaceSnapshot(workspaceId);
     const kernelStore = createWorkspaceKernelStore({
       snapshot: {
@@ -924,10 +1089,21 @@ describe('saveWorkspaceKernel', () => {
       kernelStore,
     });
 
-    expect(kernelStore.getState().selectors.persistedWorkspace().datasets[0]).not.toHaveProperty('sourceFile');
+    const persistedRecord = await repository.loadWorkspaceRecord(workspaceId);
+
+    expect(kernelStore.getState().selectors.persistedWorkspace().datasets[0]).toMatchObject({
+      sourceFile: {
+        fileName: 'missing.csv',
+        fileHandleToken: 'missing_token',
+      },
+    });
+    expect((persistedRecord?.snapshot as { datasets: Array<{ sourceFile?: unknown }> } | undefined)?.datasets[0]?.sourceFile).toEqual({
+      fileName: 'missing.csv',
+      fileHandleToken: 'missing_token',
+    });
   });
 
-  it('strips optional source-file metadata from live and persisted snapshots when final repository verification drops the handle', async () => {
+  it('preserves optional source-file metadata when final repository verification drops the handle', async () => {
     const workspaceId = 'workspace_save_repository_optional_source_handle';
     const storage = new InMemoryWorkspaceStorage();
     const repository = createWorkspaceRepository(storage);
@@ -987,8 +1163,16 @@ describe('saveWorkspaceKernel', () => {
     const persistedRecord = await storage.getRecord(workspaceId);
 
     expect(persistedRecord?.datasetFileHandles).toEqual([]);
-    expect((persistedRecord?.snapshot as { datasets: unknown[] } | undefined)?.datasets[0]).not.toHaveProperty('sourceFile');
+    expect((persistedRecord?.snapshot as { datasets: Array<{ sourceFile?: unknown }> } | undefined)?.datasets[0]?.sourceFile).toEqual({
+      fileName: 'live.csv',
+      fileHandleToken: 'live_token',
+    });
     expect(kernelStore.getState().selectors.datasetFileHandles()).toEqual([]);
-    expect(kernelStore.getState().selectors.persistedWorkspace().datasets[0]).not.toHaveProperty('sourceFile');
+    expect(kernelStore.getState().selectors.persistedWorkspace().datasets[0]).toMatchObject({
+      sourceFile: {
+        fileName: 'live.csv',
+        fileHandleToken: 'live_token',
+      },
+    });
   });
 });
