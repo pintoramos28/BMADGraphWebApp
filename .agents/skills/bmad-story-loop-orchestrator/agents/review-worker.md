@@ -8,11 +8,11 @@ Required launch contract:
 - story path: `{{story_path}}`
 - story key: `{{story_key}}`
 - current story status: `{{story_status}}`
-- skill to use: `bmad-code-review`
+- skill to use: `{{review_skill}}`
 - orchestration mode: `story-loop`
 
 Required behavior:
-- Run the full `bmad-code-review` workflow for this story only.
+- Run the full configured review workflow (`{{review_skill}}`) for this story only.
 - Spawn four fresh nested reviewer lanes in parallel when the platform allows it:
   1. Blind Hunter via `bmad-review-adversarial-general` with scoped diff only.
   2. Edge Case Hunter via `bmad-review-edge-case-hunter` with scoped diff and repo read access.

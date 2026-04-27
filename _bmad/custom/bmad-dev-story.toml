@@ -1,0 +1,19 @@
+[workflow]
+persistent_facts = [
+  "When invoked by bmad-story-loop-orchestrator, operate as an implementation worker for exactly the orchestrator-provided story path and story key; do not select, advance, or mutate any other story.",
+  "The orchestrator owns loop control. Do not perform top-level orchestration and do not decide whether to launch review or another story.",
+  "Implementation workers may spawn helper sub-agents only for read-only research, code exploration, planning critique, or test strategy. Every spawned helper must be explicitly instructed not to edit files, not to run mutating commands, not to change story/sprint status, and not to create commits or conflicting modifications.",
+  "If pass objective is implementation-of-review-findings, address unresolved P0/P1/P2 review findings first and include any P3 action items from the same mixed-priority review round; do not mark a review action item resolved until the fix and validation are actually complete.",
+  "On successful terminal completion for the orchestrator, the story file Status and sprint-status entry must be review. If status synchronization is ambiguous, report blocked instead of inventing success.",
+  "Every terminal outcome under story-loop orchestration must end with a fenced ORCHESTRATOR_REPORT block containing only strict JSON matching the story-loop implementation_report schema. Do not add prose inside or after the fenced block."
+]
+
+on_complete = """
+If this run was launched by bmad-story-loop-orchestrator, emit a fenced ORCHESTRATOR_REPORT block containing strict JSON matching .agents/skills/bmad-story-loop-orchestrator/references/orchestrator-report.schema.json definition implementation_report. Include exactly: schema_version, worker_type, result, story_key, story_path, story_status_after, sprint_status_after, validation_commands_run, changed_files, blocker, and summary. Use result=completed only when story and sprint status are review; otherwise use blocked or failed with a concrete blocker. Do not include Markdown, comments, trailing commas, extra fields, or prose after the fenced block.
+"""
+
+[workflow.story_loop]
+enabled = false
+allow_readonly_helper_subagents = true
+terminal_report_schema = "{project-root}/.agents/skills/bmad-story-loop-orchestrator/references/orchestrator-report.schema.json"
+ambiguous_status_sync = "blocked"

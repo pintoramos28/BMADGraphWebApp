@@ -16,6 +16,18 @@ description: 'Execute story implementation following a context filled story spec
 - Do NOT schedule a "next session" or request review pauses unless a HALT condition applies. Only Step 9 decides completion.
 - User skill level ({user_skill_level}) affects conversation style ONLY, not code updates.
 
+## Story-Loop Worker Mode
+
+When launched by `bmad-story-loop-orchestrator`:
+
+- Treat the orchestrator-provided story path and story key as authoritative; do not auto-select another story.
+- The orchestrator owns loop control. Do not launch review, choose the next story, or mutate unrelated stories.
+- You may spawn helper sub-agents only for read-only research, code exploration, planning critique, or test strategy. Instruct every helper explicitly: no file edits, no mutating commands, no story/sprint status changes, no commits, and no patch application. Their outputs are advisory; you remain the only write-capable implementation actor.
+- If the pass objective is `implementation-of-review-findings`, address unresolved P0/P1/P2 review findings first and include any P3 action items from the same mixed-priority review round.
+- On terminal completion, story and sprint status must be `review`.
+- On any HALT/blocker/failure, report the blocker instead of faking completion.
+- Every terminal response must end with a fenced `ORCHESTRATOR_REPORT` block containing only strict JSON matching the story-loop `implementation_report` schema.
+
 ## Conventions
 
 - Bare paths (e.g. `steps/step-01-init.md`) resolve from the skill root.

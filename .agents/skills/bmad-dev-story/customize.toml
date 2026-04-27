@@ -39,3 +39,28 @@ persistent_facts = [
 # Leave empty for no custom post-completion behavior.
 
 on_complete = ""
+
+# Story-loop orchestration mode. Defaults keep normal dev-story behavior.
+# Team/user overrides can enable this when launched by bmad-story-loop-orchestrator.
+
+[workflow.story_loop]
+
+# Scalar: when true, the workflow follows the orchestrated worker contract.
+# A launch prompt from bmad-story-loop-orchestrator should also activate this
+# behavior even if the resolved value remains false.
+
+enabled = false
+
+# Scalar: implementation workers may use helper subagents only when those
+# subagents are explicitly read-only and cannot create conflicting writes.
+
+allow_readonly_helper_subagents = true
+
+# Scalar: optional JSON schema path for terminal report validation.
+
+terminal_report_schema = ""
+
+# Scalar: accepted values are "blocked" or "best-effort" when status sync is
+# unclear. Story-loop mode should use "blocked" so the orchestrator can decide.
+
+ambiguous_status_sync = "best-effort"

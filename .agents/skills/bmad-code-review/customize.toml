@@ -39,3 +39,40 @@ persistent_facts = [
 # Leave empty for no custom post-completion behavior.
 
 on_complete = ""
+
+# Story-loop orchestration mode. Defaults keep normal interactive code-review
+# behavior. Team/user overrides can enable this when the review skill is launched
+# by bmad-story-loop-orchestrator.
+
+[workflow.story_loop]
+
+# Scalar: when true, step files follow the non-interactive story-loop branch.
+# A launch prompt that explicitly says "orchestration mode: story-loop" should
+# also activate this behavior even if the resolved value remains false.
+
+enabled = false
+
+# Scalar: when false, skip normal human confirmation checkpoints except for true
+# unresolved decision_needed blockers.
+
+interactive_checkpoints = true
+
+# Scalar: accepted values are "ask", "apply", or "leave-action-items".
+# Story-loop mode should use "leave-action-items" so review never fixes code.
+
+patch_policy = "ask"
+
+# Array: reviewer lanes required for a complete orchestrated review pass.
+# Empty by default so team/user overrides append the exact lanes they require.
+
+required_lanes = []
+
+# Scalar: optional JSON schema path for terminal report validation.
+
+terminal_report_schema = ""
+
+# Scalars: accepted values are "blocked" or "manual-fallback". Story-loop mode
+# should prefer "blocked" because the top-level orchestrator owns fallback choice.
+
+missing_nested_delegation = "manual-fallback"
+missing_spec_context = "manual-fallback"

@@ -1,0 +1,24 @@
+[workflow]
+persistent_facts = [
+  "When invoked by bmad-story-loop-orchestrator, operate in story-loop review-worker mode for exactly the orchestrator-provided story path and story key; do not review unrelated changes or advance to another story.",
+  "In story-loop mode, do not implement fixes, apply patches, or ask the user whether to apply patches. Persist unresolved findings as story action items and status transitions only.",
+  "In story-loop mode, the review scope must include staged changes, unstaged changes, untracked files, files listed in the story File List, and any adapter-provided review scope. Missing File List entries must still be inspected directly when possible.",
+  "In story-loop mode, run four reviewer lanes: blind, edge, runtime, and acceptance. If nested delegation is unavailable, report blocked instead of silently degrading or replacing the fan-out with a manual prompt-file workflow.",
+  "In story-loop mode, missing story/spec context is a blocker for acceptance review, not a reason to skip the acceptance lane.",
+  "P0/P1/P2 findings are gating and must leave story and sprint status in-progress with unchecked action items. P3 findings are non-gating only when they do not threaten acceptance criteria, security, data integrity, critical accessibility, or user-visible runtime correctness; promote questionable P3 items to P2.",
+  "If a review round has any unresolved P0/P1/P2 finding, write all findings from that round, including P3 findings, as unchecked story action items. Defer P3 findings only when the round has no unresolved P0/P1/P2 or decision_needed findings.",
+  "Every terminal outcome under story-loop orchestration must end with a fenced ORCHESTRATOR_REPORT block containing only strict JSON matching the story-loop review_report schema. Do not add prose inside or after the fenced block."
+]
+
+on_complete = """
+If this run was launched by bmad-story-loop-orchestrator, emit a fenced ORCHESTRATOR_REPORT block containing strict JSON matching .agents/skills/bmad-story-loop-orchestrator/references/orchestrator-report.schema.json definition review_report. Include exactly: schema_version, worker_type, result, story_key, story_path, story_status_after, sprint_status_after, fanout_layers, gating_findings, p3_findings, decision_needed, deferred_work_location, and summary. Use clean or p3_only only when story and sprint status are done; use changes_requested when unresolved P0/P1/P2 findings were left as action items and status is in-progress; use decision_needed only for unresolved decisions; otherwise use blocked or failed with a concrete reason. Do not include Markdown, comments, trailing commas, extra fields, or prose after the fenced block.
+"""
+
+[workflow.story_loop]
+enabled = false
+interactive_checkpoints = false
+patch_policy = "leave-action-items"
+required_lanes = ["blind", "edge", "runtime", "acceptance"]
+terminal_report_schema = "{project-root}/.agents/skills/bmad-story-loop-orchestrator/references/orchestrator-report.schema.json"
+missing_nested_delegation = "blocked"
+missing_spec_context = "blocked"
